@@ -1,0 +1,68 @@
+version: "3"
+
+vars:
+  VERSION:
+    sh: git describe --tags --always --dirty 2>/dev/null || echo dev
+  LDFLAGS: -X main.version={{.VERSION}}
+
+tasks:
+  default:
+    cmds: [task --list]
+    silent: true
+
+  run:
+    desc: "Run loopy locally from source (pass flags via CLI_ARGS: task run -- -m glm-5.2-fast)"
+    interactive: true
+    cmds:
+      - go run -ldflags "{{.LDFLAGS}}" ./cmd/loopy {{.CLI_ARGS}}
+
+  build:
+    desc: Build the loopy binary into ./loopy
+    cmds:
+      - go build -ldflags "{{.LDFLAGS}}" -o loopy ./cmd/loopy
+
+  install:
+    desc: Install loopy to $GOPATH/bin (~/go/bin)
+    cmds:
+      - go install -ldflags "{{.LDFLAGS}}" ./cmd/loopy
+
+  benchmark:
+    desc: "Benchmark startup: binary boot (--version) and full init (-bench: config, routing, key, agent)"
+    deps: [build]
+    cmds:
+      - |
+        if command -v hyperfine >/dev/null 2>&1; then
+          hyperfine -N --warmup 5 './loopy --version' './loopy -bench'
+        else
+          for cmd in "./loopy --version" "./loopy -bench"; do
+            start=$(date +%s%N)
+            for i in $(seq 1 50); do $cmd >/dev/null; done
+            end=$(date +%s%N)
+            echo "$cmd: $(( (end - start) / 50 / 1000000 )).$(( (end - start) / 50 / 100000 % 10 )) ms avg (50 runs)"
+          done
+        fi
+
+  test:
+    desc: Run all tests
+    cmds:
+      - go test ./...
+
+  coverage:
+    desc: Run tests with per-package coverage report
+    cmds:
+      - go test -cover ./...
+
+  fmt:
+    desc: Format code
+    cmds:
+      - gofmt -s -w .
+
+  vet:
+    desc: Vet code
+    cmds:
+      - go vet ./...
+
+  tidy:
+    desc: Tidy go.mod
+    cmds:
+      - go mod tidy

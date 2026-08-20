@@ -1,0 +1,86 @@
+# loopy roadmap
+
+UX niceties worth adopting, learned from [pi](file:///home/abe/code/pi) and
+[opencode](file:///home/abe/code/coding-harnesses/opencode). Check things off as they land.
+Full exploration reports: [learnings/other-harnesses/opencode/](learnings/other-harnesses/opencode/).
+
+## Table of contents
+
+- [Input & editing](#input--editing)
+- [Transcript & rendering](#transcript--rendering)
+- [Sessions](#sessions)
+- [Agent loop](#agent-loop)
+- [Models & providers](#models--providers)
+- [Safety & permissions](#safety--permissions)
+- [Theming & config](#theming--config)
+- [CLI surface](#cli-surface)
+
+## Input & editing
+
+- [x] Queue messages while busy (enter, codex-style multiple), force-steer queue into the running turn (empty enter, grok-style), auto-send queued as follow-up turns
+- [x] Explicit interruption: double ctrl+c while busy (cf. opencode's triple-escape with 5s reset — `packages/tui/src/routes/session/index.tsx:1388`)
+- [ ] Queue management: edit/remove queued messages before they send (opencode `<leader>q`, `runtime.queue.ts`)
+- [ ] Multiline input (grow textarea; opencode binds newline to `shift+enter,ctrl+enter,alt+enter,ctrl+j` because terminals disagree — `keybind.ts:161`)
+- [ ] `!` prefix shell mode: only triggers at cursor offset 0, backspace-at-0 exits, output lands in transcript as a tool result the model can see (opencode `prompt/index.tsx:815`)
+- [ ] `@` file mentions with fuzzy search + frecency ranking; `@file#10-40` line ranges. Expand mentions as a **synthetic read-tool call/result pair** (via the real read tool, root-check bypassed), not cat-into-user-message and not a bare pointer — see [learnings/other-harnesses/opencode/at-mentions.md](learnings/other-harnesses/opencode/at-mentions.md)
+- [ ] External editor for long prompts: `$VISUAL || $EDITOR`, suspend renderer → edit temp .md → resume (opencode `editor.ts:26-53`; pi setting `externalEditor`)
+- [ ] Paste handling: collapse big pastes (≥3 lines) into a `[Pasted ~N lines]` placeholder expanded on submit (opencode `prompt/index.tsx:1149`)
+- [ ] Persist prompt input history to disk, restore across sessions; up/down only navigate history when cursor is at offset 0 (opencode `prompt/history.tsx`)
+
+## Transcript & rendering
+
+- [ ] Markdown rendering for assistant messages (headings, code fences, syntax highlight; opencode renders streaming markdown with partial tokens)
+- [ ] Diff view for `edit` tool results (pi edit tool returns `details: {diff, patch, firstChangedLine}` — `packages/agent/src/harness/tools/edit.ts`; opencode picks split vs unified by terminal width >120)
+- [ ] Tool rows: icon + present-participle verb while running ("Reading file…"), collapse to one line on completion, red + expandable on failure (opencode `routes/session/index.tsx:1836`, `util/collapse-tool-output.ts` — 19 lines)
+- [ ] Render tool calls as they stream, before execution starts (pi: `message_update` spawns `ToolExecutionComponent` keyed by tool-call id)
+- [ ] Spinner with elapsed time + token count (% of context window) + cost in status line (opencode `routes/session/footer.tsx`)
+- [ ] Toast-style transient notifications for command success/failure (opencode `ui/toast.tsx` — 102 lines)
+- [ ] Desktop notification/sound when a turn finishes and the terminal is blurred (opencode `attention.ts` — "when: blurred" is the detail that makes it not-annoying)
+
+## Sessions
+
+- [x] SQLite session store with `--resume` / `/resume` picker
+- [ ] Session titles: auto-generate a short title from the first exchange
+- [ ] `/rename` a session (opencode: ctrl+r prompt dialog)
+- [ ] `/fork` a session (pi: tree-structured JSONL entries with `parentId` — `docs/session-format.md`; opencode forks from any message via a per-message action menu)
+- [ ] Timeline: jump-to-message picker that live-scrolls the transcript as you browse (opencode `dialog-timeline.tsx`)
+- [ ] Undo last message: abort turn, revert file changes, restore the prompt text into the input for editing (opencode `routes/session/index.tsx:615` — the input restore is what makes it feel good)
+- [ ] Compaction: summarize old turns when context fills (pi settings: `compaction: {reserveTokens, keepRecentTokens}`; opencode `/compact`)
+- [ ] Token/cost tracking per session (pi models.json carries `cost: {input, output, cacheRead, cacheWrite}`)
+- [ ] Export transcript to markdown with include-options dialog (opencode `/export`, `ui/dialog-export-options.tsx`)
+
+## Agent loop
+
+- [ ] Parallel tool-call execution with per-path file mutation lock (pi: `withFileMutationQueue`, `executeToolCallsParallel`)
+- [ ] Retry with backoff on provider errors (pi settings: `retry: {maxRetries, baseDelayMs}`)
+- [ ] Streamed partial tool output (bash `onUpdate` throttled at 100ms in pi)
+- [ ] Spill truncated bash output to a temp file and mention the path (pi bash tool)
+- [ ] Inject `LOOPY_SESSION_ID` / `LOOPY_MODEL` env into bash children (pi injects `PI_*`)
+
+## Models & providers
+
+- [x] Model → provider routing in config (switch providers without touching models)
+- [ ] `anthropic-messages` API style alongside `openai-completions` (pi: `packages/ai/src/api/`)
+- [ ] `"$VAR"` / `"!cmd"` resolution for apiKey/header values in config (pi models.json value resolution)
+- [ ] Reasoning/thinking level support (pi: `defaultThinkingLevel`, `thinkingBudgets`)
+- [ ] Per-model sampling params in config (`samplingParams: {temperature, top_p}`)
+
+## Safety & permissions
+
+- [ ] Permission prompt: Allow once / Allow always / Reject, where "always" previews the exact rule it installs and "reject" takes a free-text redirect message back to the model (opencode `routes/session/permission.tsx`)
+- [ ] Command-prefix arity for useful "allow always" rules: `git checkout branch` → rule for `git checkout`, not the whole string (opencode `permission/arity.ts`)
+- [ ] Project trust prompt on first run in a directory (pi: `trust.json`, `defaultProjectTrust: "ask"`)
+
+## Theming & config
+
+- [ ] Single keybind+command registry: palette, slash commands, help, and footer hints all derived from one table (opencode `config/keybind.ts` — the highest value-per-line idea in that repo)
+- [ ] One generic fuzzy-select widget reused by every picker: model, session, theme, timeline (opencode `ui/dialog-select.tsx`)
+- [ ] KV table in sessions.db for palette-toggleable UI prefs — no config ceremony per toggle (opencode `context/kv.tsx` pattern)
+- [ ] Theme support: JSON themes with named defs + `{dark, light}` variant pairs; a "system" theme built from the terminal's real palette (opencode `theme/index.ts`)
+- [ ] `"mouse": false` config escape hatch so native terminal selection works (opencode `app.tsx:196`)
+
+## CLI surface
+
+- [ ] Non-interactive one-shot mode: `loopy run "prompt"` — reads piped stdin too, `--format json` emits the raw event stream for scripting (opencode `cli/cmd/run.ts`)
+- [ ] `loopy sessions` list subcommand
+- [ ] Env markers in child processes (`LOOPY=1`, `LOOPY_SESSION_ID`) so scripts can detect they run under the agent (opencode sets `AGENT=1`, `OPENCODE_PID`)

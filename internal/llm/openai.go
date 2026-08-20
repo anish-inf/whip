@@ -1,0 +1,187 @@
+// Package llm is a minimal streaming client for OpenAI-compatible chat completions APIs.
+package llm
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"strings"
+	"time"
+)
+
+// Message is one chat message. Content is a string; ToolCalls set on assistant
+// messages, ToolCallID on role "tool" results.
+type Message struct {
+	Role       string     `json:"role"`
+	Content    string     `json:"content"`
+	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string     `json:"tool_call_id,omitempty"`
+}
+
+// ToolCall is a model-requested tool invocation.
+type ToolCall struct {
+	ID       string `json:"id"`
+	Type     string `json:"type"`
+	Function struct {
+		Name      string `json:"name"`
+		Arguments string `json:"arguments"`
+	} `json:"function"`
+}
+
+// Tool is a tool definition advertised to the model.
+type Tool struct {
+	Type     string `json:"type"`
+	Function struct {
+		Name        string          `json:"name"`
+		Description string          `json:"description"`
+		Parameters  json.RawMessage `json:"parameters"`
+	} `json:"function"`
+}
+
+// NewTool builds a Tool from name, description, and a JSON Schema string.
+func NewTool(name, desc, schema string) Tool {
+	t := Tool{Type: "function"}
+	t.Function.Name = name
+	t.Function.Description = desc
+	t.Function.Parameters = json.RawMessage(schema)
+	return t
+}
+
+// Client talks to one provider endpoint.
+type Client struct {
+	BaseURL string
+	APIKey  string
+	HTTP    *http.Client
+}
+
+func New(baseURL, apiKey string) *Client {
+	return &Client{
+		BaseURL: strings.TrimRight(baseURL, "/"),
+		APIKey:  apiKey,
+		HTTP:    &http.Client{Timeout: 10 * time.Minute},
+	}
+}
+
+// Request is a chat completions request.
+type Request struct {
+	Model     string    `json:"model"`
+	Messages  []Message `json:"messages"`
+	Tools     []Tool    `json:"tools,omitempty"`
+	MaxTokens int       `json:"max_tokens,omitempty"`
+	Stream    bool      `json:"stream"`
+}
+
+// Chunk delta payload from the SSE stream.
+type delta struct {
+	Content   string `json:"content"`
+	ToolCalls []struct {
+		Index    int    `json:"index"`
+		ID       string `json:"id"`
+		Type     string `json:"type"`
+		Function struct {
+			Name      string `json:"name"`
+			Arguments string `json:"arguments"`
+		} `json:"function"`
+	} `json:"tool_calls"`
+}
+
+type chunk struct {
+	Choices []struct {
+		Delta        delta  `json:"delta"`
+		FinishReason string `json:"finish_reason"`
+	} `json:"choices"`
+	Error *apiError `json:"error"`
+}
+
+type apiError struct {
+	Message string `json:"message"`
+}
+
+// Stream sends the request and invokes onText for each content delta.
+// It returns the final assistant message (with any accumulated tool calls).
+func (c *Client) Stream(ctx context.Context, req Request, onText func(string)) (Message, error) {
+	req.Stream = true
+	body, err := json.Marshal(req)
+	if err != nil {
+		return Message{}, err
+	}
+	hr, err := http.NewRequestWithContext(ctx, "POST", c.BaseURL+"/chat/completions", bytes.NewReader(body))
+	if err != nil {
+		return Message{}, err
+	}
+	hr.Header.Set("Content-Type", "application/json")
+	hr.Header.Set("Authorization", "Bearer "+c.APIKey)
+	resp, err := c.HTTP.Do(hr)
+	if err != nil {
+		return Message{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return Message{}, fmt.Errorf("%s: %s", resp.Status, strings.TrimSpace(string(b)))
+	}
+
+	msg := Message{Role: "assistant"}
+	var calls []ToolCall // indexed by stream tool_call index
+	finish := ""
+	sc := bufio.NewScanner(resp.Body)
+	sc.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
+	for sc.Scan() {
+		line := sc.Text()
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		if data == "[DONE]" {
+			break
+		}
+		var ch chunk
+		if err := json.Unmarshal([]byte(data), &ch); err != nil {
+			continue
+		}
+		if ch.Error != nil {
+			return Message{}, fmt.Errorf("api error: %s", ch.Error.Message)
+		}
+		if len(ch.Choices) == 0 {
+			continue
+		}
+		if fr := ch.Choices[0].FinishReason; fr != "" {
+			finish = fr
+		}
+		d := ch.Choices[0].Delta
+		if d.Content != "" {
+			msg.Content += d.Content
+			if onText != nil {
+				onText(d.Content)
+			}
+		}
+		for _, tc := range d.ToolCalls {
+			for len(calls) <= tc.Index {
+				calls = append(calls, ToolCall{Type: "function"})
+			}
+			cur := &calls[tc.Index]
+			if tc.ID != "" {
+				cur.ID = tc.ID
+			}
+			if tc.Function.Name != "" {
+				cur.Function.Name += tc.Function.Name
+			}
+			cur.Function.Arguments += tc.Function.Arguments
+		}
+	}
+	if err := sc.Err(); err != nil {
+		return Message{}, err
+	}
+	// Never execute tool calls from a max_tokens-truncated response: the
+	// streamed JSON arguments may be silently incomplete.
+	if finish == "length" && len(calls) > 0 {
+		calls = nil
+		msg.Content += "\n[response truncated by max_tokens; tool calls discarded]"
+	}
+	msg.ToolCalls = calls
+	return msg, nil
+}
