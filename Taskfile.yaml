@@ -63,7 +63,7 @@ tasks:
     cmds:
       - git config core.hooksPath scripts/git-hooks
       - chmod +x scripts/git-hooks/*
-      - echo "git hooks enabled (pre-commit: task check)"
+      - echo "git hooks enabled (pre-commit runs task check)"
 
   coverage:
     desc: Run tests with per-package coverage report
