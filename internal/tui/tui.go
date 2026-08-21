@@ -554,11 +554,12 @@ func (m *model) openMenu() {
 	}
 }
 
-// refreshMenu keeps a live dropdown open while typing a slash command,
-// and closes it otherwise.
+// refreshMenu keeps a live dropdown open while typing a slash command or an
+// @file mention, re-filtering on every keystroke; otherwise closes it.
 func (m *model) refreshMenu() {
 	val := m.input.Value()
-	if strings.HasPrefix(val, "/") && !m.busy {
+	token := val[strings.LastIndexByte(val, ' ')+1:]
+	if strings.HasPrefix(val, "/") || strings.HasPrefix(token, "@") {
 		head, cands := completions(val, m.modelCands(), m.providerCands())
 		if len(cands) > 0 {
 			idx := 0
