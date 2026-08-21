@@ -208,3 +208,177 @@ func TestTaskToolBadArgs(t *testing.T) {
 		t.Fatalf("expected error, got %q", out)
 	}
 }
+
+// compactionServer lets the first request error with context_length_exceeded,
+// then serves a summary completion (for the compaction call) and finally the
+// real answer. call==2 is the /chat/completions summary request (stream:false).
+func compactionServer(t *testing.T) (*httptest.Server, *int) {
+	t.Helper()
+	call := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		call++
+		switch {
+		case call == 1:
+			http.Error(w, `{"error":{"code":"context_length_exceeded"}}`, http.StatusBadRequest)
+		case call == 2:
+			var req llm.Request
+			json.NewDecoder(r.Body).Decode(&req)
+			if req.Stream {
+				t.Errorf("summary call should not stream")
+			}
+			w.Write([]byte(`{"choices":[{"message":{"content":"summary of prior work"}}]}`))
+		default:
+			w.Header().Set("Content-Type", "text/event-stream")
+			fmt.Fprint(w, `data: {"choices":[{"delta":{"content":"recovered"}}]}`+"\n\n")
+			fmt.Fprint(w, "data: [DONE]\n\n")
+		}
+	}))
+	return srv, &call
+}
+
+func TestTurnAutoCompactsOnContextLimit(t *testing.T) {
+	srv, pcall := compactionServer(t)
+	defer srv.Close()
+
+	ag := New(llm.New(srv.URL, "k"), "m", 100, "sys")
+	// build a history that's compactable: system + enough turns
+	for i := 0; i < 8; i++ {
+		ag.Messages = append(ag.Messages,
+			llm.Message{Role: "user", Content: fmt.Sprintf("q%d", i)},
+			llm.Message{Role: "assistant", Content: fmt.Sprintf("a%d", i)},
+		)
+	}
+	var compacted int
+	final, err := ag.Turn(context.Background(), "go", Events{
+		OnCompact: func(took, kept int) { compacted++ },
+	})
+	if err != nil {
+		t.Fatalf("turn after compaction: %v", err)
+	}
+	if final != "recovered" {
+		t.Fatalf("final: %q", final)
+	}
+	if compacted != 1 {
+		t.Fatalf("OnCompact fired %d times, want 1", compacted)
+	}
+	if *pcall < 3 {
+		t.Fatalf("expected ≥3 calls (fail+summary+retry), got %d", *pcall)
+	}
+	// summary lives between system prompt and the kept tail
+	if !strings.Contains(ag.Messages[1].Content, "Summary of the conversation") {
+		t.Fatalf("messages[1] should be the summary, got %q", ag.Messages[1].Content)
+	}
+}
+
+func TestCompactDoesNotLoopOnRepeatedContextLimit(t *testing.T) {
+	// every request errors with context_length_exceeded → compaction must
+	// happen once and then the error surfaces (no infinite retry loop)
+	call := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		call++
+		// one summary call succeeds (to exercise the compaction path), then
+		// every stream fails with context_length_exceeded
+		if r.URL.Path == "/chat/completions" {
+			var req llm.Request
+			json.NewDecoder(r.Body).Decode(&req)
+			if !req.Stream { // the summary call
+				w.Write([]byte(`{"choices":[{"message":{"content":"sim"}}]}`))
+				return
+			}
+		}
+		http.Error(w, `{"error":{"code":"context_length_exceeded"}}`, http.StatusBadRequest)
+	}))
+	defer srv.Close()
+
+	ag := New(llm.New(srv.URL, "k"), "m", 100, "sys")
+	for i := 0; i < 8; i++ {
+		ag.Messages = append(ag.Messages,
+			llm.Message{Role: "user", Content: fmt.Sprintf("q%d", i)},
+			llm.Message{Role: "assistant", Content: fmt.Sprintf("a%d", i)},
+		)
+	}
+	_, err := ag.Turn(context.Background(), "go", Events{})
+	if err == nil {
+		t.Fatal("expected context-limit error to surface, not loop forever")
+	}
+	if call > 3 {
+		t.Fatalf("expected ≤3 calls (fail+summary+retry-fail), got %d", call)
+	}
+}
+
+func TestCompactTooLittleHistory(t *testing.T) {
+	ag := New(llm.New("http://unused", "k"), "m", 100, "sys")
+	ag.Messages = append(ag.Messages, llm.Message{Role: "user", Content: "hi"})
+	if err := ag.compact(context.Background()); err == nil {
+		t.Fatal("expected error compacting a tiny history")
+	}
+}
+
+func TestCompactKeepsToolCallPair(t *testing.T) {
+	// orphan safety: a tail starting with role "tool" must pull in its owning
+	// assistant message so the tool result never references an erased call id.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"choices":[{"message":{"content":"sim"}}]}`))
+	}))
+	defer srv.Close()
+	ag := New(llm.New(srv.URL, "k"), "m", 100, "sys")
+	// system, user, asst(with tool call "t1"), tool("t1" result), user, asst, user
+	for i := 0; i < 4; i++ {
+		ag.Messages = append(ag.Messages, llm.Message{Role: "user", Content: fmt.Sprintf("u%d", i)})
+		if i == 0 {
+			ag.Messages = append(ag.Messages,
+				llm.Message{Role: "assistant", ToolCalls: []llm.ToolCall{{ID: "t1", Type: "function"}}},
+			)
+			ag.Messages = append(ag.Messages, llm.Message{Role: "tool", Content: "tool-out", ToolCallID: "t1"})
+		} else {
+			ag.Messages = append(ag.Messages, llm.Message{Role: "assistant", Content: fmt.Sprintf("a%d", i)})
+		}
+	}
+	before := len(ag.Messages)
+	if err := ag.compact(context.Background()); err != nil {
+		t.Fatalf("compact: %v", err)
+	}
+	if len(ag.Messages) >= before {
+		t.Fatalf("compaction didn't shrink: before %d after %d", before, len(ag.Messages))
+	}
+	// find the kept tool result and its owning assistant
+	var asstTool, toolMsg *llm.Message
+	for i := range ag.Messages {
+		if ag.Messages[i].Role == "tool" {
+			toolMsg = &ag.Messages[i]
+		}
+	}
+	if toolMsg != nil && toolMsg.ToolCallID != "" {
+		for i := range ag.Messages {
+			for _, tc := range ag.Messages[i].ToolCalls {
+				if tc.ID == toolMsg.ToolCallID {
+					asstTool = &ag.Messages[i]
+				}
+			}
+		}
+	}
+	if toolMsg != nil && asstTool == nil {
+		t.Errorf("orphaned tool result: %#v", toolMsg)
+	}
+}
+
+func TestManualCompactFiresEvent(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"choices":[{"message":{"content":"sim"}}]}`))
+	}))
+	defer srv.Close()
+	ag := New(llm.New(srv.URL, "k"), "m", 100, "sys")
+	for i := 0; i < 8; i++ {
+		ag.Messages = append(ag.Messages,
+			llm.Message{Role: "user", Content: fmt.Sprintf("q%d", i)},
+			llm.Message{Role: "assistant", Content: fmt.Sprintf("a%d", i)},
+		)
+	}
+	var fired bool
+	if err := ag.ManualCompact(context.Background(), Events{OnCompact: func(took, kept int) { fired = true }}); err != nil {
+		t.Fatalf("manual compact: %v", err)
+	}
+	if !fired {
+		t.Fatal("OnCompact should fire for ManualCompact")
+	}
+}

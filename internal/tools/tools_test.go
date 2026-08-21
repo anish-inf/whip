@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func run(t *testing.T, name, args string) string {
@@ -106,5 +107,78 @@ func TestHelpersAndEdgeCases(t *testing.T) {
 	run(t, "write", fmt.Sprintf(`{"path":%q,"content":"x x x"}`, f))
 	if out := run(t, "edit", fmt.Sprintf(`{"path":%q,"old_string":"x","new_string":"y","replace_all":true}`, f)); !strings.Contains(out, "3 occurrence") {
 		t.Fatalf("replace_all: %q", out)
+	}
+
+	// Regression: a command that reads from /dev/tty (as sudo does for a
+	// password) must NOT hang the tool. pre-fix the tool used CombinedOutput
+	// with the child sharing loopy's controlling terminal, so the read
+	// blocked until the 120s bash timeout. post-fix the child runs in a new
+	// session with no controlling tty and stdin tied to /dev/null, so the
+	// read fails immediately. We assert it returns well under the cap and
+	// surfaces the tty failure rather than silently succeeding.
+	start := time.Now()
+	out := run(t, "bash", `{"command":"read -r p < /dev/tty; echo got $p","timeout":5}`)
+	if elapsed := time.Since(start); elapsed > 3*time.Second {
+		t.Fatalf("bash tool hung %s on /dev/tty read — fast-fail regressed: %q", elapsed, out)
+	}
+	if strings.Contains(out, "timed out") {
+		t.Fatalf("bash tool timed out on /dev/tty read — fast-fail regressed: %q", out)
+	}
+	// The /dev/tty open must fail (no controlling terminal under Setsid);
+	// bash reports "No such device or address" or similar. The crucial bit is
+	// that $p is EMPTY — no password was read — and we did not hang.
+	if !strings.Contains(out, "/dev/tty") {
+		t.Fatalf("expected a /dev/tty error in output: %q", out)
+	}
+}
+
+// mockInteractiveRunner is a fake tools.InteractiveRunner used to verify the
+// bash tool's interactive hook wiring without spinning up a PTY.
+type mockInteractiveRunner struct {
+	gotCommand string
+	gotTimeout time.Duration
+	gotKeys    <-chan []byte
+	returnThis string
+}
+
+func (m *mockInteractiveRunner) Run(_ context.Context, command string, timeout time.Duration, keys <-chan []byte) string {
+	m.gotCommand = command
+	m.gotTimeout = timeout
+	m.gotKeys = keys
+	return m.returnThis
+}
+
+// TestBashToolInteractiveHook verifies that bash with interactive:true hands
+// off to the installed InteractiveBash runner, passing command+timeout+keys,
+// and returns whatever the runner returns. It also confirms the hook is
+// consulted only when interactive is true.
+func TestBashToolInteractiveHook(t *testing.T) {
+	mock := &mockInteractiveRunner{returnThis: "PASSWORD_ACCEPTED\n(exit: 0)"}
+	prev := InteractiveBash
+	InteractiveBash = mock
+	defer func() { InteractiveBash = prev }()
+
+	out := run(t, "bash", `{"command":"sudo apt install -y sl","interactive":true,"timeout":20}`)
+	if out != "PASSWORD_ACCEPTED\n(exit: 0)" {
+		t.Fatalf("interactive bash should return runner output verbatim: %q", out)
+	}
+	if mock.gotCommand != "sudo apt install -y sl" {
+		t.Fatalf("runner got wrong command: %q", mock.gotCommand)
+	}
+	if mock.gotTimeout != 20*time.Second {
+		t.Fatalf("runner got wrong timeout: %v", mock.gotTimeout)
+	}
+	if mock.gotKeys == nil {
+		t.Fatalf("runner must receive a keys channel")
+	}
+
+	// interactive:false must NOT call the runner even when it's installed
+	mock.gotCommand = ""
+	out = run(t, "bash", `{"command":"echo nohook"}`)
+	if mock.gotCommand != "" {
+		t.Fatalf("non-interactive call should not reach the runner: %q", mock.gotCommand)
+	}
+	if !strings.Contains(out, "nohook") {
+		t.Fatalf("non-interactive output wrong: %q", out)
 	}
 }

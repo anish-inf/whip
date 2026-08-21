@@ -20,7 +20,7 @@ func TestCompletions(t *testing.T) {
 
 	// slash commands
 	head, cs := completions("/m", models, provs, nil, nil)
-	if head != "" || len(cs) != 1 || cs[0].Text != "/model" {
+	if head != "" || len(cs) != 2 || cs[0].Text != "/model" || cs[1].Text != "/mouse" {
 		t.Fatalf("command completion: %q %v", head, texts(cs))
 	}
 	// /model first arg

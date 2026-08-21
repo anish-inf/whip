@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -188,5 +189,61 @@ func TestReasoningEffortSerialized(t *testing.T) {
 	b, _ = json.Marshal(Request{Model: "m"})
 	if strings.Contains(string(b), "reasoning_effort") {
 		t.Fatalf("empty effort must be omitted: %s", b)
+	}
+}
+
+func TestComplete(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer test-key" {
+			http.Error(w, "bad auth", http.StatusUnauthorized)
+			return
+		}
+		w.Write([]byte(`{"choices":[{"message":{"content":"a summary"}}]}`))
+	}))
+	defer srv.Close()
+
+	got, err := New(srv.URL, "test-key").Complete(context.Background(), Request{Model: "m"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "a summary" {
+		t.Fatalf("complete: %q", got)
+	}
+}
+
+func TestCompleteStreamOmitted(t *testing.T) {
+	var req Request
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&req)
+		w.Write([]byte(`{"choices":[{"message":{"content":"ok"}}]}`))
+	}))
+	defer srv.Close()
+
+	if _, err := New(srv.URL, "k").Complete(context.Background(), Request{Model: "m"}); err != nil {
+		t.Fatal(err)
+	}
+	if req.Stream {
+		t.Fatalf("Complete must send stream:false, got %v", req.Stream)
+	}
+}
+
+func TestIsContextLimit(t *testing.T) {
+	cases := []struct {
+		err  error
+		want bool
+	}{
+		{&HTTPError{Status: "400", Body: `{"error":{"code":"context_length_exceeded"}}`}, true},
+		{&HTTPError{Status: "400", Body: "This model's maximum context length is 8192 tokens."}, true},
+		{&HTTPError{Status: "413", Body: "prompt_too_long"}, true},
+		{&HTTPError{Status: "400", Body: "bad request: unknown model"}, false},
+		{&HTTPError{Status: "401", Body: "unauthorized"}, false},
+		{errors.New("context_length_exceeded"), true},
+		{errors.New("rate limited"), false},
+		{nil, false},
+	}
+	for _, c := range cases {
+		if got := IsContextLimit(c.err); got != c.want {
+			t.Errorf("IsContextLimit(%v) = %v, want %v", c.err, got, c.want)
+		}
 	}
 }

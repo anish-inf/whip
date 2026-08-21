@@ -22,6 +22,7 @@ import (
 	"github.com/abe/loopy/internal/llm"
 	"github.com/abe/loopy/internal/session"
 	"github.com/abe/loopy/internal/skills"
+	"github.com/abe/loopy/internal/tools"
 )
 
 var (
@@ -40,6 +41,10 @@ type textMsg string
 type toolStartMsg struct{ name, args string }
 type toolEndMsg struct{ name, result string }
 type steeredMsg string
+type compactMsg struct {
+	took, kept int // messages removed / kept after compaction
+	err        error
+}
 type turnDoneMsg struct {
 	final string
 	err   error
@@ -101,8 +106,12 @@ type model struct {
 	goal       string // active /goal; the loop continues until GOAL_MET
 	goalRounds int    // continuation turns spent on the current goal
 
+	mouseOn  bool                      // runtime mouse-capture state (toggle with /mouse)
 	effortX  int                       // screen column where the clickable ⚡ effort control starts
 	catalogs map[string]config.Catalog // provider model lists (capabilities)
+
+	irunner *interactiveRunner // installed on tools.InteractiveBash at startup
+	iactive *interactive       // in-flight interactive command; nil when idle
 }
 
 // picker is the /resume session browser. metas is newest-first; the list is
@@ -148,10 +157,14 @@ func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string) (s
 	ti := newInput()
 
 	ag.Effort = cfg.DefaultEffort
+	mouseOn := true // default: capture mouse for the clickable ⚡ control + wheel scroll
+	if cfg.Mouse != nil {
+		mouseOn = *cfg.Mouse
+	}
 	m := &model{
 		cfg: cfg, agent: ag, modelName: mn, provName: pn, sysPrompt: sysPrompt,
 		input: ti, spin: spinner.New(spinner.WithSpinner(spinner.Dot)), follow: true, saved: 1,
-		catalogs: config.LoadCatalogs(),
+		catalogs: config.LoadCatalogs(), mouseOn: mouseOn,
 	}
 	if dir, derr := config.Dir(); derr == nil {
 		if st, serr := session.Open(dir + "/sessions.db"); serr == nil {
@@ -169,8 +182,19 @@ func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string) (s
 			return "", err
 		}
 	}
-	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
+	opts := []tea.ProgramOption{tea.WithAltScreen()}
+	if m.mouseOn {
+		// capture mouse for the clickable ⚡ control + wheel scroll
+		opts = append(opts, tea.WithMouseCellMotion())
+	}
+	// (mouse off leaves capture disabled so the terminal's own selection works;
+	// a later /mouse command toggles it back on)
+	p := tea.NewProgram(m, opts...)
 	m.prog = p
+	// install the interactive bash runner so the agent's bash tool can hand
+	// sudo/ssh-style prompts to the user with a 15s inactivity timeout.
+	m.irunner = newInteractiveRunner(p)
+	tools.InteractiveBash = m.irunner
 	go m.fetchCatalogs()
 	_, err = p.Run()
 	return m.sessionID, err
@@ -288,6 +312,23 @@ func (m *model) persist() {
 	}
 	m.store.SetGoal(m.sessionID, m.goal)
 	m.saved = len(m.agent.Messages)
+}
+
+// persistRewrite clears the stored message rows and re-saves the entire
+// compacted history. Compaction reorders/shrinks Messages (old rows under
+// different seq numbers), so the incremental Save path would duplicate them.
+func (m *model) persistRewrite() {
+	if m.store == nil {
+		return
+	}
+	if m.sessionID != "" {
+		if err := m.store.ClearMessages(m.sessionID); err != nil {
+			m.append(errStyle.Render("session save failed: " + err.Error()))
+			return
+		}
+	}
+	m.saved = 1 // re-save everything after the system prompt
+	m.persist()
 }
 
 // setEffort changes the reasoning effort and stores it as the new default.
@@ -424,6 +465,11 @@ func (m *model) growInput() {
 func (m *model) layout() {
 	m.growInput()
 	chrome := 4 + m.input.Height() // header + tips + blanks + input + bottom pad
+	if m.iactive != nil {
+		// input box is hidden while a command has the terminal; drop its height
+		// and the leading blank line View inserts before it.
+		chrome -= m.input.Height()
+	}
 	if m.busy {
 		chrome += 2 // blank line above the spinner + the spinner line itself
 	}
@@ -432,6 +478,9 @@ func (m *model) layout() {
 	}
 	if m.curThink != "" {
 		chrome += lipgloss.Height(m.thinkView()) + 1
+	}
+	if m.iactive != nil {
+		chrome += lipgloss.Height(m.interactiveView()) + 1
 	}
 	if m.menu != nil {
 		chrome += min(len(m.menu.cands), menuRows) + 1
@@ -520,10 +569,74 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.append(out)
 		return m, nil
 
+	case interactiveStartMsg:
+		// passthrough mode: route keystrokes into the PTY. The output pane is
+		// shown by View(); a fresh toolStartMsg-style banner is appended so the
+		// user sees "bash (interactive)" inline with the transcript.
+		m.flushThink()
+		m.flushCurrent()
+		m.iactive = &interactive{keys: msg.keys}
+		m.append(toolStyle.Render("⚒ bash ") + dimStyle.Render("(interactive — type to respond, 15s inactivity timeout)"))
+		return m, nil
+
+	case interactiveOutMsg:
+		if m.iactive == nil {
+			return m, nil
+		}
+		m.iactive.output += msg.chunk
+		// any output means the command is producing, not waiting
+		m.iactive.await = false
+		return m, nil
+
+	case interactiveAwaitMsg:
+		if m.iactive == nil {
+			return m, nil
+		}
+		m.iactive.await = true
+		m.iactive.awaitcd = msg.secsLeft
+		return m, nil
+
+	case interactiveDoneMsg:
+		if m.iactive != nil {
+			// fold the streamed output + exit into the transcript as a normal
+			// tool result so the session record matches the non-interactive path
+			lines := strings.Split(strings.TrimRight(msg.output, "\n"), "\n")
+			// cap the persisted preview like toolEndMsg, but keep the full text
+			// available to the model (it's already in the tool result string)
+			preview := lines
+			if len(preview) > 5 {
+				preview = preview[:5]
+			}
+			out := dimStyle.Render("  " + strings.Join(preview, "\n  "))
+			if len(lines) > 5 {
+				out += dimStyle.Render(fmt.Sprintf("\n  … +%d lines", len(lines)-5))
+			}
+			if msg.exit != "" {
+				out += "\n" + dimStyle.Render("  ("+msg.exit+")")
+			}
+			m.append(out)
+			m.iactive = nil
+		}
+		return m, nil
+
 	case steeredMsg:
 		m.flushThink()
 		m.flushCurrent()
 		m.append(wrap(youStyle.Render("❯ ")+string(msg)+dimStyle.Render("  (steered)"), m.width))
+		return m, nil
+
+	case compactMsg:
+		// compaction lands between turns: append an inline note and rewrite
+		// the session record so the stored history matches the memory
+		m.flushThink()
+		m.flushCurrent()
+		switch {
+		case msg.err != nil:
+			m.append(errStyle.Render("compact failed: " + msg.err.Error()))
+		default:
+			m.append(dimStyle.Render(fmt.Sprintf("◎ compacted — summarized %d msgs, %d kept", msg.took, msg.kept)))
+			m.persistRewrite() // reset the stored history to the compacted form
+		}
 		return m, nil
 
 	case turnDoneMsg:
@@ -592,6 +705,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// interactive passthrough: forward keystrokes to the child's PTY instead
+	// of editing the input box. ctrl+c ctrl+c breaks out (cancel), esc forwards
+	// a single esc to the child (many prompts use esc to cancel).
+	if m.iactive != nil {
+		return m.iactiveKey(msg)
+	}
 	if m.picker != nil {
 		return m.pickerKey(msg)
 	}
@@ -682,6 +801,13 @@ func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
+		// move within the textarea unless the cursor already sits on the
+		// last (soft-wrapped) row, where ↓ falls through to history recall
+		if !m.cursorOnLastLine() {
+			var cmd tea.Cmd
+			m.input, cmd = m.input.Update(msg)
+			return m, cmd
+		}
 		m.histNext()
 		return m, nil
 
@@ -699,6 +825,13 @@ func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.queueSel--
 			}
 			return m, nil
+		}
+		// move within the textarea unless the cursor already sits on the
+		// first (soft-wrapped) row, where ↑ falls through to history recall
+		if msg.Type == tea.KeyUp && !m.cursorOnFirstLine() {
+			var cmd tea.Cmd
+			m.input, cmd = m.input.Update(msg)
+			return m, cmd
 		}
 		if msg.Type == tea.KeyUp {
 			m.histPrev()
@@ -820,6 +953,26 @@ func (m *model) histNext() {
 	} else {
 		m.input.SetValue(m.hist[m.histIdx])
 	}
+}
+
+// cursorOnFirstLine reports whether the textarea's cursor sits on the first
+// (visual) row. A single logical line that soft-wraps to several rows counts
+// as several, so ↑ only rolls over to history from the topmost one.
+func (m *model) cursorOnFirstLine() bool {
+	if m.input.Line() != 0 {
+		return false
+	}
+	return m.input.LineInfo().RowOffset == 0
+}
+
+// cursorOnLastLine reports whether the textarea's cursor sits on the last
+// (visual) row, mirroring cursorOnFirstLine for the ↓ edge.
+func (m *model) cursorOnLastLine() bool {
+	if m.input.Line() != m.input.LineCount()-1 {
+		return false
+	}
+	li := m.input.LineInfo()
+	return li.RowOffset >= li.Height-1
 }
 
 // switchModel rebuilds the agent on a new model/provider, carrying history.
@@ -1096,6 +1249,7 @@ func (m *model) submit(text string) (tea.Model, tea.Cmd) {
 				flush()
 				p.Send(steeredMsg(s))
 			},
+			OnCompact: func(took, kept int) { p.Send(compactMsg{took: took, kept: kept}) },
 		})
 		flush()
 		p.Send(turnDoneMsg{final: final, err: err})
@@ -1116,6 +1270,37 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 		m.sessionID = "" // next turn starts a fresh session
 		m.saved = 1
 		m.append(dimStyle.Render("(conversation cleared)"))
+	case "/compact":
+		if m.busy {
+			m.append(dimStyle.Render("(busy — /compact will land after this turn)"))
+			return m, nil
+		}
+		m.busy = true
+		m.append(dimStyle.Render("◎ compacting…"))
+		p := m.prog
+		ag := m.agent // capture the current conversation for the summary call
+		ctx, cancel := context.WithCancel(context.Background())
+		m.cancel = cancel
+		go func() {
+			took := len(ag.Messages)
+			err := ag.ManualCompact(ctx, agent.Events{})
+			p.Send(compactMsg{took: took - len(ag.Messages), kept: len(ag.Messages), err: err})
+			p.Send(turnDoneMsg{}) // clear busy state
+		}()
+		return m, m.spin.Tick
+	case "/mouse":
+		m.mouseOn = !m.mouseOn
+		cfg := m.cfg
+		b := m.mouseOn
+		cfg.Mouse = &b
+		if err := cfg.Save(); err != nil {
+			m.append(errStyle.Render("config save failed: " + err.Error()))
+		}
+		m.append(dimStyle.Render("mouse capture: " + onOff(m.mouseOn) + " (off = native terminal selection; hold shift to select while on)"))
+		if m.mouseOn {
+			return m, tea.EnableMouseCellMotion
+		}
+		return m, tea.DisableMouse
 	case "/effort":
 		levels := m.effortsFor()
 		if len(fields) > 1 {
@@ -1168,7 +1353,7 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 		m.openPicker()
 	case "/help":
 		m.append(dimStyle.Render(
-			"/model <name> [provider] — switch model\n/resume [id] — resume a previous session\n/goal <text> — keep working until the goal is met (resume | clear)\n/clear — reset conversation\n/quit — exit\ntab — complete · ctrl+o — toggle thinking tokens · ctrl+j / shift+enter — newline · ctrl+v — paste image · esc — interrupt the agent · while busy with queued messages: ↑/↓ select, del removes · PgUp/PgDn — scroll · ctrl+c — interrupt / quit"))
+			"/model <name> [provider] — switch model\n/compact — summarize old turns when context fills\n/mouse — toggle mouse capture (off = native terminal selection)\n/resume [id] — resume a previous session\n/goal <text> — keep working until the goal is met (resume | clear)\n/clear — reset conversation\n/quit — exit\ntab — complete · ctrl+o — toggle thinking tokens · ctrl+j / shift+enter — newline · ctrl+v — paste image · esc — interrupt the agent · while busy with queued messages: ↑/↓ select, del removes · PgUp/PgDn — scroll · shift-drag — select text (native) · ctrl+c — interrupt / quit"))
 	case "/model":
 		if len(fields) < 2 {
 			m.openModelPicker()
@@ -1221,7 +1406,10 @@ func (m *model) View() string {
 		b.WriteString(m.modelPickerView())
 		return b.String()
 	}
-	b.WriteString(dimStyle.Render(truncLine(" / commands · ctrl+p palette · ctrl+o thinking · ctrl+j/shift+enter newline · ctrl+v paste image · esc interrupt · ctrl+c interrupt/quit", m.width)) + "\n\n")
+	// One compact hint up top — the full roster lives behind the ctrl+p palette
+	// and the /help command. The bottom hint covers the busy/interactive states.
+	tips := "`ctrl+p` commands"
+	b.WriteString(dimStyle.Render(tips) + "\n\n")
 	b.WriteString(m.vp.View() + "\n")
 	if m.curThink != "" {
 		b.WriteString("\n" + m.thinkView() + "\n")
@@ -1229,9 +1417,14 @@ func (m *model) View() string {
 	if m.current != "" {
 		b.WriteString("\n" + m.currentView() + "\n")
 	}
+	if m.iactive != nil {
+		b.WriteString("\n" + m.interactiveView() + "\n")
+	}
 	if m.busy {
 		hint := " thinking… (enter queues · esc interrupts · ctrl+c ctrl+c interrupts)"
-		if m.interrupt1 {
+		if m.iactive != nil {
+			hint = " bash (interactive) — type to respond · ctrl+c ctrl+c to cancel"
+		} else if m.interrupt1 {
 			hint = " thinking… (esc or ctrl+c again to interrupt)"
 		}
 		b.WriteString("\n" + m.spin.View() + dimStyle.Render(hint) + "\n")
@@ -1250,7 +1443,10 @@ func (m *model) View() string {
 			b.WriteString(line + "\n")
 		}
 	}
-	b.WriteString("\n" + m.input.View())
+	b.WriteString("\n")
+	if m.iactive == nil {
+		b.WriteString(m.input.View())
+	}
 	if m.menu != nil {
 		b.WriteString("\n" + m.menuView())
 	}

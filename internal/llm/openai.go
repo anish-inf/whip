@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -105,6 +106,54 @@ type apiError struct {
 	Message string `json:"message"`
 }
 
+// HTTPError is returned when the API responds with a non-2xx status. Body is
+// the ( capped ) response payload so callers can match against provider-
+// specific reason strings; Error() keeps the "<status>: <body>" shape the
+// existing tests assert ( e.g. "... 401 ..." ).
+type HTTPError struct {
+	Status string
+	Body   string
+}
+
+func (e *HTTPError) Error() string { return e.Status + ": " + e.Body }
+
+// contextLimitMarkers are substrings providers put in the error body when the
+// conversation has grown past the model's context window. Anthropic and the
+// OpenAI-compatible routers it backs onto both surface one of these.
+var contextLimitMarkers = []string{
+	"context_length_exceeded", // Anthropic / OpenAI error.code
+	"maximum context length",  // OpenAI plain-text message
+	"prompt_too_long",         // Anthropic error.type variant
+}
+
+// IsContextLimit reports whether err is a context-length-exceeded style
+// error: an HTTP 4xx whose body names context length, or the older "context
+// window"-free provider error code. It is the signal to auto-compact.
+func IsContextLimit(err error) bool {
+	if err == nil {
+		return false
+	}
+	var he *HTTPError
+	if errors.As(err, &he) {
+		if strings.HasPrefix(he.Status, "400") || strings.HasPrefix(he.Status, "413") {
+			b := strings.ToLower(he.Body)
+			for _, m := range contextLimitMarkers {
+				if strings.Contains(b, m) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	s := strings.ToLower(err.Error())
+	for _, m := range contextLimitMarkers {
+		if strings.Contains(s, m) {
+			return true
+		}
+	}
+	return false
+}
+
 // ModelInfo is one entry from the provider's GET /models list. Fields beyond
 // the OpenAI spec (context_length, reasoning_efforts) are omitted by APIs
 // that don't supply them.
@@ -129,7 +178,7 @@ func (c *Client) Models(ctx context.Context) ([]ModelInfo, error) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return nil, fmt.Errorf("%s: %s", resp.Status, strings.TrimSpace(string(b)))
+		return nil, &HTTPError{Status: resp.Status, Body: strings.TrimSpace(string(b))}
 	}
 	var list struct {
 		Data []ModelInfo `json:"data"`
@@ -162,7 +211,7 @@ func (c *Client) Stream(ctx context.Context, req Request, onText, onThink func(s
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return Message{}, fmt.Errorf("%s: %s", resp.Status, strings.TrimSpace(string(b)))
+		return Message{}, &HTTPError{Status: resp.Status, Body: strings.TrimSpace(string(b))}
 	}
 
 	msg := Message{Role: "assistant"}
@@ -229,4 +278,44 @@ func (c *Client) Stream(ctx context.Context, req Request, onText, onThink func(s
 	}
 	msg.ToolCalls = calls
 	return msg, nil
+}
+
+// Complete sends a non-streaming chat request and returns the assistant text
+// content. It's used internally by compaction's summary call, where streaming
+// would just add UI noise for a one-shot synthesis.
+func (c *Client) Complete(ctx context.Context, req Request) (string, error) {
+	req.Stream = false
+	body, err := json.Marshal(req)
+	if err != nil {
+		return "", err
+	}
+	hr, err := http.NewRequestWithContext(ctx, "POST", c.BaseURL+"/chat/completions", bytes.NewReader(body))
+	if err != nil {
+		return "", err
+	}
+	hr.Header.Set("Content-Type", "application/json")
+	hr.Header.Set("Authorization", "Bearer "+c.APIKey)
+	resp, err := c.HTTP.Do(hr)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return "", &HTTPError{Status: resp.Status, Body: strings.TrimSpace(string(b))}
+	}
+	var out struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return "", err
+	}
+	if len(out.Choices) == 0 {
+		return "", fmt.Errorf("no choices in completion response")
+	}
+	return out.Choices[0].Message.Content, nil
 }

@@ -47,7 +47,7 @@ Full exploration reports: [learnings/other-harnesses/opencode/](learnings/other-
 - [ ] `/fork` a session (pi: tree-structured JSONL entries with `parentId` — `docs/session-format.md`; opencode forks from any message via a per-message action menu)
 - [ ] Timeline: jump-to-message picker that live-scrolls the transcript as you browse (opencode `dialog-timeline.tsx`)
 - [ ] Undo last message: abort turn, revert file changes, restore the prompt text into the input for editing (opencode `routes/session/index.tsx:615` — the input restore is what makes it feel good)
-- [ ] Compaction: summarize old turns when context fills (pi settings: `compaction: {reserveTokens, keepRecentTokens}`; opencode `/compact`)
+- [x] Compaction: summarize old turns when context fills (pi settings: `compaction: {reserveTokens, keepRecentTokens}`; opencode `/compact`) — `/compact` manually; auto-compacts + retries once when the provider errors with context_length_exceeded; kept tail never orphans a tool_call from its result
 - [ ] Token/cost tracking per session (pi models.json carries `cost: {input, output, cacheRead, cacheWrite}`)
 - [ ] Export transcript to markdown with include-options dialog (opencode `/export`, `ui/dialog-export-options.tsx`)
 
@@ -91,7 +91,7 @@ Full exploration reports: [learnings/other-harnesses/opencode/](learnings/other-
 - [ ] One generic fuzzy-select widget reused by every picker: model, session, theme, timeline (opencode `ui/dialog-select.tsx`)
 - [ ] KV table in sessions.db for palette-toggleable UI prefs — no config ceremony per toggle (opencode `context/kv.tsx` pattern)
 - [ ] Theme support: JSON themes with named defs + `{dark, light}` variant pairs; a "system" theme built from the terminal's real palette (opencode `theme/index.ts`)
-- [ ] `"mouse": false` config escape hatch so native terminal selection works (opencode `app.tsx:196`)
+- [x] `"mouse": false` config escape hatch so native terminal selection works (opencode `app.tsx:196`) — also a runtime `/mouse` toggle; with capture on, hold shift to select text in the transcript
 
 ## CLI surface
 

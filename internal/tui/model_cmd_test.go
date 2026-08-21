@@ -66,8 +66,8 @@ func TestModelPaletteEnterOpensPicker(t *testing.T) {
 	if m.menu == nil {
 		t.Fatal("ctrl+p should open the command menu")
 	}
-	// navigate down to /model (sorted after /clear,/effort,/goal,/help)
-	for i := 0; i < 4; i++ {
+	// navigate down to /model (sorted: clear, compact, effort, goal, help, model)
+	for i := 0; i < 5; i++ {
 		tm, _ := m.key(tea.KeyMsg{Type: tea.KeyDown})
 		m = tm.(*model)
 	}

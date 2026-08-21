@@ -6,12 +6,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/abe/loopy/internal/llm"
+	"github.com/abe/loopy/internal/tools/bashrun"
 )
 
 // Tool is a named executable tool with a JSON schema.
@@ -19,6 +19,21 @@ type Tool struct {
 	Def llm.Tool
 	Run func(ctx context.Context, args json.RawMessage) (string, error)
 }
+
+// InteractiveRunner runs an interactive bash command with PTY-backed live I/O.
+// The TUI installs one so the agent's bash tool can hand interactive prompts
+// (sudo, ssh, gpg) to the user. ctx caps the whole run; keys feeds keystrokes
+// the user types; the returned string is fed back to the model as tool output.
+// Implementations must be safe to call from a goroutine that is not the UI
+// thread, and must not block forever when no input arrives.
+type InteractiveRunner interface {
+	Run(ctx context.Context, command string, timeout time.Duration, keys <-chan []byte) string
+}
+
+// InteractiveBash is the hook installed by the TUI; nil means the agent's bash
+// tool runs interactive commands itself using the non-interactive fallback
+// (which fast-fails sudo-style prompts instead of hanging).
+var InteractiveBash InteractiveRunner
 
 // All returns the built-in tool set.
 func All() []Tool {
@@ -72,11 +87,12 @@ func bashTool() Tool {
 	return Tool{
 		Def: llm.NewTool("bash",
 			"Execute a bash command in the current working directory and return its combined stdout/stderr. Use for running programs, git, searching (grep/rg), listing files, etc.",
-			`{"type":"object","properties":{"command":{"type":"string","description":"The bash command to execute"},"timeout":{"type":"number","description":"Timeout in seconds (default 120)"}},"required":["command"]}`),
+			`{"type":"object","properties":{"command":{"type":"string","description":"The bash command to execute"},"timeout":{"type":"number","description":"Timeout in seconds (default 120)"},"interactive":{"type":"boolean","description":"Run in a PTY so sudo/ssh-style password prompts work. Loopy stays in control of the terminal and forwards your keystrokes; the command is killed after 15s of no input. Use only for commands that genuinely need a password."}},"required":["command"]}`),
 		Run: func(ctx context.Context, args json.RawMessage) (string, error) {
 			var a struct {
-				Command string  `json:"command"`
-				Timeout float64 `json:"timeout"`
+				Command     string  `json:"command"`
+				Timeout     float64 `json:"timeout"`
+				Interactive bool    `json:"interactive"`
 			}
 			if err := json.Unmarshal(args, &a); err != nil {
 				return "", err
@@ -84,16 +100,31 @@ func bashTool() Tool {
 			if a.Timeout <= 0 {
 				a.Timeout = 120
 			}
-			ctx, cancel := context.WithTimeout(ctx, time.Duration(a.Timeout*float64(time.Second)))
-			defer cancel()
-			cmd := exec.CommandContext(ctx, "bash", "-c", a.Command)
-			out, err := cmd.CombinedOutput()
-			s := truncateTail(string(out)) // errors show up at the end of command output
-			if ctx.Err() == context.DeadlineExceeded {
+			dur := time.Duration(a.Timeout * float64(time.Second))
+
+			// Interactive mode hands the live terminal to the user only when the
+			// TUI has wired a runner. Without it we run non-interactively, which
+			// fails sudo-style prompts fast instead of hanging on loopy's tty.
+			if a.Interactive && InteractiveBash != nil {
+				keys := make(chan []byte, 16)
+				out := InteractiveBash.Run(ctx, a.Command, dur, keys)
+				return truncateTail(out), nil
+			}
+
+			res := bashrun.Run(ctx, bashrun.Options{
+				Command: a.Command,
+				Timeout: dur,
+			})
+
+			s := truncateTail(res.Output)
+			if res.TimedOut {
 				return s + "\n(command timed out)", nil
 			}
-			if err != nil {
-				return fmt.Sprintf("%s\n(exit: %v)", s, err), nil
+			if res.Exit != "" {
+				return fmt.Sprintf("%s\n(%s)", s, res.Exit), nil
+			}
+			if s == "" {
+				return "(no output)", nil
 			}
 			return s, nil
 		},

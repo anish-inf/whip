@@ -185,6 +185,14 @@ func (s *Store) LastExchange(id string) (user, assistant string) {
 	return user, assistant
 }
 
+// ClearMessages deletes the stored message rows for a session (the session
+// row is kept). Used after compaction rewrites history: the compacted
+// messages are smaller and re-seqenced from 0, so the old rows must go first.
+func (s *Store) ClearMessages(id string) error {
+	_, err := s.db.Exec(`DELETE FROM messages WHERE session_id=?`, id)
+	return err
+}
+
 func scanMetas(rows *sql.Rows) ([]Meta, error) {
 	defer rows.Close()
 	var out []Meta

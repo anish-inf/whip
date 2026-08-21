@@ -15,10 +15,12 @@ type cand struct {
 
 var commands = []cand{
 	{"/clear", "Reset the conversation"},
+	{"/compact", "Summarize old turns into a shorter context"},
 	{"/effort", "[level] — reasoning effort: off·low·medium·high (bare cycles)"},
 	{"/goal", "<text> — work until done; also: resume, clear"},
 	{"/help", "Show available commands"},
 	{"/model", "<model> [provider] — switch model"},
+	{"/mouse", "Toggle mouse capture (off = native terminal selection)"},
 	{"/quit", "Exit loopy"},
 	{"/resume", "[id] — browse and resume previous sessions"},
 }
@@ -26,8 +28,8 @@ var commands = []cand{
 // execNow lists commands the menu runs immediately on enter (they act
 // sensibly with no arguments); others insert themselves for arguments.
 var execNow = map[string]bool{
-	"/clear": true, "/effort": true, "/help": true,
-	"/model": true, "/quit": true, "/resume": true,
+	"/clear": true, "/compact": true, "/effort": true, "/help": true,
+	"/model": true, "/mouse": true, "/quit": true, "/resume": true,
 }
 
 // completions splits val into an untouched head and candidates for its last
