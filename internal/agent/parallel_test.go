@@ -283,3 +283,122 @@ func TestFanIn(t *testing.T) {
 		t.Fatalf("fan-in miscounted: a=%d b=%d usage=%d", a.Load(), b.Load(), usage.Load())
 	}
 }
+
+// toolLoopServer answers the first request with a tool call (so the subagent
+// fires OnToolStart/OnToolEnd), the second with the final text. It also
+// records the role of every message seen, so the test can prove the tool
+// result made it back into the conversation.
+func toolLoopServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	call := 0
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req llm.Request
+		json.NewDecoder(r.Body).Decode(&req)
+		w.Header().Set("Content-Type", "text/event-stream")
+		call++
+		switch call {
+		case 1:
+			fmt.Fprint(w, `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"t1","type":"function","function":{"name":"read","arguments":"{\"path\":\"/tmp/x\"}"}}]}}]}`+"\n\n")
+			fmt.Fprint(w, `data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}`+"\n\n")
+		default:
+			fmt.Fprint(w, `data: {"choices":[{"delta":{"content":"final report"},"finish_reason":"stop"}]}`+"\n\n")
+		}
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+}
+
+// A subscriber on a task that runs tools sees the full lifecycle: tool start,
+// tool end, and the streamed text — not just the final report.
+func TestBackgroundTaskSubscriberSeesToolEvents(t *testing.T) {
+	srv := toolLoopServer(t)
+	defer srv.Close()
+
+	ag := New(llm.New(srv.URL, "k"), "m", 100, "sys")
+	task := ag.StartBackground(context.Background(), "d", "p")
+
+	var mu sync.Mutex
+	var seq []string
+	ok := ag.Tasks().Subscribe(task.ID, Events{
+		OnText:      func(s string) { mu.Lock(); seq = append(seq, "text:"+s); mu.Unlock() },
+		OnToolStart: func(n, a string) { mu.Lock(); seq = append(seq, "start:"+n); mu.Unlock() },
+		OnToolEnd:   func(n, r string) { mu.Lock(); seq = append(seq, "end:"+n+":"+r); mu.Unlock() },
+	})
+	if !ok {
+		t.Fatal("Subscribe on a running task should succeed")
+	}
+	select {
+	case <-task.Done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("task never settled")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	joined := strings.Join(seq, "|")
+	for _, want := range []string{"start:read", "end:read:", "text:final report"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("subscriber stream %q missing %q", joined, want)
+		}
+	}
+}
+
+// Multiple subscribers on one task each receive every event (the fan-out is
+// per-subscriber, not first-come).
+func TestBackgroundTaskManySubscribers(t *testing.T) {
+	srv := textServer(t, func(n int, req llm.Request) string {
+		time.Sleep(30 * time.Millisecond) // let subscribers attach
+		return "broadcast-body"
+	})
+	defer srv.Close()
+
+	ag := New(llm.New(srv.URL, "k"), "m", 100, "sys")
+	task := ag.StartBackground(context.Background(), "d", "p")
+
+	const subs = 4
+	var counts [subs]atomic.Int32
+	for i := 0; i < subs; i++ {
+		if !ag.Tasks().Subscribe(task.ID, Events{OnText: func(s string) { counts[i].Add(int32(len(s))) }}) {
+			t.Fatalf("subscriber %d rejected", i)
+		}
+	}
+	select {
+	case <-task.Done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("task never settled")
+	}
+	for i := range counts {
+		if counts[i].Load() == 0 {
+			t.Fatalf("subscriber %d saw no events", i)
+		}
+	}
+}
+
+// Subscribing an unknown task id reports false rather than panicking.
+func TestSubscribeUnknownTask(t *testing.T) {
+	ag := New(llm.New("http://unused", "k"), "m", 100, "sys")
+	if ag.Tasks().Subscribe("task-999", Events{}) {
+		t.Fatal("Subscribe on an unknown id should report false")
+	}
+}
+
+// Usage from a background subagent's API calls folds into the parent's
+// session totals (the FanIn second leg alongside the event emitter).
+func TestBackgroundTaskUsageRollsIntoParent(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, `data: {"choices":[{"delta":{"content":"done"},"finish_reason":"stop"}]}`+"\n\n")
+		fmt.Fprint(w, `data: {"choices":[],"usage":{"prompt_tokens":50,"completion_tokens":5}}`+"\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer srv.Close()
+
+	ag := New(llm.New(srv.URL, "k"), "m", 100, "sys")
+	task := ag.StartBackground(context.Background(), "d", "p")
+	select {
+	case <-task.Done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("task never settled")
+	}
+	if u := ag.Usage(); u.PromptTokens != 50 || u.CompletionTokens != 5 {
+		t.Fatalf("subagent usage should roll into the parent: %+v", u)
+	}
+}
