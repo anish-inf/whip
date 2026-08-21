@@ -1,4 +1,4 @@
-// Package config loads and saves loopy's JSON configuration from ~/.loopy.
+// Package config loads and saves loopy's JSONC configuration from ~/.loopy.
 package config
 
 import (
@@ -66,7 +66,7 @@ type Model struct {
 	MaxTokens int      `json:"maxTokens,omitempty"`
 }
 
-// Config is the root of ~/.loopy/config.json.
+// Config is the root of ~/.loopy/config.json (JSONC: comments allowed).
 type Config struct {
 	DefaultModel    string              `json:"defaultModel"`
 	DefaultProvider string              `json:"defaultProvider,omitempty"` // override the model's first provider
@@ -93,7 +93,8 @@ func path() (string, error) {
 	return filepath.Join(dir, "config.json"), nil
 }
 
-// Load reads ~/.loopy/config.json, writing a default config on first run.
+// Load reads ~/.loopy/config.json, writing a default config on first run. The
+// file is JSONC: comments and trailing commas are allowed.
 func Load() (*Config, error) {
 	p, err := path()
 	if err != nil {
@@ -108,23 +109,72 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	var cfg Config
-	if err := json.Unmarshal(data, &cfg); err != nil {
+	if err := parseJSONC(data, &cfg); err != nil {
 		return nil, fmt.Errorf("parse %s: %w", p, err)
+	}
+	// Recover from a clobbered/empty config: no providers and no models is
+	// never a usable state, so prefer the backup, else regenerate defaults.
+	if len(cfg.Providers) == 0 && len(cfg.Models) == 0 {
+		if bak, err := os.ReadFile(p + ".bak"); err == nil {
+			var restored Config
+			if parseJSONC(bak, &restored) == nil && (len(restored.Providers) > 0 || len(restored.Models) > 0) {
+				return &restored, restored.Save()
+			}
+		}
+		def := Default()
+		return def, def.Save()
 	}
 	return &cfg, nil
 }
 
-// Save writes the config back to ~/.loopy/config.json.
+// Save writes the config back to ~/.loopy/config.json. The write is atomic
+// (temp file + rename) and the previous contents are kept in config.json.bak.
+// As a safety net, Save refuses to overwrite an existing healthy config (one
+// with providers/models) with a structurally empty one — that path has only
+// ever been reached by a bug, never intentionally.
 func (c *Config) Save() error {
 	p, err := path()
 	if err != nil {
 		return err
 	}
-	data, err := json.MarshalIndent(c, "", "  ")
+	if len(c.Providers) == 0 && len(c.Models) == 0 {
+		if existing, err := os.ReadFile(p); err == nil {
+			var cur Config
+			if parseJSONC(existing, &cur) == nil && (len(cur.Providers) > 0 || len(cur.Models) > 0) {
+				return fmt.Errorf("refusing to overwrite %s: existing config has providers/models but the value being saved is empty", p)
+			}
+		}
+	}
+	data, err := marshalConfig(c)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(p, append(data, '\n'), 0o600)
+	if existing, err := os.ReadFile(p); err == nil && len(existing) > 0 {
+		// best-effort backup before replacing
+		_ = os.WriteFile(p+".bak", existing, 0o600)
+	}
+	tmp := p + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, p); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	return nil
+}
+
+// marshalConfig renders the config as JSONC with a header comment.
+func marshalConfig(c *Config) ([]byte, error) {
+	body, err := json.MarshalIndent(c, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	header := "// loopy configuration — JSONC: comments and trailing commas are allowed.\n" +
+		"// providers: declare each API endpoint once. models: route each model to one or\n" +
+		"// more providers (first is the default). defaultModel/defaultProvider pick the route.\n"
+	out := append([]byte(header), body...)
+	return append(out, '\n'), nil
 }
 
 // Resolve picks the provider and API model id for a model name.

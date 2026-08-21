@@ -86,6 +86,7 @@ func TestEffortsForAdvertisedLevels(t *testing.T) {
 }
 
 func TestUpdateCatalogsResetsUnsupportedEffort(t *testing.T) {
+	t.Setenv("HOME", t.TempDir()) // keep setEffort's cfg.Save() away from the real config
 	m := &model{
 		cfg:      &config.Config{},
 		provName: "inference",

@@ -121,3 +121,128 @@ func TestInfKeyBadJSON(t *testing.T) {
 		t.Fatalf("bad json should yield empty key, got %q", k)
 	}
 }
+
+func TestLoadJSONCCommentsAndTrailingCommas(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	os.MkdirAll(filepath.Join(home, ".loopy"), 0o700)
+	src := `{
+  // default route
+  "defaultModel": "m1",
+  "defaultProvider": "a", /* block comment */
+  "providers": {
+    "a": { "baseUrl": "https://a", "api": "openai-completions", }, // trailing comma
+  },
+  "models": {
+    "m1": { "providers": ["a",], "maxTokens": 1024, },
+  },
+}
+`
+	os.WriteFile(filepath.Join(home, ".loopy", "config.json"), []byte(src), 0o600)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.DefaultModel != "m1" || cfg.DefaultProvider != "a" {
+		t.Fatalf("defaults: %+v", cfg)
+	}
+	if cfg.Models["m1"].Providers[0] != "a" || cfg.Models["m1"].MaxTokens != 1024 {
+		t.Fatalf("model: %+v", cfg.Models["m1"])
+	}
+}
+
+func TestLoadRecoversFromClobberedConfig(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	dir := filepath.Join(home, ".loopy")
+	os.MkdirAll(dir, 0o700)
+	p := filepath.Join(dir, "config.json")
+	// a previously-clobbered config: parses fine but has no providers/models
+	os.WriteFile(p, []byte(`{"defaultModel":"","providers":null,"models":null}`), 0o600)
+	// a healthy backup from before the wipe
+	os.WriteFile(p+".bak", []byte(`{"defaultModel":"m1","providers":{"a":{"baseUrl":"https://a","api":"openai-completions"}},"models":{"m1":{"providers":["a"]}}}`), 0o600)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.DefaultModel != "m1" || len(cfg.Providers) != 1 {
+		t.Fatalf("expected restore from .bak, got %+v", cfg)
+	}
+}
+
+func TestLoadRegeneratesDefaultsWhenEmptyAndNoBackup(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	dir := filepath.Join(home, ".loopy")
+	os.MkdirAll(dir, 0o700)
+	os.WriteFile(filepath.Join(dir, "config.json"), []byte(`{"providers":null,"models":null}`), 0o600)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.DefaultModel != "kimi-k3-fast" || len(cfg.Providers) == 0 {
+		t.Fatalf("expected regenerated defaults, got %+v", cfg)
+	}
+}
+
+func TestSaveRefusesToClobberHealthyConfig(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	dir := filepath.Join(home, ".loopy")
+	os.MkdirAll(dir, 0o700)
+	p := filepath.Join(dir, "config.json")
+	healthy := `{"defaultModel":"m1","providers":{"a":{"baseUrl":"https://a","api":"openai-completions"}},"models":{"m1":{"providers":["a"]}}}`
+	os.WriteFile(p, []byte(healthy), 0o600)
+
+	if err := (&Config{}).Save(); err == nil {
+		t.Fatal("expected refusal to overwrite a healthy config with an empty one")
+	}
+	// original untouched
+	data, _ := os.ReadFile(p)
+	if string(data) != healthy {
+		t.Fatalf("config should be unchanged, got %q", data)
+	}
+}
+
+func TestSaveWritesBackupAndIsAtomic(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfg, err := Load() // writes defaults
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, _ := path()
+	first, _ := os.ReadFile(p)
+
+	cfg.DefaultModel = "glm-5.2-fast"
+	if err := cfg.Save(); err != nil {
+		t.Fatal(err)
+	}
+	bak, err := os.ReadFile(p + ".bak")
+	if err != nil {
+		t.Fatal("expected a .bak of the previous contents")
+	}
+	if string(bak) != string(first) {
+		t.Fatalf("backup should hold the previous contents")
+	}
+	// no temp file left behind
+	if _, err := os.Stat(p + ".tmp"); !os.IsNotExist(err) {
+		t.Fatal("temp file should be renamed away")
+	}
+}
+
+func TestSaveWritesJSONCHeader(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	if _, err := Load(); err != nil {
+		t.Fatal(err)
+	}
+	p, _ := path()
+	data, _ := os.ReadFile(p)
+	if len(data) == 0 || data[0] != '/' {
+		t.Fatalf("expected a // header comment, got:\n%s", data)
+	}
+	// and it still parses back via the JSONC loader
+	if _, err := Load(); err != nil {
+		t.Fatal(err)
+	}
+}
