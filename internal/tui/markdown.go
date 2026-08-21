@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/charmbracelet/glamour"
+	glamouransi "github.com/charmbracelet/glamour/ansi"
 	"github.com/charmbracelet/glamour/styles"
 	"github.com/charmbracelet/x/ansi"
 )
@@ -67,11 +68,31 @@ func stripLinePadding(s string) string {
 }
 
 var (
-	mdMu          sync.Mutex
-	mdAtWidth     int
-	mdRendererC   *glamour.TermRenderer
-	mdRendererErr bool // style init failed once: don't retry per message
+	mdMu           sync.Mutex
+	mdAtWidth      int
+	mdRendererC    *glamour.TermRenderer
+	mdRendererErr  bool // style init failed once: don't retry per message
+	mdLight        bool // light terminal background detected (set at startup)
+	mdStyleChecked bool
 )
+
+// SetLightTheme records the terminal's background and drops the cached
+// renderer so the next render builds with the matching style. Called from
+// Run once the background is known (OSC query result or heuristic).
+func SetLightTheme(light bool) {
+	mdMu.Lock()
+	mdLight, mdStyleChecked = light, true
+	mdRendererC, mdAtWidth = nil, 0
+	mdMu.Unlock()
+}
+
+// mdStyle picks the glamour style for the detected background.
+func mdStyle() glamouransi.StyleConfig {
+	if mdLight {
+		return styles.LightStyleConfig
+	}
+	return styles.DarkStyleConfig
+}
 
 // mdRenderer returns a cached renderer per width (glamour builds a
 // style-traversed renderer per Render call otherwise).
@@ -84,7 +105,7 @@ func mdRenderer(width int) *glamour.TermRenderer {
 	if mdRendererC != nil && mdAtWidth == width {
 		return mdRendererC
 	}
-	st := styles.DarkStyleConfig
+	st := mdStyle()
 	margin := uint(2)
 	st.Document.Margin = &margin
 	r, err := glamour.NewTermRenderer(

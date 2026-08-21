@@ -26,17 +26,20 @@ import (
 	"github.com/context-labs/loopy/internal/tools/bashrun"
 
 	"github.com/charmbracelet/x/ansi"
+	"github.com/muesli/termenv"
 )
 
+// UI styles use AdaptiveColor so they stay legible on both dark and light
+// terminal backgrounds (detected at startup by detectColorScheme).
 var (
-	youStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("12")).Bold(true)
-	botStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("13")).Bold(true)
-	toolStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
-	dimStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
-	errStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
+	youStyle  = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "21", Dark: "12"}).Bold(true) // blue
+	botStyle  = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "90", Dark: "13"}).Bold(true) // purple/magenta
+	toolStyle = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "136", Dark: "11"})           // amber
+	dimStyle  = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "240", Dark: "245"})          // mid gray
+	errStyle  = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "124", Dark: "9"})            // red
 	// thinkingStyle renders reasoning tokens: dim and italic so they're
 	// visually distinct from the answer.
-	thinkingStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Italic(true)
+	thinkingStyle = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "240", Dark: "245"}).Italic(true)
 )
 
 // messages sent from the agent goroutine
@@ -203,6 +206,7 @@ func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string) (s
 	}
 	// (mouse off leaves capture disabled so the terminal's own selection works;
 	// a later /mouse command toggles it back on)
+	detectColorScheme() // pick the glamour style that matches the terminal bg
 	p := tea.NewProgram(m, opts...)
 	m.prog = p
 	// install the interactive bash runner so the agent's bash tool can hand
@@ -565,6 +569,60 @@ func cwd() string {
 		return wd
 	}
 	return "?"
+}
+
+// detectColorScheme figures out whether the terminal background is light and
+// calls SetLightTheme so markdown renders with a matching (high-contrast)
+// glamour style. Priority:
+//  1. LOOPY_THEME=light|dark (explicit override)
+//  2. COLORFGBG (set by many terminals; last field is the bg color index)
+//  3. an OSC 11 background query on /dev/tty with a short timeout — skipped
+//     entirely over ssh/mosh or inside tmux, where the query can hang
+//  4. default: dark (the safe assumption for coding terminals)
+func detectColorScheme() {
+	setScheme := func(light bool) {
+		SetLightTheme(light)                  // glamour markdown style
+		lipgloss.SetHasDarkBackground(!light) // AdaptiveColor picks
+	}
+	switch strings.ToLower(os.Getenv("LOOPY_THEME")) {
+	case "light":
+		setScheme(true)
+		return
+	case "dark":
+		setScheme(false)
+		return
+	}
+	if v := os.Getenv("COLORFGBG"); v != "" {
+		if i := strings.LastIndex(v, ";"); i >= 0 {
+			var bg int
+			if _, err := fmt.Sscanf(v[i+1:], "%d", &bg); err == nil {
+				// standard palette: 0-6 dark, 7+ light (15 = white)
+				setScheme(bg == 7 || bg >= 8)
+				return
+			}
+		}
+	}
+	if os.Getenv("SSH_TTY") != "" || os.Getenv("SSH_CONNECTION") != "" ||
+		os.Getenv("MOSH_IP") != "" || os.Getenv("TMUX") != "" {
+		return // risky to query: keep the dark default
+	}
+	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
+	if err != nil {
+		return
+	}
+	defer tty.Close()
+	type result struct{ light bool }
+	done := make(chan result, 1)
+	go func() {
+		o := termenv.NewOutput(tty)
+		done <- result{light: !o.HasDarkBackground()}
+	}()
+	select {
+	case r := <-done:
+		setScheme(r.light)
+	case <-time.After(300 * time.Millisecond):
+		// no answer: terminal didn't respond; keep the dark default
+	}
 }
 
 // inputContentHeight returns the number of lines the input needs to show its
