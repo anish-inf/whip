@@ -291,7 +291,7 @@ func (m *model) seedTranscript(msgs []llm.Message) {
 			m.append(wrap(youStyle.Render("❯ ")+msg.Content, m.width))
 		case "assistant":
 			if strings.TrimSpace(msg.Content) != "" {
-				m.append(wrap(botStyle.Render("● ")+strings.TrimRight(msg.Content, "\n"), m.width))
+				m.appendAssistant(strings.TrimRight(msg.Content, "\n"))
 			}
 			for _, tc := range msg.ToolCalls {
 				args := tc.Function.Arguments
@@ -1207,14 +1207,33 @@ func (m *model) prepareTurn(text string) string {
 	return expandMentions(expandSkills(text, sk))
 }
 
-// appendAssistant writes assistant text into the transcript, prefixing the
-// first line of each segment.
+// appendAssistant writes assistant text into the transcript, rendering it as
+// markdown (glamour) and prefixing the first line of each segment with "● ".
+// A rendered segment can reflow to a different height than the raw text, so
+// the whole segment lands as one block.
 func (m *model) appendAssistant(s string) {
+	rendered := renderMarkdown(s, m.width-2) // -2: body indents under the marker
 	if !m.inMsg {
-		s = botStyle.Render("● ") + s
-		m.inMsg = true
+		body := indentLines(rendered, 2)
+		m.append(botStyle.Render("● ") + strings.TrimPrefix(body, "  "))
+	} else {
+		m.append(indentLines(rendered, 2))
 	}
-	m.append(wrap(s, m.width))
+	m.inMsg = true
+}
+
+// indentLines aligns rendered markdown under the transcript's marker column:
+// glamour indents from its document margin; we normalize every content line
+// to exactly n spaces so blocks line up with (or under) "● ".
+func indentLines(s string, n int) string {
+	pad := strings.Repeat(" ", n)
+	lines := strings.Split(s, "\n")
+	for i, l := range lines {
+		if strings.TrimSpace(l) != "" {
+			lines[i] = pad + strings.TrimLeft(l, " ")
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 // appendThink writes a reasoning line into the transcript, prefixing the
@@ -1492,7 +1511,7 @@ func (m *model) currentView() string {
 	if !m.inMsg {
 		s = botStyle.Render("● ") + s
 	}
-	return wrap(s, m.width)
+	return wrap(s, m.width) // streamed mid-flight: plain text; markdown renders on flush
 }
 
 func (m *model) View() string {
