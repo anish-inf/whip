@@ -7,40 +7,44 @@ import (
 	"time"
 )
 
-// The mouse output filter must downgrade cell-motion reporting (?1002) to
-// click+wheel-only (?1000) so the wheel reaches loopy but drag/motion bytes
-// never do — that's what keeps native drag-to-copy working while wheel scroll
-// works. SGR (?1006) and other output must pass through untouched.
-func TestClickWheelMouseWriter(t *testing.T) {
+// enableClickWheelMouse must emit click+wheel reporting (?1000) with SGR coords
+// (?1006) and crucially NOT motion reporting (?1002/?1003) — motion makes the
+// terminal/tmux forward drags to the app, killing native drag-to-copy. And it
+// must write to the real TTY (not a pipe) so bubbletea's terminal-size detection
+// keeps working (piping output collapses width/height to 0 — the regression).
+func TestClickWheelMouseEscapes(t *testing.T) {
 	r, w, err := os.Pipe()
 	if err != nil {
 		t.Fatal(err)
 	}
-	out := clickWheelMouseWriter(w)
-
-	in := "before\x1b[?1002h mid \x1b[?1006h after \x1b[?1002l end"
-	if _, err := out.Write([]byte(in)); err != nil {
-		t.Fatal(err)
-	}
-	out.Close()
-
-	buf := make([]byte, 4096)
+	enableClickWheelMouse(w)
+	w.Close()
+	buf := make([]byte, 256)
 	_ = r.SetReadDeadline(time.Now().Add(2 * time.Second))
 	n, _ := r.Read(buf)
 	got := string(buf[:n])
 
-	if strings.Contains(got, "1002") {
-		t.Fatalf("cell-motion mode leaked through: %q", got)
-	}
 	if !strings.Contains(got, "\x1b[?1000h") {
-		t.Errorf("click/wheel mode ?1000h missing: %q", got)
+		t.Errorf("must enable click/wheel ?1000h, got %q", got)
 	}
 	if !strings.Contains(got, "\x1b[?1006h") {
-		t.Errorf("SGR mode ?1006h must pass through: %q", got)
+		t.Errorf("must enable SGR coords ?1006h, got %q", got)
 	}
-	for _, want := range []string{"before", "mid", "after", "end"} {
-		if !strings.Contains(got, want) {
-			t.Errorf("content %q lost: %q", want, got)
-		}
+	if strings.Contains(got, "1002") || strings.Contains(got, "1003") {
+		t.Errorf("must NOT enable motion reporting (?1002/?1003), got %q", got)
+	}
+}
+
+// disableClickWheelMouse must release exactly the modes enableClickWheelMouse set.
+func TestDisableClickWheelMouse(t *testing.T) {
+	r, w, _ := os.Pipe()
+	disableClickWheelMouse(w)
+	w.Close()
+	buf := make([]byte, 256)
+	_ = r.SetReadDeadline(time.Now().Add(2 * time.Second))
+	n, _ := r.Read(buf)
+	got := string(buf[:n])
+	if !strings.Contains(got, "\x1b[?1000l") || !strings.Contains(got, "\x1b[?1006l") {
+		t.Errorf("must release ?1000 and ?1006, got %q", got)
 	}
 }

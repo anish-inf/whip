@@ -2,7 +2,6 @@
 package tui
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -232,9 +231,15 @@ func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string) (s
 	// the viewport (capture off → tmux eats it into copy-mode), ⚡ clicks work,
 	// and a plain drag selects/copies natively (no motion reporting means the
 	// terminal/tmux keeps drag-selection; we never see the drag bytes).
+	//
+	// We do NOT use tea.WithMouseCellMotion + an output filter: piping the
+	// program output through a non-TTY makes bubbletea skip terminal-size
+	// detection (ttyOutput becomes nil → no WindowSizeMsg → width/height stay
+	// 0 and the whole layout collapses). Instead we keep the real TTY as the
+	// output and enable click/wheel reporting directly on it.
 	opts := []tea.ProgramOption{}
 	if m.mouseOn {
-		opts = append(opts, tea.WithMouseCellMotion(), tea.WithOutput(clickWheelMouseWriter(os.Stdout)))
+		enableClickWheelMouse(os.Stdout)
 		applyTmuxMouseFix()
 	}
 	cfgThemeValue = cfg.Theme // config override feeds detection
@@ -247,45 +252,31 @@ func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string) (s
 	tools.InteractiveBash = m.irunner
 	go m.fetchCatalogs()
 	_, err = p.Run()
-	// The UI has exited (quit, /quit, or a signal) — make sure no agent-spawned
-	// child process (a server the model started, a watcher, a daemon) outlives
-	// loopy. KillAll SIGKILLs every tracked process group and waits for them.
+	// The UI has exited (quit, /quit, or a signal). We enabled click/wheel mouse
+	// reporting directly on the TTY (bubbletea doesn't manage it), so release it.
+	if m.mouseOn {
+		disableClickWheelMouse(os.Stdout)
+	}
+	// Make sure no agent-spawned child process (a server the model started, a
+	// watcher, a daemon) outlives loopy. KillAll SIGKILLs every tracked process
+	// group and waits for them.
 	bashrun.KillAll()
 	return m.sessionID, err
 }
 
-// clickWheelMouseWriter downgrades bubbletea's mouse reporting from cell-motion
-// (?1002) to click+wheel only (?1000). bubbletea's WithMouseCellMotion always
-// emits "?1002h" (which turns on motion reporting); with motion on, the
-// terminal/tmux forwards every drag to the app, which kills native drag-to-copy.
-// Rewriting ?1002h→?1000h (and dropping the redundant ?1002l that pairs with it)
-// keeps wheel+click delivery but stops motion/drag bytes, so a plain drag
-// selects text natively while the wheel still scrolls loopy's viewport.
-func clickWheelMouseWriter(w *os.File) *os.File {
-	r, pw, err := os.Pipe()
-	if err != nil {
-		return w // can't intercept; fall back to unfiltered output
-	}
-	go func() {
-		buf := make([]byte, 32*1024)
-		for {
-			n, rerr := r.Read(buf)
-			if n > 0 {
-				chunk := buf[:n]
-				// enable cell-motion → enable click/wheel only
-				chunk = bytes.ReplaceAll(chunk, []byte("\x1b[?1002h"), []byte("\x1b[?1000h"))
-				// drop the paired cell-motion disable (left as a no-op reset)
-				chunk = bytes.ReplaceAll(chunk, []byte("\x1b[?1002l"), []byte("\x1b[?1000l"))
-				if _, werr := w.Write(chunk); werr != nil {
-					return
-				}
-			}
-			if rerr != nil {
-				return
-			}
-		}
-	}()
-	return pw
+// enableClickWheelMouse turns on click+wheel mouse reporting (?1000) with SGR
+// coordinates (?1006), WITHOUT motion reporting (?1002/?1003). Writing directly
+// to the real TTY keeps bubbletea's output a terminal so terminal-size detection
+// still works (unlike piping output through an os.Pipe). With ?1000 the wheel
+// and clicks reach loopy, but drags are not reported, so the terminal/tmux keeps
+// native drag-selection for copy.
+func enableClickWheelMouse(w *os.File) {
+	fmt.Fprint(w, "\x1b[?1006h\x1b[?1000h")
+}
+
+// disableClickWheelMouse releases the mouse reporting enableClickWheelMouse set.
+func disableClickWheelMouse(w *os.File) {
+	fmt.Fprint(w, "\x1b[?1000l\x1b[?1006l")
 }
 
 // applyTmuxMouseFix makes plain drag-to-copy work inside tmux while loopy
@@ -2047,11 +2038,16 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 			m.append(errStyle.Render("config save failed: " + err.Error()))
 		}
 		m.append(dimStyle.Render("mouse capture: " + onOff(m.mouseOn) + " (on = wheel scroll + ⚡ clicks, the default, drag to select/copy; off = native drag-to-copy, but tmux captures the wheel)"))
+		// We manage click/wheel reporting directly (no motion ?1002), so toggle
+		// the escape ourselves rather than tea.EnableMouseCellMotion (which would
+		// turn motion back on and break native drag-to-copy).
 		if m.mouseOn {
+			enableClickWheelMouse(os.Stdout)
 			applyTmuxMouseFix()
-			return m, tea.EnableMouseCellMotion
+		} else {
+			disableClickWheelMouse(os.Stdout)
 		}
-		return m, tea.DisableMouse
+		return m, nil
 	case "/effort":
 		levels := m.effortsFor()
 		if len(fields) > 1 {
