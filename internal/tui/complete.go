@@ -34,6 +34,10 @@ func completions(val string, models, providers []cand) (head string, cands []can
 		cands = filterPrefix(models, token)
 	case len(fields) == 2 && fields[0] == "/model":
 		cands = filterPrefix(providers, token)
+	case strings.HasPrefix(token, "@"): // @file mentions complete like paths
+		for _, c := range pathMatches(token[1:]) {
+			cands = append(cands, cand{"@" + c.Text, c.Desc})
+		}
 	default:
 		cands = pathMatches(token)
 	}

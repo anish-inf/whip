@@ -5,10 +5,12 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/abe/loopy/internal/agent"
 	"github.com/abe/loopy/internal/config"
 	"github.com/abe/loopy/internal/llm"
+	"github.com/abe/loopy/internal/skills"
 	"github.com/abe/loopy/internal/tui"
 )
 
@@ -16,23 +18,31 @@ var version = "dev" // set via -ldflags "-X main.version=..."
 
 func systemPrompt() string {
 	wd, _ := os.Getwd()
-	return fmt.Sprintf(`You are an expert coding assistant operating inside loopy, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files.
+	prompt := fmt.Sprintf(`You are an expert coding assistant operating inside loopy, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files.
 
 Available tools:
 - read: Read file contents
 - bash: Execute bash commands (ls, grep, find, etc.)
 - edit: Make precise file edits with exact text replacement
 - write: Create or overwrite files
+- task: Delegate a self-contained task to a subagent with fresh context
 
 Guidelines:
 - Use bash for file operations like ls, rg, find
 - Use read to examine files instead of cat or sed
 - Use edit for precise changes (old_string must match exactly and be unique, or set replace_all)
 - Use write only for new files or complete rewrites
+- When the user tags a file with @, a note lists the tagged paths — inspect them with your tools as needed
 - Be concise in your responses
 - Show file paths clearly when working with files
 
 Current working directory: %s`, wd)
+
+	dirs := []string{filepath.Join(wd, ".agents", "skills")}
+	if home, err := os.UserHomeDir(); err == nil {
+		dirs = append(dirs, filepath.Join(home, ".loopy", "skills"))
+	}
+	return prompt + skills.PromptBlock(skills.Scan(dirs...))
 }
 
 func main() {

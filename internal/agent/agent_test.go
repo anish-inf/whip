@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/abe/loopy/internal/llm"
@@ -156,5 +157,54 @@ func TestNoSteerEndsTurn(t *testing.T) {
 	final, err := ag.Turn(context.Background(), "go", Events{})
 	if err != nil || final != "done" {
 		t.Fatalf("%q %v", final, err)
+	}
+}
+
+func TestTaskToolSpawnsSubagent(t *testing.T) {
+	call := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req llm.Request
+		json.NewDecoder(r.Body).Decode(&req)
+		call++
+		w.Header().Set("Content-Type", "text/event-stream")
+		switch call {
+		case 1: // outer agent delegates
+			fmt.Fprint(w, `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"t1","type":"function","function":{"name":"task","arguments":"{\"description\":\"probe\",\"prompt\":\"find the answer\"}"}}]}}]}`+"\n\n")
+		case 2: // inner subagent: fresh context, no task tool, gets the prompt
+			if len(req.Messages) != 2 || req.Messages[1].Content != "find the answer" {
+				t.Errorf("subagent context wrong: %+v", req.Messages)
+			}
+			for _, tl := range req.Tools {
+				if tl.Function.Name == "task" {
+					t.Error("subagent must not have the task tool")
+				}
+			}
+			fmt.Fprint(w, `data: {"choices":[{"delta":{"content":"the answer is 42"}}]}`+"\n\n")
+		case 3: // outer agent sees the report as the tool result
+			last := req.Messages[len(req.Messages)-1]
+			if last.Role != "tool" || last.Content != "the answer is 42" {
+				t.Errorf("task result not fed back: %+v", last)
+			}
+			fmt.Fprint(w, `data: {"choices":[{"delta":{"content":"done"}}]}`+"\n\n")
+		}
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer srv.Close()
+
+	ag := New(llm.New(srv.URL, "k"), "m", 100, "sys")
+	final, err := ag.Turn(context.Background(), "go", Events{})
+	if err != nil || final != "done" {
+		t.Fatalf("%q %v", final, err)
+	}
+	if call != 3 {
+		t.Fatalf("expected 3 API calls, got %d", call)
+	}
+}
+
+func TestTaskToolBadArgs(t *testing.T) {
+	ag := New(llm.New("http://unused", "k"), "m", 100, "sys")
+	out := tools.Execute(context.Background(), ag.Tools, "task", json.RawMessage(`{bad`))
+	if !strings.HasPrefix(out, "Error") {
+		t.Fatalf("expected error, got %q", out)
 	}
 }

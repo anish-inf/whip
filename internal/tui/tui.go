@@ -438,7 +438,7 @@ func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.menu = nil
 			case len(m.queue) > 0: // grok-style: empty enter force-steers the queue
 				for _, q := range m.queue {
-					m.agent.Steer(q)
+					m.agent.Steer(expandMentions(q))
 				}
 				m.queue = nil
 			}
@@ -661,7 +661,7 @@ func (m *model) submit(text string) (tea.Model, tea.Cmd) {
 	}
 
 	go func() {
-		_, err := m.agent.Turn(ctx, text, agent.Events{
+		_, err := m.agent.Turn(ctx, expandMentions(text), agent.Events{
 			OnText: onText,
 			OnToolStart: func(n, a string) {
 				flush()

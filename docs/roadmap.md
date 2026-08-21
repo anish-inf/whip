@@ -10,6 +10,7 @@ Full exploration reports: [learnings/other-harnesses/opencode/](learnings/other-
 - [Transcript & rendering](#transcript--rendering)
 - [Sessions](#sessions)
 - [Agent loop](#agent-loop)
+- [Skills & subagents](#skills--subagents)
 - [Models & providers](#models--providers)
 - [Safety & permissions](#safety--permissions)
 - [Theming & config](#theming--config)
@@ -22,7 +23,8 @@ Full exploration reports: [learnings/other-harnesses/opencode/](learnings/other-
 - [ ] Queue management: edit/remove queued messages before they send (opencode `<leader>q`, `runtime.queue.ts`)
 - [ ] Multiline input (grow textarea; opencode binds newline to `shift+enter,ctrl+enter,alt+enter,ctrl+j` because terminals disagree — `keybind.ts:161`)
 - [ ] `!` prefix shell mode: only triggers at cursor offset 0, backspace-at-0 exits, output lands in transcript as a tool result the model can see (opencode `prompt/index.tsx:815`)
-- [ ] `@` file mentions: tag any file, any path (relative or absolute), with fuzzy search + frecency ranking and `@file#10-40` line ranges. Default: a **pointer note** in the user message ("The user tagged @path") — never cat the file in; the model probes it with its own read/bash/grep as it sees fit (Abe's design). Researched alternative if pointer round-trips prove wasteful: opencode's synthetic read-tool call/result expansion — see [learnings/other-harnesses/opencode/at-mentions.md](learnings/other-harnesses/opencode/at-mentions.md)
+- [x] `@` file mentions, pointer-style: tag any file, any path (relative/absolute/`~`), `@file#10-40` line ranges, tab-completion — a pointer note is appended to the user message, contents never inlined; the model probes with its own tools (Abe's design; alternative documented in [learnings/other-harnesses/opencode/at-mentions.md](learnings/other-harnesses/opencode/at-mentions.md))
+- [ ] `@` mention fuzzy picker + frecency ranking (opencode `prompt/frecency.tsx`, `prompt/autocomplete.tsx`)
 - [ ] External editor for long prompts: `$VISUAL || $EDITOR`, suspend renderer → edit temp .md → resume (opencode `editor.ts:26-53`; pi setting `externalEditor`)
 - [ ] Paste handling: collapse big pastes (≥3 lines) into a `[Pasted ~N lines]` placeholder expanded on submit (opencode `prompt/index.tsx:1149`)
 - [ ] Persist prompt input history to disk, restore across sessions; up/down only navigate history when cursor is at offset 0 (opencode `prompt/history.tsx`)
@@ -56,6 +58,15 @@ Full exploration reports: [learnings/other-harnesses/opencode/](learnings/other-
 - [ ] Streamed partial tool output (bash `onUpdate` throttled at 100ms in pi)
 - [ ] Spill truncated bash output to a temp file and mention the path (pi bash tool)
 - [ ] Inject `LOOPY_SESSION_ID` / `LOOPY_MODEL` env into bash children (pi injects `PI_*`)
+
+## Skills & subagents
+
+- [x] Skills: scan `.agents/skills/*/SKILL.md` (project) and `~/.loopy/skills/` (user), inject name+description into the system prompt as an `<available_skills>` block; the model reads a SKILL.md with its own read tool when relevant (pi's approach — no skill tool needed, `packages/coding-agent/src/core/skills.ts`)
+- [x] Subagents: a `task` tool that runs a self-contained prompt in a fresh agent with the same tools (minus `task` — no recursion) and returns its final report
+- [ ] `/skill` command + skill names in the completion dropdown
+- [ ] Custom agent definitions (`.agents/*.md` with model/tools/prompt frontmatter; opencode agents config `packages/core/src/config/agent.ts`)
+- [ ] Parallel subagents + live progress streaming into the transcript (pi streams tool `onUpdate`)
+- [ ] `@agent` mentions to target a named subagent (opencode autocomplete)
 
 ## Models & providers
 

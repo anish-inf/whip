@@ -48,13 +48,14 @@ func (a *Agent) drainPending() []string {
 }
 
 func New(client *llm.Client, model string, maxTokens int, systemPrompt string) *Agent {
-	return &Agent{
+	a := &Agent{
 		Client:    client,
 		Model:     model,
 		MaxTokens: maxTokens,
-		Tools:     tools.All(),
 		Messages:  []llm.Message{{Role: "system", Content: systemPrompt}},
 	}
+	a.Tools = append(tools.All(), taskTool(a))
+	return a
 }
 
 // Turn sends user input and loops until the model stops calling tools.
