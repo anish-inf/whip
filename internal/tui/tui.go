@@ -1442,16 +1442,25 @@ func (m *model) appendAssistant(s string) {
 	m.inMsg = true
 }
 
-// indentLines aligns rendered markdown under the transcript's marker column:
-// glamour indents from its document margin; we normalize every content line
-// to exactly n spaces so blocks line up with (or under) "● ".
+// indentLines shifts rendered markdown right by n columns so the body sits
+// under the transcript's "● " marker. Glamour indents every block from its
+// 2-cell document margin; we subtract that margin and add n, preserving
+// *relative* indentation (hanging list text, nested bullets, code blocks).
+// Whitespace-only lines become truly empty so no stray dim cells render.
 func indentLines(s string, n int) string {
-	pad := strings.Repeat(" ", n)
+	const docMargin = 2 // glamour styles.DarkStyleConfig Document.Margin
 	lines := strings.Split(s, "\n")
 	for i, l := range lines {
-		if strings.TrimSpace(l) != "" {
-			lines[i] = pad + strings.TrimLeft(l, " ")
+		if strings.TrimSpace(ansi.Strip(l)) == "" {
+			lines[i] = ""
+			continue
 		}
+		lead := len(l) - len(strings.TrimLeft(l, " "))
+		shift := n + lead - docMargin
+		if shift < 0 {
+			shift = 0
+		}
+		lines[i] = strings.Repeat(" ", shift) + strings.TrimLeft(l, " ")
 	}
 	return strings.Join(lines, "\n")
 }
@@ -1790,7 +1799,7 @@ func (m *model) View() string {
 	// and the /help command. The bottom hint covers the busy/interactive states.
 	tips := "`ctrl+p` commands"
 	b.WriteString(dimStyle.Render(tips) + "\n\n")
-	b.WriteString(m.vp.View() + "\n")
+	b.WriteString(sanitizeView(m.vp.View()) + "\n")
 	if m.curThink != "" {
 		b.WriteString("\n" + m.thinkView() + "\n")
 	}

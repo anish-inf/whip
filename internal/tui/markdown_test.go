@@ -65,10 +65,16 @@ func TestRenderMarkdownWrapsToWidth(t *testing.T) {
 }
 
 func TestIndentLines(t *testing.T) {
-	in := "  first\n\n    second"
-	want := "  first\n\n  second"
+	// relative shift: glamour's 2-cell document margin becomes n; deeper
+	// lines keep their relative indent (nested bullets, code blocks)
+	in := "  first\n\n    second" // margin + 2 extra
+	want := "  first\n\n    second"
 	if got := indentLines(in, 2); got != want {
 		t.Errorf("indentLines:\ngot  %q\nwant %q", got, want)
+	}
+	// whitespace-only lines become truly empty (no stray styled cells)
+	if got := indentLines("  \n  x", 2); got != "\n  x" {
+		t.Errorf("blank line should be empty: %q", got)
 	}
 }
 

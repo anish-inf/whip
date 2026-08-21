@@ -44,18 +44,24 @@ func wrapWideLines(s string, width int) string {
 }
 
 // padStripRE matches glamour's right-padding at end of line: runs of (SGR
-// sequence, spaces), optionally closed by a final SGR reset. The reset is
-// kept (captured group) so a line's styling never bleeds into the next block.
-var padStripRE = regexp.MustCompile(`(?:\x1b\[[0-9;]*m[ \t]*)+(\x1b\[0*m)?$`)
+// sequence [empty params allowed — bare \x1b[m], spaces), optionally closed
+// by a final SGR reset. The reset is kept (captured group) so a line's
+// styling never bleeds into the next block.
+var padStripRE = regexp.MustCompile(`(?:\x1b\[[0-9;]*m[ \t]*)+(\x1b\[[0-9;]*m)?$`)
 
 // stripLinePadding removes glamour's right-padding: it pads every line to
 // the full render width with individually styled spaces, which bloats the
-// transcript 10-20x and breaks terminal select/copy. Leading indentation and
-// styled content are untouched.
+// transcript 10-20x and breaks terminal select/copy. Lines whose visible
+// content is empty (blank separators) become truly empty — no styled blank
+// rows. Leading indentation and styled content are untouched.
 func stripLinePadding(s string) string {
 	lines := strings.Split(s, "\n")
 	for i, l := range lines {
-		lines[i] = padStripRE.ReplaceAllString(l, "$1")
+		l = padStripRE.ReplaceAllString(l, "$1")
+		if ansi.StringWidth(l) == 0 || strings.TrimSpace(ansi.Strip(l)) == "" {
+			l = "" // blank separator line: drop any leftover styling entirely
+		}
+		lines[i] = l
 	}
 	return strings.Join(lines, "\n")
 }
@@ -92,6 +98,24 @@ func mdRenderer(width int) *glamour.TermRenderer {
 	}
 	mdRendererC, mdAtWidth = r, width
 	return r
+}
+
+// bareSGR is the empty SGR escape (\x1b[m) lipgloss' Width().Render appends
+// before its right-padding; some terminals render the empty parameter list
+// inconsistently, and the styled pad shows up as visual smear. Normalize it
+// to a proper reset.
+var bareSGR = strings.NewReplacer("\x1b[m", "\x1b[0m")
+
+// sanitizeView cleans one rendered screen: bare SGR escapes become real
+// resets and trailing style+space tails (lipgloss/viewport padding) are
+// trimmed from each line.
+func sanitizeView(s string) string {
+	s = bareSGR.Replace(s)
+	lines := strings.Split(s, "\n")
+	for i, l := range lines {
+		lines[i] = padStripRE.ReplaceAllString(l, "$1")
+	}
+	return strings.Join(lines, "\n")
 }
 
 // renderAssistant renders one assistant text segment for the transcript:
