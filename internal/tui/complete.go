@@ -39,6 +39,7 @@ func completions(val string, models, providers []cand) (head string, cands []can
 		for _, c := range pathMatches(token[1:]) {
 			cands = append(cands, cand{"@" + c.Text, c.Desc})
 		}
+	case strings.HasPrefix(val, "/"): // other slash-command args: nothing to complete
 	default:
 		cands = pathMatches(token)
 	}

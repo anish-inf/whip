@@ -49,4 +49,14 @@ func TestCompletions(t *testing.T) {
 	if len(cs) != 0 {
 		t.Fatalf("expected no candidates, got %v", texts(cs))
 	}
+	// slash-command args must never fall through to path completion
+	for _, in := range []string{"/goal make yourself better", "/goal make yourself better ", "/resume ab"} {
+		if _, cs = completions(in, models, provs); len(cs) != 0 {
+			t.Fatalf("%q: expected no candidates, got %v", in, texts(cs))
+		}
+	}
+	// but @ mentions inside slash args still complete
+	if _, cs = completions("/goal fix @"+dir+"/al", models, provs); len(cs) != 2 {
+		t.Fatalf("@ inside slash args: %v", texts(cs))
+	}
 }
