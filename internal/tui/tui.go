@@ -67,9 +67,13 @@ type imageMsg struct {                     // ctrl+v clipboard image result
 
 // menu is the open completion dropdown.
 type menu struct {
-	head  string // input before the token being completed
-	cands []cand
-	idx   int
+	head   string // input before the token being completed
+	cands  []cand
+	idx    int
+	base   string // input when tab cycling started; esc reverts to it
+	cyc    bool   // tab/shift+tab cycling with live preview
+	cycled bool   // a cycle step already happened (first tab previews, not advances)
+	frozen []cand // full candidate set for the cycle's prefix (nil = live filter)
 }
 
 type model struct {
@@ -1096,6 +1100,9 @@ func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if m.menu != nil {
+			if m.menu.cyc { // tab cycling previewed candidates: revert the input
+				m.input.SetValue(m.menu.base)
+			}
 			m.menu = nil
 			return m, nil
 		}
@@ -1130,13 +1137,20 @@ func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.append(dimStyle.Render("◌ thinking tokens: " + onOff(m.showThinking)))
 		return m, nil
 
-	case tea.KeyTab, tea.KeyDown, tea.KeyCtrlN:
+	case tea.KeyTab:
+		// completion menu: tab/shift+tab cycle the selection WITH preview —
+		// each step inserts the highlighted candidate (a single match just
+		// completes), enter commits, esc dismisses and reverts the input.
 		if m.menu != nil {
-			m.menu.idx = (m.menu.idx + 1) % len(m.menu.cands)
+			m.menuCycle(1)
 			return m, nil
 		}
-		if msg.Type == tea.KeyTab {
-			m.openMenu()
+		m.openMenu()
+		return m, nil
+
+	case tea.KeyDown, tea.KeyCtrlN:
+		if m.menu != nil {
+			m.menu.idx = (m.menu.idx + 1) % len(m.menu.cands)
 			return m, nil
 		}
 		// while busy with a queue and an empty input, ↓ moves the queue
@@ -1160,7 +1174,14 @@ func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.histNext()
 		return m, nil
 
-	case tea.KeyShiftTab, tea.KeyUp, tea.KeyCtrlP:
+	case tea.KeyShiftTab:
+		if m.menu != nil {
+			m.menuCycle(-1)
+			return m, nil
+		}
+		return m, nil
+
+	case tea.KeyUp, tea.KeyCtrlP:
 		if m.menu != nil {
 			m.menu.idx = (m.menu.idx + len(m.menu.cands) - 1) % len(m.menu.cands)
 			return m, nil
@@ -1186,10 +1207,7 @@ func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.openPalette()
 			return m, nil
 		}
-		if msg.Type == tea.KeyUp {
-			m.histPrev()
-			return m, nil
-		}
+		m.histPrev()
 		return m, nil
 
 	case tea.KeyDelete, tea.KeyBackspace:
@@ -1212,9 +1230,22 @@ func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyEnter:
 		if m.menu != nil {
+			c := m.menu.cands[m.menu.idx]
+			// a bare command previewed by tab cycling runs immediately, same
+			// as picking it with arrows + enter (one-keystroke palette)
+			if m.menu.cyc && m.menu.head == "" && execNow[c.Text] {
+				m.menu = nil
+				m.input.Reset()
+				return m.command(c.Text)
+			}
+			// tab cycling already inserted the candidate: commit it; otherwise
+			// insert it now (directories stay open for deeper completion)
+			if m.menu.cyc {
+				m.acceptPreview()
+				return m, nil
+			}
 			// bare commands that act without further args run immediately
-			// (this is what makes the ctrl+p palette one-keystroke)
-			if c := m.menu.cands[m.menu.idx]; m.menu.head == "" && execNow[c.Text] {
+			if m.menu.head == "" && execNow[c.Text] {
 				m.menu = nil
 				m.input.Reset()
 				return m.command(c.Text)
@@ -1485,29 +1516,34 @@ func (m *model) openPicker() {
 	m.picker.loadPreview(m.store)
 }
 
-// openMenu computes candidates for the current input (tab pressed).
+// openMenu starts tab completion: every candidate for the token's prefix is
+// frozen into a cycle set and the first is previewed, so tab always inserts
+// text — a single match completes outright, several cycle with preview.
 func (m *model) openMenu() {
 	head, cands := completions(m.input.Value(), m.modelCands(), m.providerCands(), m.skillCands(), effortCandsFor(m.effortsFor()))
-	switch len(cands) {
-	case 0:
-	case 1:
-		m.menu = &menu{head: head, cands: cands}
-		m.accept()
-	default:
-		m.menu = &menu{head: head, cands: cands}
+	if len(cands) == 0 {
+		return
 	}
+	m.menu = &menu{head: head, cands: cands}
+	m.menuCycle(0)
 }
 
 // refreshMenu keeps a live dropdown open while typing a slash command, an
-// @file mention, or a $skill, re-filtering on every keystroke; otherwise closes it.
+// @file mention, or a $skill, re-filtering on every keystroke; otherwise
+// closes it. A frozen menu (tab cycling) keeps its candidate snapshot — the
+// cycle range only changes when the completed text itself is edited.
 func (m *model) refreshMenu() {
+	if m.menu != nil && m.menu.cyc && m.menu.frozen != nil && m.menu.idx < len(m.menu.frozen) &&
+		m.input.Value() == m.menu.head+m.menu.frozen[m.menu.idx].Text {
+		return // previewing a frozen candidate; nothing to re-filter
+	}
 	val := m.input.Value()
 	token := val[strings.LastIndexByte(val, ' ')+1:]
 	if strings.HasPrefix(val, "/") || strings.HasPrefix(token, "@") || strings.HasPrefix(token, "$") {
 		head, cands := completions(val, m.modelCands(), m.providerCands(), m.skillCands(), effortCandsFor(m.effortsFor()))
 		if len(cands) > 0 {
 			idx := 0
-			if m.menu != nil && m.menu.idx < len(cands) {
+			if m.menu != nil && m.menu.idx < len(cands) && m.menu.frozen == nil {
 				idx = m.menu.idx
 			}
 			m.menu = &menu{head: head, cands: cands, idx: idx}
@@ -1515,6 +1551,43 @@ func (m *model) refreshMenu() {
 		}
 	}
 	m.menu = nil
+}
+
+// previewCand inserts the highlighted candidate as a tab-cycle preview (no
+// trailing space). The frozen menu survives the input edit via refreshMenu.
+func (m *model) previewCand() {
+	m.input.SetValue(m.menu.head + m.menu.cands[m.menu.idx].Text)
+	m.refreshMenu()
+}
+
+// acceptPreview commits a tab-cycle preview on enter: appends the trailing
+// space (or stays open inside a directory) exactly like accept.
+func (m *model) acceptPreview() {
+	m.menu.cyc, m.menu.frozen = false, nil // committing: live filtering again
+	v := m.input.Value()
+	if !strings.HasSuffix(v, "/") {
+		m.input.SetValue(v + " ")
+	}
+	m.refreshMenu()
+}
+
+// menuCycle moves the tab-cycle selection by delta, previewing the new
+// candidate from the pre-cycle input. The cycle set is frozen on the first
+// tab so cycling covers every candidate for the token's common prefix
+// ("/m" tabs through /model and /mouse even though /model doesn't filter
+// to /mouse).
+func (m *model) menuCycle(delta int) {
+	mu := m.menu
+	if mu.frozen == nil {
+		mu.cyc, mu.frozen = true, mu.cands
+		mu.base = mu.head + mu.frozen[mu.idx].Text // esc reverts to here
+	}
+	if mu.cycled {
+		mu.idx = (mu.idx + delta + len(mu.cands)) % len(mu.cands)
+	} else {
+		mu.cycled = true // first tab previews the current best match
+	}
+	m.previewCand()
 }
 
 // accept applies the selected candidate. Returns false if the input already

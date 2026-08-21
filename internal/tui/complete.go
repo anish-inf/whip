@@ -30,7 +30,7 @@ var commands = []cand{
 // execNow lists commands the menu runs immediately on enter (they act
 // sensibly with no arguments); others insert themselves for arguments.
 var execNow = map[string]bool{
-	"/clear": true, "/compact": true, "/effort": true, "/help": true,
+	"/clear": true, "/compact": true, "/effort": true, "/goal": true, "/help": true,
 	"/model": true, "/mouse": true, "/quit": true, "/resume": true, "/tasks": true,
 }
 
