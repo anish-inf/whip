@@ -112,6 +112,36 @@ func TestUpDownSoftWrapRowsCountAsLines(t *testing.T) {
 	}
 }
 
+// Cross-session recall: a fresh session seeded with global user history (from
+// every folder) must let ↑ walk back through all of it, newest first, exactly
+// as session-local recall does.
+func TestUpCyclesGlobalCrossSessionHistory(t *testing.T) {
+	// hist holds the global seed oldest→newest (the TUI reverses the store's
+	// newest-first UserHistory into this order at startup)
+	m := navModel("oldest across sessions", "from another folder", "most recent")
+	m.input.SetValue("")
+	m.input.CursorEnd()
+
+	var got []string
+	for i := 0; i < 3; i++ {
+		tm, _ := m.key(tea.KeyMsg{Type: tea.KeyUp})
+		m = tm.(*model)
+		got = append(got, m.input.Value())
+	}
+	want := []string{"most recent", "from another folder", "oldest across sessions"}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("↑ press %d: got %q, want %q (full walk: %v)", i+1, got[i], want[i], got)
+		}
+	}
+	// a 4th ↑ at the oldest entry is a no-op (stays put)
+	tm, _ := m.key(tea.KeyMsg{Type: tea.KeyUp})
+	m = tm.(*model)
+	if m.input.Value() != "oldest across sessions" {
+		t.Fatalf("↑ past the oldest entry should stay, got %q", m.input.Value())
+	}
+}
+
 // wrapString builds a single string of spaces-separated words long enough to
 // wrap to at least two rows at the given content width.
 func wrapString(width int) string {

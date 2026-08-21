@@ -178,6 +178,43 @@ func (s *Store) Recent(n int) ([]Meta, error) {
 	return scanMetas(rows)
 }
 
+// UserHistory returns user-message contents across ALL sessions (every folder),
+// newest first and de-duplicated, for up-arrow input recall. Order is by the
+// session's last activity then the message's position within it, so the most
+// recently typed input comes first.
+func (s *Store) UserHistory(limit int) ([]string, error) {
+	rows, err := s.db.Query(`SELECT m.content FROM messages m
+		JOIN sessions s ON s.id = m.session_id
+		WHERE m.role='user'
+		ORDER BY s.updated_at DESC, m.seq DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	seen := map[string]bool{}
+	var out []string
+	for rows.Next() {
+		var data string
+		if err := rows.Scan(&data); err != nil {
+			return nil, err
+		}
+		var msg llm.Message
+		if err := json.Unmarshal([]byte(data), &msg); err != nil {
+			continue // skip malformed rows rather than fail the whole recall
+		}
+		content := strings.TrimSpace(msg.Content)
+		if content == "" || seen[content] {
+			continue
+		}
+		seen[content] = true
+		out = append(out, content)
+		if limit > 0 && len(out) >= limit {
+			break
+		}
+	}
+	return out, rows.Err()
+}
+
 // LastExchange returns the text of the session's last user message and last
 // assistant response, for previews.
 func (s *Store) LastExchange(id string) (user, assistant string) {

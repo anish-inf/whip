@@ -64,6 +64,46 @@ func TestStoreRoundTrip(t *testing.T) {
 	}
 }
 
+func TestUserHistory(t *testing.T) {
+	st, err := Open(filepath.Join(t.TempDir(), "s.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	// two sessions in different folders; the newer one typed last
+	a, _ := st.Create("/proj/a", "m", "p")
+	st.Save(a, 0, []llm.Message{
+		{Role: "system", Content: "sys"},
+		{Role: "user", Content: "from folder A"},
+		{Role: "assistant", Content: "ans"},
+	}, "m", "p")
+	b, _ := st.Create("/proj/b", "m", "p")
+	st.Save(b, 0, []llm.Message{
+		{Role: "system", Content: "sys"},
+		{Role: "user", Content: "from folder B"},
+		{Role: "assistant", Content: "ans"},
+		{Role: "user", Content: "from folder A"}, // duplicate of A's message
+	}, "m", "p")
+
+	hist, err := st.UserHistory(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// newest session first, its newest message first; the cross-session
+	// duplicate collapses to one entry
+	want := []string{"from folder A", "from folder B"}
+	if strings.Join(hist, "|") != strings.Join(want, "|") {
+		t.Fatalf("UserHistory = %v, want %v", hist, want)
+	}
+
+	// limit respected
+	lim, _ := st.UserHistory(1)
+	if len(lim) != 1 {
+		t.Fatalf("limit: got %d", len(lim))
+	}
+}
+
 func TestStoreEdgeCases(t *testing.T) {
 	if _, err := Open("/nonexistent-dir/x.db"); err == nil {
 		t.Fatal("expected open error")

@@ -212,6 +212,16 @@ func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string) (s
 		if st, serr := session.Open(dir + "/sessions.db"); serr == nil {
 			m.store = st
 			defer st.Close()
+			// Seed input recall with user messages from ALL sessions (every
+			// folder), so ↑ cycles global history, not just this session's.
+			// UserHistory is newest-first; hist is oldest-first (up-arrow walks
+			// back from the end), so reverse it into place.
+			if hist, herr := st.UserHistory(500); herr == nil && len(hist) > 0 {
+				for i := len(hist) - 1; i >= 0; i-- {
+					m.hist = append(m.hist, hist[i])
+				}
+				m.histIdx = len(m.hist)
+			}
 		} else {
 			config.LogEvent("session.open", "FAILED: "+serr.Error())
 			m.append(errStyle.Render("sessions disabled: " + serr.Error()))
@@ -363,8 +373,15 @@ func (m *model) resume(id string) error {
 	}
 	m.sessionID = meta.ID
 	m.saved = len(m.agent.Messages)
+	// Add this session's user messages to recall, skipping any already present
+	// from the global cross-session seed (resume runs after that seed).
+	seen := make(map[string]bool, len(m.hist))
+	for _, h := range m.hist {
+		seen[h] = true
+	}
 	for _, msg := range msgs {
-		if msg.Role == "user" {
+		if msg.Role == "user" && !seen[msg.Content] {
+			seen[msg.Content] = true
 			m.hist = append(m.hist, msg.Content)
 		}
 	}
