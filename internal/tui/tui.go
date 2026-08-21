@@ -199,13 +199,15 @@ func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string) (s
 			return "", err
 		}
 	}
-	opts := []tea.ProgramOption{tea.WithAltScreen()}
+	// Inline rendering (no alt-screen): the transcript lives in the normal
+	// terminal scrollback, so drag-to-select/copy works natively everywhere —
+	// no shift-modifier, no /mouse toggle, no tmux passthrough quirk. This is
+	// what makes copying "just work" in opencode/codex. Mouse capture is off
+	// by default for the same reason; /mouse opts back in for ⚡ clicks.
+	opts := []tea.ProgramOption{}
 	if m.mouseOn {
-		// capture mouse for the clickable ⚡ control + wheel scroll
 		opts = append(opts, tea.WithMouseCellMotion())
 	}
-	// (mouse off leaves capture disabled so the terminal's own selection works;
-	// a later /mouse command toggles it back on)
 	cfgThemeValue = cfg.Theme // config override feeds detection
 	detectColorScheme()       // pick the glamour style that matches the terminal bg
 	p := tea.NewProgram(m, opts...)
