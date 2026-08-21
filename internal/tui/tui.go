@@ -112,21 +112,15 @@ type picker struct {
 	previews map[string][2]string // id -> last user, last assistant
 }
 
-// Run starts the interactive session. It returns the id of the session that
-// was active on exit ("" if nothing was said).
-func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string) (string, error) {
-	ag, mn, pn, err := buildAgent(cfg, modelName, provName, sysPrompt)
-	if err != nil {
-		return "", err
-	}
-
+// newInput builds the prompt textarea with loopy's keybindings and styling.
+// Newlines come from ctrl+j / shift+enter / alt+enter; plain enter submits.
+func newInput() textarea.Model {
 	ti := textarea.New()
 	ti.Placeholder = "Ask loopy anything… (/ for commands, tab completes)"
 	ti.Prompt = "┃ "
 	ti.SetHeight(1)
 	ti.MaxHeight = 12 // input grows with content up to this many lines
 	ti.ShowLineNumbers = false
-	// Newlines come from ctrl+j / shift+enter / alt+enter; plain enter submits.
 	ti.KeyMap.InsertNewline = key.NewBinding(
 		key.WithKeys("ctrl+j", "shift+enter", "alt+enter"),
 		key.WithHelp("ctrl+j", "newline"),
@@ -139,6 +133,18 @@ func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string) (s
 	ti.FocusedStyle.Prompt = botStyle
 	ti.BlurredStyle.Prompt = dimStyle
 	ti.Focus()
+	return ti
+}
+
+// Run starts the interactive session. It returns the id of the session that
+// was active on exit ("" if nothing was said).
+func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string) (string, error) {
+	ag, mn, pn, err := buildAgent(cfg, modelName, provName, sysPrompt)
+	if err != nil {
+		return "", err
+	}
+
+	ti := newInput()
 
 	ag.Effort = cfg.DefaultEffort
 	m := &model{
@@ -367,12 +373,29 @@ func cwd() string {
 	return "?"
 }
 
+// inputContentHeight returns the number of lines the input needs to show its
+// whole value, wrapping each logical line the way the textarea does (at the
+// content width, which excludes the "┃ " prompt). We must compute this from
+// the value, not View(): the textarea clamps View() to its current height, so
+// measuring it can never grow the box.
+func (m *model) inputContentHeight() int {
+	contentWidth := m.input.Width() - 2 // minus the "┃ " prompt
+	if contentWidth < 1 {
+		contentWidth = 1
+	}
+	h := 0
+	for _, line := range strings.Split(m.input.Value(), "\n") {
+		h += max(1, (lipgloss.Width(line)+contentWidth-1)/contentWidth)
+	}
+	return h
+}
+
 // layout gives the viewport whatever height the chrome doesn't need,
 // growing the input box with its content so the whole prompt stays visible.
 func (m *model) layout() {
 	// wrapped content height, capped by textarea.MaxHeight
 	if m.width > 0 {
-		m.input.SetHeight(max(1, min(lipgloss.Height(m.input.View()), m.input.MaxHeight)))
+		m.input.SetHeight(max(1, min(m.inputContentHeight(), m.input.MaxHeight)))
 	}
 	chrome := 4 + m.input.Height() // header + tips + blanks + input + bottom pad
 	if m.busy {
