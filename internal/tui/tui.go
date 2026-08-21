@@ -170,7 +170,7 @@ func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string) (s
 	ti := newInput()
 
 	ag.Effort = cfg.DefaultEffort
-	mouseOn := true // default: capture mouse for the clickable ⚡ control + wheel scroll
+	mouseOn := false // default OFF: native terminal selection (drag-to-copy) just works
 	if cfg.Mouse != nil {
 		mouseOn = *cfg.Mouse
 	}
@@ -1777,7 +1777,7 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 		if err := cfg.Save(); err != nil {
 			m.append(errStyle.Render("config save failed: " + err.Error()))
 		}
-		m.append(dimStyle.Render("mouse capture: " + onOff(m.mouseOn) + " (off = native terminal selection; hold shift to select while on)"))
+		m.append(dimStyle.Render("mouse capture: " + onOff(m.mouseOn) + " (off = native drag-to-copy, the default; on = ⚡ clicks + wheel scroll, hold shift to select)"))
 		if m.mouseOn {
 			return m, tea.EnableMouseCellMotion
 		}
@@ -1834,7 +1834,7 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 		m.openPicker()
 	case "/help":
 		m.append(dimStyle.Render(
-			"/model <name> [provider] — switch model\n/compact [model] [provider]|off — compact now at 90% context, or pick the compaction model\n/mouse — toggle mouse capture (off = native terminal selection)\n/theme [light|dark|auto] — color scheme (bare toggles)\n/tasks — list background subagents (task tool with background:true runs concurrently)\n/resume [id] — resume a previous session\n/goal <text> — keep working until the goal is met (resume | clear)\n/clear — reset conversation\n/quit — exit\ntab — complete · ctrl+o — toggle thinking tokens · ctrl+e — expand the last tool result · ctrl+j / shift+enter — newline · ctrl+v — paste image · esc — interrupt the agent · while busy with queued messages: ↑/↓ select, del removes · PgUp/PgDn — scroll · shift-drag — select text (native) · ctrl+c ctrl+c — quit"))
+			"/model <name> [provider] — switch model\n/compact [model] [provider]|off — compact now at 90% context, or pick the compaction model\n/mouse — toggle mouse capture (off = native terminal selection)\n/theme [light|dark|auto] — color scheme (bare toggles)\n/tasks — list background subagents (task tool with background:true runs concurrently)\n/resume [id] — resume a previous session\n/goal <text> — keep working until the goal is met (resume | clear)\n/clear — reset conversation\n/quit — exit\ntab — complete · ctrl+o — toggle thinking tokens · ctrl+e — expand the last tool result · ctrl+j / shift+enter — newline · ctrl+v — paste image · esc — interrupt the agent · while busy with queued messages: ↑/↓ select, del removes · PgUp/PgDn — scroll · drag — select/copy text (native) · ctrl+c ctrl+c — quit"))
 	case "/model":
 		if len(fields) < 2 {
 			m.openModelPicker()
