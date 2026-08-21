@@ -95,6 +95,7 @@ type model struct {
 	draft   string   // in-progress input saved while navigating history
 
 	queue      []string // messages typed while busy, sent after the turn ends
+	queueSel   int      // selected queued message, -1 = none (not navigating)
 	interrupt1 bool     // first ctrl+c pressed while busy; second cancels
 
 	goal       string // active /goal; the loop continues until GOAL_MET
@@ -541,6 +542,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if len(m.queue) > 0 && msg.err == nil {
 			next := m.queue[0]
 			m.queue = m.queue[1:]
+			m.queueSel = -1
 			return m.submit(next)
 		}
 		// goal loop: keep working until the model explicitly declares GOAL_MET
@@ -597,8 +599,11 @@ func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.modelPickerKey(msg)
 	}
 	// newline keys (ctrl+j / shift+enter / alt+enter) never submit; they go
-	// straight to the textarea, which splits the line via InsertNewline
-	if msg.Type == tea.KeyCtrlJ || msg.Type == tea.KeyCtrlM ||
+	// straight to the textarea, which splits the line via InsertNewline.
+	// Note: KeyCtrlM is NOT here — it shares KeyEnter's byte (CR=13), so
+	// matching it would swallow every real enter keypress. ctrl+j (LF=10),
+	// alt+enter, and the shift+enter escape sequences are all distinguishable.
+	if msg.Type == tea.KeyCtrlJ ||
 		(msg.Type == tea.KeyEnter && msg.Alt) ||
 		(msg.Type == tea.KeyRunes && msg.Alt && string(msg.Runes) == "\r") ||
 		isShiftEnterSeq(msg) {
@@ -628,7 +633,19 @@ func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case tea.KeyEsc:
-		m.menu = nil
+		// esc interrupts the agent mid-response; otherwise it dismisses UI
+		if m.busy && m.cancel != nil {
+			m.cancel()
+			return m, nil
+		}
+		if m.menu != nil {
+			m.menu = nil
+			return m, nil
+		}
+		if m.queueSel >= 0 { // leave queue navigation
+			m.queueSel = -1
+			return m, nil
+		}
 		return m, nil
 
 	case tea.KeyCtrlV:
@@ -654,12 +671,33 @@ func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.openMenu()
 			return m, nil
 		}
+		// while busy with a queue and an empty input, ↓ moves the queue
+		// selection toward newer messages (and off the end to deselect)
+		if m.busy && len(m.queue) > 0 && m.input.Value() == "" {
+			if m.queueSel >= 0 {
+				m.queueSel++
+				if m.queueSel >= len(m.queue) {
+					m.queueSel = -1
+				}
+			}
+			return m, nil
+		}
 		m.histNext()
 		return m, nil
 
 	case tea.KeyShiftTab, tea.KeyUp, tea.KeyCtrlP:
 		if m.menu != nil {
 			m.menu.idx = (m.menu.idx + len(m.menu.cands) - 1) % len(m.menu.cands)
+			return m, nil
+		}
+		// while busy with a queue and an empty input, ↑ selects queued messages
+		if m.busy && len(m.queue) > 0 && m.input.Value() == "" &&
+			(msg.Type == tea.KeyUp || msg.Type == tea.KeyShiftTab) {
+			if m.queueSel < 0 {
+				m.queueSel = len(m.queue) - 1 // start at the newest
+			} else if m.queueSel > 0 {
+				m.queueSel--
+			}
 			return m, nil
 		}
 		if msg.Type == tea.KeyUp {
@@ -671,6 +709,24 @@ func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.refreshMenu()
 		}
 		return m, nil
+
+	case tea.KeyDelete, tea.KeyBackspace:
+		// delete the selected queued message (only when navigating the queue)
+		if m.busy && m.queueSel >= 0 && m.queueSel < len(m.queue) {
+			m.queue = append(m.queue[:m.queueSel], m.queue[m.queueSel+1:]...)
+			if m.queueSel >= len(m.queue) {
+				m.queueSel = len(m.queue) - 1
+			}
+			if len(m.queue) == 0 {
+				m.queueSel = -1
+			}
+			return m, nil
+		}
+		// not navigating the queue: fall through to normal editing
+		var cmd tea.Cmd
+		m.input, cmd = m.input.Update(msg)
+		m.refreshMenu()
+		return m, cmd
 
 	case tea.KeyEnter:
 		if m.menu != nil {
@@ -701,6 +757,7 @@ func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					m.agent.Steer(expandMentions(expandSkills(q, sk)))
 				}
 				m.queue = nil
+				m.queueSel = -1
 			}
 			return m, nil
 		}
@@ -1111,7 +1168,7 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 		m.openPicker()
 	case "/help":
 		m.append(dimStyle.Render(
-			"/model <name> [provider] — switch model\n/resume [id] — resume a previous session\n/goal <text> — keep working until the goal is met (resume | clear)\n/clear — reset conversation\n/quit — exit\ntab — complete · ctrl+o — toggle thinking tokens · ctrl+j / shift+enter — newline · ctrl+v — paste image · PgUp/PgDn — scroll · ctrl+c — interrupt / quit"))
+			"/model <name> [provider] — switch model\n/resume [id] — resume a previous session\n/goal <text> — keep working until the goal is met (resume | clear)\n/clear — reset conversation\n/quit — exit\ntab — complete · ctrl+o — toggle thinking tokens · ctrl+j / shift+enter — newline · ctrl+v — paste image · esc — interrupt the agent · while busy with queued messages: ↑/↓ select, del removes · PgUp/PgDn — scroll · ctrl+c — interrupt / quit"))
 	case "/model":
 		if len(fields) < 2 {
 			m.openModelPicker()
@@ -1164,7 +1221,7 @@ func (m *model) View() string {
 		b.WriteString(m.modelPickerView())
 		return b.String()
 	}
-	b.WriteString(dimStyle.Render(truncLine(" / commands · ctrl+p palette · ctrl+o thinking · ctrl+j/shift+enter newline · ctrl+v paste image · ↑/↓ history · ctrl+c interrupt/quit", m.width)) + "\n\n")
+	b.WriteString(dimStyle.Render(truncLine(" / commands · ctrl+p palette · ctrl+o thinking · ctrl+j/shift+enter newline · ctrl+v paste image · esc interrupt · ctrl+c interrupt/quit", m.width)) + "\n\n")
 	b.WriteString(m.vp.View() + "\n")
 	if m.curThink != "" {
 		b.WriteString("\n" + m.thinkView() + "\n")
@@ -1173,16 +1230,24 @@ func (m *model) View() string {
 		b.WriteString("\n" + m.currentView() + "\n")
 	}
 	if m.busy {
-		hint := " thinking… (enter queues · ctrl+c ctrl+c interrupts)"
+		hint := " thinking… (enter queues · esc interrupts · ctrl+c ctrl+c interrupts)"
 		if m.interrupt1 {
-			hint = " thinking… (ctrl+c again to interrupt)"
+			hint = " thinking… (esc or ctrl+c again to interrupt)"
 		}
 		b.WriteString("\n" + m.spin.View() + dimStyle.Render(hint) + "\n")
 	}
 	if len(m.queue) > 0 {
-		b.WriteString(dimStyle.Render(fmt.Sprintf(" ⧗ queued (%d) — enter on empty input to steer into this turn", len(m.queue))) + "\n")
-		for _, q := range m.queue {
-			b.WriteString(truncLine(youStyle.Render(" ❯ ")+q, m.width) + "\n")
+		nav := ""
+		if m.busy && m.input.Value() == "" {
+			nav = " · ↑/↓ select · del removes"
+		}
+		b.WriteString(dimStyle.Render(fmt.Sprintf(" ⧗ queued (%d) — enter on empty input to steer into this turn%s", len(m.queue), nav)) + "\n")
+		for i, q := range m.queue {
+			line := truncLine(youStyle.Render(" ❯ ")+q, m.width)
+			if i == m.queueSel {
+				line = botStyle.Render(" → ") + truncLine(q, max(m.width-4, 8)) + dimStyle.Render("  (del to remove)")
+			}
+			b.WriteString(line + "\n")
 		}
 	}
 	b.WriteString("\n" + m.input.View())
