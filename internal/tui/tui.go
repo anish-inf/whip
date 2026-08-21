@@ -162,6 +162,15 @@ func newInput() textarea.Model {
 // Run starts the interactive session. It returns the id of the session that
 // was active on exit ("" if nothing was said).
 func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string) (string, error) {
+	// Trust gate first: before loopy reads a single file, ask whether this
+	// folder's contents may steer the model. Persisted per absolute path in
+	// ~/.loopy/trusted.json (claude-code's per-project trust dialog).
+	if ok, err := checkTrust(); err != nil {
+		return "", err
+	} else if !ok {
+		return "", fmt.Errorf("folder not trusted")
+	}
+
 	ag, mn, pn, err := buildAgent(cfg, modelName, provName, sysPrompt)
 	if err != nil {
 		return "", err
