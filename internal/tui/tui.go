@@ -84,6 +84,8 @@ type model struct {
 
 	goal       string // active /goal; the loop continues until GOAL_MET
 	goalRounds int    // continuation turns spent on the current goal
+
+	effortX int // screen column where the clickable ⚡ effort control starts
 }
 
 // picker is the /resume session browser. metas is newest-first; the list is
@@ -281,7 +283,7 @@ func cwd() string {
 
 // layout gives the viewport whatever height the chrome doesn't need.
 func (m *model) layout() {
-	chrome := 3 // header + tips + input
+	chrome := 5 // header + tips + top pad + input + bottom pad
 	if m.busy {
 		chrome++
 	}
@@ -314,7 +316,13 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.key(msg)
 
 	case tea.MouseMsg:
-		if m.picker == nil {
+		// clicking the ⚡ control in the header cycles reasoning effort
+		if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft &&
+			msg.Y == 0 && msg.X >= m.effortX {
+			m.agent.Effort = nextEffort(m.agent.Effort)
+			return m, nil
+		}
+		if m.picker == nil && m.mpicker == nil {
 			var cmd tea.Cmd
 			m.vp, cmd = m.vp.Update(msg)
 			m.follow = m.vp.AtBottom()
@@ -457,11 +465,23 @@ func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		if msg.Type == tea.KeyUp {
 			m.histPrev()
+			return m, nil
+		}
+		if msg.Type == tea.KeyCtrlP { // command palette: the / menu, prefilled
+			m.input.SetValue("/")
+			m.refreshMenu()
 		}
 		return m, nil
 
 	case tea.KeyEnter:
 		if m.menu != nil {
+			// bare commands that act without further args run immediately
+			// (this is what makes the ctrl+p palette one-keystroke)
+			if c := m.menu.cands[m.menu.idx]; m.menu.head == "" && execNow[c.Text] {
+				m.menu = nil
+				m.input.Reset()
+				return m.command(c.Text)
+			}
 			if m.accept() {
 				return m, nil // completed something; next enter submits
 			}
@@ -536,6 +556,7 @@ func (m *model) switchModel(name, prov string) {
 		m.append(errStyle.Render(err.Error()))
 		return
 	}
+	ag.Effort = m.agent.Effort
 	ag.Messages = append(ag.Messages, m.agent.Messages[1:]...) // carry history
 	m.agent, m.modelName, m.provName = ag, mn, pn
 	m.append(dimStyle.Render("→ " + mn + " @ " + pn))
@@ -770,6 +791,18 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 		m.sessionID = "" // next turn starts a fresh session
 		m.saved = 1
 		m.append(dimStyle.Render("(conversation cleared)"))
+	case "/effort":
+		if len(fields) > 1 {
+			lv, ok := parseEffort(fields[1])
+			if !ok {
+				m.append(errStyle.Render("unknown effort level; use off, low, medium, or high"))
+				break
+			}
+			m.agent.Effort = lv
+		} else {
+			m.agent.Effort = nextEffort(m.agent.Effort)
+		}
+		m.append(dimStyle.Render("⚡ effort: " + effortLabel(m.agent.Effort)))
 	case "/goal":
 		switch {
 		case len(fields) == 1:
@@ -834,14 +867,19 @@ func (m *model) currentView() string {
 
 func (m *model) View() string {
 	var b strings.Builder
-	header := fmt.Sprintf(" loopy · %s @ %s · %s", m.modelName, m.provName, cwd())
+	left := fmt.Sprintf(" loopy · %s @ %s · %s", m.modelName, m.provName, cwd())
 	if m.goal != "" {
-		header += " · ◎ " + truncLine(m.goal, 40)
+		left += " · ◎ " + truncLine(m.goal, 40)
 	}
 	if !m.follow {
-		header += fmt.Sprintf(" · ↑ %d%%", int(m.vp.ScrollPercent()*100))
+		left += fmt.Sprintf(" · ↑ %d%%", int(m.vp.ScrollPercent()*100))
 	}
-	b.WriteString(dimStyle.Render(truncLine(header, m.width)) + "\n")
+	// right-aligned clickable effort control
+	right := "⚡ " + effortLabel(m.agent.Effort) + " "
+	m.effortX = max(m.width-len(right)-1, 0) // ⚡ renders 2 cells wide
+	left = truncLine(left, max(m.width-len(right)-2, 0))
+	pad := max(m.width-len(left)-len(right)-1, 1)
+	b.WriteString(dimStyle.Render(left+strings.Repeat(" ", pad)) + toolStyle.Render(right) + "\n")
 	if m.picker != nil {
 		b.WriteString(m.pickerView())
 		return b.String()
@@ -850,7 +888,7 @@ func (m *model) View() string {
 		b.WriteString(m.modelPickerView())
 		return b.String()
 	}
-	b.WriteString(dimStyle.Render(truncLine(" / commands · tab completes · ↑/↓ history · mouse/PgUp scroll · ctrl+c interrupt/quit", m.width)) + "\n")
+	b.WriteString(dimStyle.Render(truncLine(" / commands · ctrl+p palette · tab completes · ↑/↓ history · mouse scroll · ctrl+c interrupt/quit", m.width)) + "\n\n")
 	b.WriteString(m.vp.View() + "\n")
 	if m.current != "" {
 		b.WriteString(m.currentView() + "\n")
@@ -872,6 +910,7 @@ func (m *model) View() string {
 	if m.menu != nil {
 		b.WriteString("\n" + m.menuView())
 	}
+	b.WriteString("\n") // bottom padding
 	return b.String()
 }
 

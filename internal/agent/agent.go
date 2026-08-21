@@ -23,6 +23,7 @@ type Agent struct {
 	Client    *llm.Client
 	Model     string // model id sent to the API
 	MaxTokens int
+	Effort    string // reasoning effort: "", "low", "medium", "high"
 	Tools     []tools.Tool
 	Messages  []llm.Message
 
@@ -64,10 +65,11 @@ func (a *Agent) Turn(ctx context.Context, input string, ev Events) (string, erro
 	a.Messages = append(a.Messages, llm.Message{Role: "user", Content: input})
 	for {
 		msg, err := a.Client.Stream(ctx, llm.Request{
-			Model:     a.Model,
-			Messages:  a.Messages,
-			Tools:     tools.Defs(a.Tools),
-			MaxTokens: a.MaxTokens,
+			Model:           a.Model,
+			Messages:        a.Messages,
+			Tools:           tools.Defs(a.Tools),
+			MaxTokens:       a.MaxTokens,
+			ReasoningEffort: a.Effort,
 		}, ev.OnText)
 		if err != nil {
 			return "", err

@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -107,5 +108,16 @@ func TestStreamTransportErrors(t *testing.T) {
 	srv.Close() // connection refused
 	if _, err := New(srv.URL, "test-key").Stream(context.Background(), Request{}, nil); err == nil {
 		t.Fatal("expected connection error")
+	}
+}
+
+func TestReasoningEffortSerialized(t *testing.T) {
+	b, _ := json.Marshal(Request{Model: "m", ReasoningEffort: "high"})
+	if !strings.Contains(string(b), `"reasoning_effort":"high"`) {
+		t.Fatalf("missing effort: %s", b)
+	}
+	b, _ = json.Marshal(Request{Model: "m"})
+	if strings.Contains(string(b), "reasoning_effort") {
+		t.Fatalf("empty effort must be omitted: %s", b)
 	}
 }

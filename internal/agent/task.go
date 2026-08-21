@@ -33,6 +33,7 @@ func taskTool(parent *Agent) tools.Tool {
 				return "", err
 			}
 			sub := New(parent.Client, parent.Model, parent.MaxTokens, subagentPrompt())
+			sub.Effort = parent.Effort
 			sub.Tools = tools.All()
 			return sub.Turn(ctx, a.Prompt, Events{})
 		},

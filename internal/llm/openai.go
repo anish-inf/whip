@@ -68,11 +68,12 @@ func New(baseURL, apiKey string) *Client {
 
 // Request is a chat completions request.
 type Request struct {
-	Model     string    `json:"model"`
-	Messages  []Message `json:"messages"`
-	Tools     []Tool    `json:"tools,omitempty"`
-	MaxTokens int       `json:"max_tokens,omitempty"`
-	Stream    bool      `json:"stream"`
+	Model           string    `json:"model"`
+	Messages        []Message `json:"messages"`
+	Tools           []Tool    `json:"tools,omitempty"`
+	MaxTokens       int       `json:"max_tokens,omitempty"`
+	ReasoningEffort string    `json:"reasoning_effort,omitempty"`
+	Stream          bool      `json:"stream"`
 }
 
 // Chunk delta payload from the SSE stream.

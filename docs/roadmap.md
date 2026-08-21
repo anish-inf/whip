@@ -75,7 +75,7 @@ Full exploration reports: [learnings/other-harnesses/opencode/](learnings/other-
 - [x] Model → provider routing in config (switch providers without touching models)
 - [ ] `anthropic-messages` API style alongside `openai-completions` (pi: `packages/ai/src/api/`)
 - [ ] `"$VAR"` / `"!cmd"` resolution for apiKey/header values in config (pi models.json value resolution)
-- [ ] Reasoning/thinking level support (pi: `defaultThinkingLevel`, `thinkingBudgets`)
+- [x] Reasoning effort: `/effort [off|low|medium|high]` (bare cycles), tab-completes, clickable `⚡` control in the header top-right; sent as `reasoning_effort`, inherited by subagents, survives model switches
 - [ ] Per-model sampling params in config (`samplingParams: {temperature, top_p}`)
 
 ## Safety & permissions
@@ -86,6 +86,7 @@ Full exploration reports: [learnings/other-harnesses/opencode/](learnings/other-
 
 ## Theming & config
 
+- [x] ctrl+p command palette (opencode-style): fuzzy command list with descriptions; bare commands execute on enter, arg commands insert themselves
 - [ ] Single keybind+command registry: palette, slash commands, help, and footer hints all derived from one table (opencode `config/keybind.ts` — the highest value-per-line idea in that repo)
 - [ ] One generic fuzzy-select widget reused by every picker: model, session, theme, timeline (opencode `ui/dialog-select.tsx`)
 - [ ] KV table in sessions.db for palette-toggleable UI prefs — no config ceremony per toggle (opencode `context/kv.tsx` pattern)
