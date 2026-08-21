@@ -53,7 +53,7 @@ func TestExpandMentions(t *testing.T) {
 func TestAtMentionCompletion(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "alpha.txt"), nil, 0o644)
-	_, cs := completions("fix @"+dir+"/al", nil, nil, nil)
+	_, cs := completions("fix @"+dir+"/al", nil, nil, nil, nil)
 	if len(cs) != 1 || cs[0].Text != "@"+filepath.Join(dir, "alpha.txt") {
 		t.Fatalf("@ completion: %v", texts(cs))
 	}
@@ -74,7 +74,7 @@ func TestExpandSkills(t *testing.T) {
 
 func TestSkillCompletion(t *testing.T) {
 	sk := []cand{{"$go-style", "style rules"}, {"$go-testing", "test rules"}, {"$other", ""}}
-	_, cs := completions("apply $go-", nil, nil, sk)
+	_, cs := completions("apply $go-", nil, nil, sk, nil)
 	if len(cs) != 2 || cs[0].Text != "$go-style" && cs[1].Text != "$go-testing" {
 		t.Fatalf("$ completion: %v", texts(cs))
 	}

@@ -39,6 +39,7 @@ type turnDoneMsg struct {
 	final string
 	err   error
 }
+type catalogsMsg map[string]config.Catalog // background /models fetch result
 
 // menu is the open completion dropdown.
 type menu struct {
@@ -85,7 +86,8 @@ type model struct {
 	goal       string // active /goal; the loop continues until GOAL_MET
 	goalRounds int    // continuation turns spent on the current goal
 
-	effortX int // screen column where the clickable ⚡ effort control starts
+	effortX  int                       // screen column where the clickable ⚡ effort control starts
+	catalogs map[string]config.Catalog // provider model lists (capabilities)
 }
 
 // picker is the /resume session browser. metas is newest-first; the list is
@@ -122,6 +124,7 @@ func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string) (s
 	m := &model{
 		cfg: cfg, agent: ag, modelName: mn, provName: pn, sysPrompt: sysPrompt,
 		input: ti, spin: spinner.New(spinner.WithSpinner(spinner.Dot)), follow: true, saved: 1,
+		catalogs: config.LoadCatalogs(),
 	}
 	if dir, derr := config.Dir(); derr == nil {
 		if st, serr := session.Open(dir + "/sessions.db"); serr == nil {
@@ -141,8 +144,41 @@ func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string) (s
 	}
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	m.prog = p
+	go m.fetchCatalogs()
 	_, err = p.Run()
 	return m.sessionID, err
+}
+
+// fetchCatalogs refreshes each provider's cached model list in the background
+// and sends the merged result to the UI.
+func (m *model) fetchCatalogs() {
+	cats := config.LoadCatalogs()
+	dirty := false
+	for name, prov := range m.cfg.Providers {
+		if c, ok := cats[name]; ok && !c.Stale() && c.BaseURL == prov.BaseURL {
+			continue
+		}
+		key := prov.Key()
+		if key == "" {
+			continue
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		infos, err := llm.New(prov.BaseURL, key).Models(ctx)
+		cancel()
+		if err != nil {
+			continue // keep any stale cache
+		}
+		models := make([]config.ModelInfoLite, len(infos))
+		for i, mi := range infos {
+			models[i] = config.ModelInfoLite{ID: mi.ID, ReasoningEfforts: mi.ReasoningEfforts}
+		}
+		cats[name] = config.Catalog{FetchedAt: time.Now(), BaseURL: prov.BaseURL, Models: models}
+		dirty = true
+	}
+	if dirty {
+		config.SaveCatalogs(cats) // best-effort; the TUI still gets the fresh data
+	}
+	m.prog.Send(catalogsMsg(cats))
 }
 
 // resume replaces the conversation with a stored session.
@@ -152,12 +188,17 @@ func (m *model) resume(id string) error {
 		return err
 	}
 	// prefer the session's model/provider; fall back to current on error
+	effort := m.agent.Effort
 	if ag, mn, pn, err := buildAgent(m.cfg, meta.Model, meta.Provider, m.sysPrompt); err == nil {
 		m.agent, m.modelName, m.provName = ag, mn, pn
 	} else {
 		m.agent = agent.New(m.agent.Client, m.agent.Model, m.agent.MaxTokens, m.sysPrompt)
+		m.agent.ModelName, m.agent.Provider = m.modelName, m.provName
 	}
 	m.agent.Messages = append(m.agent.Messages, msgs...)
+	if contains(m.effortsFor(), effort) {
+		m.agent.Effort = effort
+	}
 	m.sessionID = meta.ID
 	m.saved = len(m.agent.Messages)
 	for _, msg := range msgs {
@@ -256,6 +297,7 @@ func buildAgent(cfg *config.Config, modelName, provName, sysPrompt string) (*age
 		return nil, "", "", fmt.Errorf("no API key for provider %q (set apiKey/apiKeyEnv in ~/.loopy/config.json)", provName)
 	}
 	ag := agent.New(llm.New(prov.BaseURL, key), apiID, mdl.MaxTokens, sysPrompt)
+	ag.ModelName, ag.Provider = modelName, provName
 	return ag, modelName, provName, nil
 }
 
@@ -329,7 +371,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// clicking the ⚡ control in the header cycles reasoning effort
 		if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft &&
 			msg.Y == 0 && msg.X >= m.effortX {
-			m.setEffort(nextEffort(m.agent.Effort))
+			m.setEffort(nextEffort(m.effortsFor(), m.agent.Effort))
 			return m, nil
 		}
 		if m.picker == nil && m.mpicker == nil {
@@ -409,6 +451,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.goalRounds++
 			return m.submit(goalContinuePrompt(m.goal))
 		}
+		return m, nil
+
+	case catalogsMsg:
+		m.updateCatalogs(msg)
 		return m, nil
 
 	case spinner.TickMsg:
@@ -569,6 +615,9 @@ func (m *model) switchModel(name, prov string) {
 	ag.Effort = m.agent.Effort
 	ag.Messages = append(ag.Messages, m.agent.Messages[1:]...) // carry history
 	m.agent, m.modelName, m.provName = ag, mn, pn
+	if !contains(m.effortsFor(), ag.Effort) {
+		m.setEffort("") // the new model doesn't support the current level
+	}
 	m.cfg.DefaultModel, m.cfg.DefaultProvider = mn, pn // store the switch as the new default
 	if err := m.cfg.Save(); err != nil {
 		m.append(errStyle.Render("config save failed: " + err.Error()))
@@ -631,7 +680,7 @@ func (m *model) openPicker() {
 
 // openMenu computes candidates for the current input (tab pressed).
 func (m *model) openMenu() {
-	head, cands := completions(m.input.Value(), m.modelCands(), m.providerCands(), m.skillCands())
+	head, cands := completions(m.input.Value(), m.modelCands(), m.providerCands(), m.skillCands(), effortCandsFor(m.effortsFor()))
 	switch len(cands) {
 	case 0:
 	case 1:
@@ -648,7 +697,7 @@ func (m *model) refreshMenu() {
 	val := m.input.Value()
 	token := val[strings.LastIndexByte(val, ' ')+1:]
 	if strings.HasPrefix(val, "/") || strings.HasPrefix(token, "@") || strings.HasPrefix(token, "$") {
-		head, cands := completions(val, m.modelCands(), m.providerCands(), m.skillCands())
+		head, cands := completions(val, m.modelCands(), m.providerCands(), m.skillCands(), effortCandsFor(m.effortsFor()))
 		if len(cands) > 0 {
 			idx := 0
 			if m.menu != nil && m.menu.idx < len(cands) {
@@ -806,15 +855,20 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 		m.saved = 1
 		m.append(dimStyle.Render("(conversation cleared)"))
 	case "/effort":
+		levels := m.effortsFor()
 		if len(fields) > 1 {
-			lv, ok := parseEffort(fields[1])
+			lv, ok := parseEffort(levels, fields[1])
 			if !ok {
-				m.append(errStyle.Render("unknown effort level; use off, low, medium, or high"))
+				names := make([]string, len(levels))
+				for i, e := range levels {
+					names[i] = effortLabel(e)
+				}
+				m.append(errStyle.Render("unknown effort level; " + m.agent.Model + " supports: " + strings.Join(names, ", ")))
 				break
 			}
 			m.setEffort(lv)
 		} else {
-			m.setEffort(nextEffort(m.agent.Effort))
+			m.setEffort(nextEffort(levels, m.agent.Effort))
 		}
 		m.append(dimStyle.Render("⚡ effort: " + effortLabel(m.agent.Effort)))
 	case "/goal":

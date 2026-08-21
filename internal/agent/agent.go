@@ -22,8 +22,10 @@ type Events struct {
 type Agent struct {
 	Client    *llm.Client
 	Model     string // model id sent to the API
+	ModelName string // config model name (may differ from Model via id mapping)
+	Provider  string // config provider name
 	MaxTokens int
-	Effort    string // reasoning effort: "", "low", "medium", "high"
+	Effort    string // reasoning effort: "" = parameter omitted from requests
 	Tools     []tools.Tool
 	Messages  []llm.Message
 

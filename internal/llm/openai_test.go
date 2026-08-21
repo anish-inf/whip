@@ -23,6 +23,51 @@ func sseServer(t *testing.T, lines ...string) *httptest.Server {
 	}))
 }
 
+func TestModels(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/models" || r.Method != http.MethodGet {
+			http.Error(w, "unexpected "+r.Method+" "+r.URL.Path, http.StatusNotFound)
+			return
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer test-key" {
+			http.Error(w, "bad auth: "+got, http.StatusUnauthorized)
+			return
+		}
+		w.Write([]byte(`{"object":"list","data":[
+			{"id":"claude-fable-5","reasoning_efforts":["none","low","high","max"],"context_length":1000000},
+			{"id":"gemini-3.5-flash"}
+		]}`))
+	}))
+	defer srv.Close()
+
+	models, err := New(srv.URL, "test-key").Models(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(models) != 2 {
+		t.Fatalf("models: %+v", models)
+	}
+	if models[0].ID != "claude-fable-5" || len(models[0].ReasoningEfforts) != 4 || models[0].ReasoningEfforts[3] != "max" {
+		t.Fatalf("model 0: %+v", models[0])
+	}
+	if models[0].ContextLength != 1000000 {
+		t.Fatalf("context length: %+v", models[0])
+	}
+	if len(models[1].ReasoningEfforts) != 0 {
+		t.Fatalf("model 1 should have no efforts: %+v", models[1])
+	}
+}
+
+func TestModelsHTTPError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "nope", http.StatusForbidden)
+	}))
+	defer srv.Close()
+	if _, err := New(srv.URL, "k").Models(context.Background()); err == nil {
+		t.Fatal("expected error")
+	}
+}
+
 func TestStreamTextAndToolCalls(t *testing.T) {
 	srv := sseServer(t,
 		`data: {"choices":[{"delta":{"content":"hel"}}]}`,

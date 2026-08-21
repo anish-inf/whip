@@ -102,6 +102,41 @@ type apiError struct {
 	Message string `json:"message"`
 }
 
+// ModelInfo is one entry from the provider's GET /models list. Fields beyond
+// the OpenAI spec (context_length, reasoning_efforts) are omitted by APIs
+// that don't supply them.
+type ModelInfo struct {
+	ID                  string   `json:"id"`
+	ContextLength       int      `json:"context_length,omitempty"`
+	MaxCompletionTokens int      `json:"max_completion_tokens,omitempty"`
+	ReasoningEfforts    []string `json:"reasoning_efforts,omitempty"`
+}
+
+// Models fetches GET /models from the provider.
+func (c *Client) Models(ctx context.Context) ([]ModelInfo, error) {
+	hr, err := http.NewRequestWithContext(ctx, "GET", c.BaseURL+"/models", nil)
+	if err != nil {
+		return nil, err
+	}
+	hr.Header.Set("Authorization", "Bearer "+c.APIKey)
+	resp, err := c.HTTP.Do(hr)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return nil, fmt.Errorf("%s: %s", resp.Status, strings.TrimSpace(string(b)))
+	}
+	var list struct {
+		Data []ModelInfo `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&list); err != nil {
+		return nil, err
+	}
+	return list.Data, nil
+}
+
 // Stream sends the request and invokes onText for each content delta.
 // It returns the final assistant message (with any accumulated tool calls).
 func (c *Client) Stream(ctx context.Context, req Request, onText func(string)) (Message, error) {

@@ -1,0 +1,65 @@
+package config
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"time"
+)
+
+// catalogTTL is how long a provider's fetched model list stays fresh.
+const catalogTTL = 24 * time.Hour
+
+// Catalog is the cached model list of one provider.
+type Catalog struct {
+	FetchedAt time.Time       `json:"fetchedAt"`
+	BaseURL   string          `json:"baseUrl"`
+	Models    []ModelInfoLite `json:"models"`
+}
+
+// ModelInfoLite is the subset of the provider's /models entry loopy uses.
+type ModelInfoLite struct {
+	ID               string   `json:"id"`
+	ReasoningEfforts []string `json:"reasoningEfforts,omitempty"`
+}
+
+func catalogPath() (string, error) {
+	dir, err := Dir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "models.json"), nil
+}
+
+// LoadCatalogs reads ~/.loopy/models.json (missing file is not an error).
+func LoadCatalogs() map[string]Catalog {
+	p, err := catalogPath()
+	if err != nil {
+		return nil
+	}
+	data, err := os.ReadFile(p)
+	if err != nil {
+		return nil
+	}
+	var cats map[string]Catalog
+	if json.Unmarshal(data, &cats) != nil {
+		return nil
+	}
+	return cats
+}
+
+// SaveCatalogs writes ~/.loopy/models.json.
+func SaveCatalogs(cats map[string]Catalog) error {
+	p, err := catalogPath()
+	if err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(cats, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(p, append(data, '\n'), 0o600)
+}
+
+// Stale reports whether the cached catalog should be refetched.
+func (c Catalog) Stale() bool { return time.Since(c.FetchedAt) > catalogTTL }

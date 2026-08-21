@@ -31,8 +31,12 @@ var execNow = map[string]bool{
 }
 
 // completions splits val into an untouched head and candidates for its last
-// token: slash commands, /model arguments, $skills, or filesystem paths.
-func completions(val string, models, providers, skillCands []cand) (head string, cands []cand) {
+// token: slash commands, /model or /effort arguments, $skills, or filesystem
+// paths. nil efforts uses the default /effort candidates.
+func completions(val string, models, providers, skillCands, efforts []cand) (head string, cands []cand) {
+	if efforts == nil {
+		efforts = effortCands
+	}
 	i := strings.LastIndexByte(val, ' ')
 	head, token := val[:i+1], val[i+1:]
 	fields := strings.Fields(head)
@@ -44,7 +48,7 @@ func completions(val string, models, providers, skillCands []cand) (head string,
 	case len(fields) == 2 && fields[0] == "/model":
 		cands = filterPrefix(providers, token)
 	case len(fields) == 1 && fields[0] == "/effort":
-		cands = filterPrefix(effortCands, token)
+		cands = filterPrefix(efforts, token)
 	case strings.HasPrefix(token, "$"): // codex-style skill invocation
 		cands = filterPrefix(skillCands, token)
 	case strings.HasPrefix(token, "@"): // @file mentions complete like paths
