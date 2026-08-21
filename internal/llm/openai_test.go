@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -83,7 +84,7 @@ func TestStreamTextAndToolCalls(t *testing.T) {
 	defer srv.Close()
 
 	var streamed strings.Builder
-	msg, err := New(srv.URL, "test-key").Stream(context.Background(), Request{Model: "m"}, func(d string) { streamed.WriteString(d) }, nil)
+	msg, _, err := New(srv.URL, "test-key").Stream(context.Background(), Request{Model: "m"}, func(d string) { streamed.WriteString(d) }, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +108,7 @@ func TestStreamLengthDiscardsToolCalls(t *testing.T) {
 	)
 	defer srv.Close()
 
-	msg, err := New(srv.URL, "test-key").Stream(context.Background(), Request{Model: "m"}, nil, nil)
+	msg, _, err := New(srv.URL, "test-key").Stream(context.Background(), Request{Model: "m"}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +123,7 @@ func TestStreamLengthDiscardsToolCalls(t *testing.T) {
 func TestStreamAPIError(t *testing.T) {
 	srv := sseServer(t, `data: {"error":{"message":"boom"}}`)
 	defer srv.Close()
-	_, err := New(srv.URL, "test-key").Stream(context.Background(), Request{Model: "m"}, nil, nil)
+	_, _, err := New(srv.URL, "test-key").Stream(context.Background(), Request{Model: "m"}, nil, nil)
 	if err == nil || !strings.Contains(err.Error(), "boom") {
 		t.Fatalf("expected api error, got %v", err)
 	}
@@ -139,7 +140,7 @@ func TestStreamReasoningRoutedToOnThink(t *testing.T) {
 	defer srv.Close()
 
 	var think, text strings.Builder
-	msg, err := New(srv.URL, "test-key").Stream(context.Background(), Request{Model: "m"},
+	msg, _, err := New(srv.URL, "test-key").Stream(context.Background(), Request{Model: "m"},
 		func(d string) { text.WriteString(d) }, func(d string) { think.WriteString(d) })
 	if err != nil {
 		t.Fatal(err)
@@ -157,7 +158,7 @@ func TestStreamHTTPError(t *testing.T) {
 	srv := sseServer(t)
 	defer srv.Close()
 	c.BaseURL = srv.URL
-	_, err := c.Stream(context.Background(), Request{Model: "m"}, nil, nil)
+	_, _, err := c.Stream(context.Background(), Request{Model: "m"}, nil, nil)
 	if err == nil || !strings.Contains(err.Error(), "401") {
 		t.Fatalf("expected 401 error, got %v", err)
 	}
@@ -171,12 +172,12 @@ func TestNewTool(t *testing.T) {
 }
 
 func TestStreamTransportErrors(t *testing.T) {
-	if _, err := New("http://\x7f", "k").Stream(context.Background(), Request{}, nil, nil); err == nil {
+	if _, _, err := New("http://\x7f", "k").Stream(context.Background(), Request{}, nil, nil); err == nil {
 		t.Fatal("expected bad-url error")
 	}
 	srv := sseServer(t)
 	srv.Close() // connection refused
-	if _, err := New(srv.URL, "test-key").Stream(context.Background(), Request{}, nil, nil); err == nil {
+	if _, _, err := New(srv.URL, "test-key").Stream(context.Background(), Request{}, nil, nil); err == nil {
 		t.Fatal("expected connection error")
 	}
 }
@@ -202,7 +203,7 @@ func TestComplete(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	got, err := New(srv.URL, "test-key").Complete(context.Background(), Request{Model: "m"})
+	got, _, err := New(srv.URL, "test-key").Complete(context.Background(), Request{Model: "m"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -219,11 +220,49 @@ func TestCompleteStreamOmitted(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	if _, err := New(srv.URL, "k").Complete(context.Background(), Request{Model: "m"}); err != nil {
+	if _, _, err := New(srv.URL, "k").Complete(context.Background(), Request{Model: "m"}); err != nil {
 		t.Fatal(err)
 	}
 	if req.Stream {
 		t.Fatalf("Complete must send stream:false, got %v", req.Stream)
+	}
+}
+
+func TestStreamUsageParsed(t *testing.T) {
+	var reqSeen Request
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&reqSeen)
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, `data: {"choices":[{"delta":{"content":"hi"}}]}`+"\n\n")
+		fmt.Fprint(w, `data: {"choices":[],"usage":{"prompt_tokens":1200,"completion_tokens":45,"prompt_tokens_details":{"cached_tokens":800}}}`+"\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer srv.Close()
+
+	_, u, err := New(srv.URL, "k").Stream(context.Background(), Request{Model: "m"}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.PromptTokens != 1200 || u.CompletionTokens != 45 || u.Cached() != 800 {
+		t.Fatalf("usage: %+v", u)
+	}
+	if reqSeen.StreamOptions == nil || !reqSeen.StreamOptions.IncludeUsage {
+		t.Fatal("Stream must request stream_options.include_usage")
+	}
+}
+
+func TestCompleteUsageParsed(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"choices":[{"message":{"content":"ok"}}],"usage":{"prompt_tokens":10,"completion_tokens":5,"prompt_tokens_details":{"cached_tokens":4}}}`))
+	}))
+	defer srv.Close()
+
+	_, u, err := New(srv.URL, "k").Complete(context.Background(), Request{Model: "m"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.PromptTokens != 10 || u.CompletionTokens != 5 || u.Cached() != 4 {
+		t.Fatalf("usage: %+v", u)
 	}
 }
 

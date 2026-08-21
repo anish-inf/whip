@@ -21,6 +21,7 @@ type Events struct {
 	OnToolEnd   func(name string, result string) // a tool call finished
 	OnSteer     func(text string)                // a steered message was injected
 	OnCompact   func(took, kept int)             // context was auto-compacted (messages removed/kept)
+	OnUsage     func(u llm.Usage)                // a request reported its token usage
 }
 
 // Agent holds one conversation.
@@ -46,6 +47,9 @@ type Agent struct {
 	mu        sync.Mutex
 	pending   []string // steered user messages awaiting injection
 	compacted bool     // a compaction already happened this turn — don't retry-loop
+
+	usageMu sync.Mutex
+	usage   llm.Usage // session totals across every API call (PromptTokens = input)
 }
 
 // Steer queues a user message for injection at the next loop boundary of the
@@ -63,6 +67,36 @@ func (a *Agent) drainPending() []string {
 	p := a.pending
 	a.pending = nil
 	return p
+}
+
+// AddUsage folds one request's usage into the session totals.
+func (a *Agent) AddUsage(u llm.Usage) {
+	a.usageMu.Lock()
+	a.usage.PromptTokens += u.PromptTokens
+	a.usage.CompletionTokens += u.CompletionTokens
+	if u.PromptTokensDetails != nil {
+		if a.usage.PromptTokensDetails == nil {
+			a.usage.PromptTokensDetails = &struct {
+				CachedTokens int `json:"cached_tokens"`
+			}{}
+		}
+		a.usage.PromptTokensDetails.CachedTokens += u.PromptTokensDetails.CachedTokens
+	}
+	a.usageMu.Unlock()
+}
+
+// Usage returns the session's cumulative token usage: input, output, and
+// cached-input tokens across every streamed call (plus compaction and
+// subagent calls on this agent).
+func (a *Agent) Usage() llm.Usage {
+	a.usageMu.Lock()
+	defer a.usageMu.Unlock()
+	u := a.usage
+	if a.usage.PromptTokensDetails != nil {
+		d := *a.usage.PromptTokensDetails
+		u.PromptTokensDetails = &d
+	}
+	return u
 }
 
 func New(client *llm.Client, model string, maxTokens int, systemPrompt string) *Agent {
@@ -89,13 +123,17 @@ func (a *Agent) Turn(ctx context.Context, input string, ev Events) (string, erro
 		if err := a.maybeCompact(ctx, ev); err != nil {
 			return "", err
 		}
-		msg, err := a.Client.Stream(ctx, llm.Request{
+		msg, usage, err := a.Client.Stream(ctx, llm.Request{
 			Model:           a.Model,
 			Messages:        a.Messages,
 			Tools:           tools.Defs(a.Tools),
 			MaxTokens:       a.MaxTokens,
 			ReasoningEffort: a.Effort,
 		}, ev.OnText, ev.OnThink)
+		a.AddUsage(usage)
+		if ev.OnUsage != nil {
+			ev.OnUsage(usage)
+		}
 		if err != nil {
 			if !a.compacted && llm.IsContextLimit(err) && ctx.Err() == nil {
 				a.compacted = true
@@ -228,7 +266,7 @@ func (a *Agent) compact(ctx context.Context) error {
 	if mdl == "" {
 		mdl = a.Model
 	}
-	summary, err := cli.Complete(ctx, llm.Request{
+	summary, usage, err := cli.Complete(ctx, llm.Request{
 		Model:     mdl,
 		MaxTokens: 1024,
 		Messages: []llm.Message{
@@ -236,6 +274,7 @@ func (a *Agent) compact(ctx context.Context) error {
 			{Role: "user", Content: summaryPrompt},
 		},
 	})
+	a.AddUsage(usage) // the summary call is session spend too
 	if err != nil {
 		return fmt.Errorf("compaction summary failed: %w", err)
 	}

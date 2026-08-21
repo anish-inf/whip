@@ -50,6 +50,7 @@ type turnDoneMsg struct {
 	err   error
 }
 type catalogsMsg map[string]config.Catalog // background /models fetch result
+type usageMsg llm.Usage                    // one request's token usage
 type thinkMsg string                       // streamed reasoning tokens
 type imageMsg struct {                     // ctrl+v clipboard image result
 	path string // clipboard image saved to disk
@@ -419,6 +420,18 @@ func onOff(b bool) string {
 	return "off"
 }
 
+// fmtTok renders a token count compactly: 12.3k, 1.2M, 134 raw under 1000.
+func fmtTok(n int) string {
+	switch {
+	case n >= 1_000_000:
+		return fmt.Sprintf("%.1fM", float64(n)/1_000_000)
+	case n >= 1000:
+		return fmt.Sprintf("%.1fk", float64(n)/1000)
+	default:
+		return fmt.Sprint(n)
+	}
+}
+
 func cwd() string {
 	if wd, err := os.Getwd(); err == nil {
 		return wd
@@ -687,6 +700,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case catalogsMsg:
 		m.updateCatalogs(msg)
+		return m, nil
+
+	case usageMsg:
+		// Turn already folds usage into the agent's session totals (header
+		// reads those); this message just forces a redraw mid-stream.
 		return m, nil
 
 	case imageMsg:
@@ -1293,6 +1311,7 @@ func (m *model) submit(text string) (tea.Model, tea.Cmd) {
 				p.Send(steeredMsg(s))
 			},
 			OnCompact: func(took, kept int) { p.Send(compactMsg{took: took, kept: kept}) },
+			OnUsage:   func(u llm.Usage) { p.Send(usageMsg(u)) },
 		})
 		flush()
 		p.Send(turnDoneMsg{final: final, err: err})
@@ -1475,6 +1494,19 @@ func (m *model) View() string {
 	}
 	if !m.follow {
 		left += fmt.Sprintf(" · ↑ %d%%", int(m.vp.ScrollPercent()*100))
+	}
+	// session token usage, provider-reported: in (cached of it) / out, then
+	// the share of the advertised context window the conversation occupies
+	u := m.agent.Usage()
+	if u.PromptTokens > 0 || u.CompletionTokens > 0 {
+		left += fmt.Sprintf(" · ⣿ %s in", fmtTok(u.PromptTokens))
+		if c := u.Cached(); c > 0 {
+			left += fmt.Sprintf(" (%s cached)", fmtTok(c))
+		}
+		left += fmt.Sprintf(" · %s out", fmtTok(u.CompletionTokens))
+	}
+	if m.agent.ContextLimit > 0 {
+		left += fmt.Sprintf(" · %d%% ctx", agent.EstimateTokens(m.agent.Messages)*100/m.agent.ContextLimit)
 	}
 	// right-aligned clickable effort control; ◌ marks thinking display
 	right := "⚡ " + effortLabel(m.agent.Effort) + " "

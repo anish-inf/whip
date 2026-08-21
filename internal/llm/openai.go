@@ -75,6 +75,30 @@ type Request struct {
 	MaxTokens       int       `json:"max_tokens,omitempty"`
 	ReasoningEffort string    `json:"reasoning_effort,omitempty"`
 	Stream          bool      `json:"stream"`
+	StreamOptions   *struct {
+		IncludeUsage bool `json:"include_usage"`
+	} `json:"stream_options,omitempty"`
+}
+
+// Usage is the token accounting the provider reports for one request
+// (prompt = input, completion = output). CachedTokens counts the slice of
+// the prompt served from the provider's prompt cache. Providers that omit
+// usage leave all fields zero — the session totals just skip those calls.
+type Usage struct {
+	PromptTokens     int `json:"prompt_tokens"`
+	CompletionTokens int `json:"completion_tokens"`
+	// PromptTokensDetails nests the cache hit count (OpenAI-compatible).
+	PromptTokensDetails *struct {
+		CachedTokens int `json:"cached_tokens"`
+	} `json:"prompt_tokens_details,omitempty"`
+}
+
+// Cached is the prompt-token count served from cache (0 when unreported).
+func (u Usage) Cached() int {
+	if u.PromptTokensDetails == nil {
+		return 0
+	}
+	return u.PromptTokensDetails.CachedTokens
 }
 
 // Chunk delta payload from the SSE stream.
@@ -100,6 +124,7 @@ type chunk struct {
 		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
 	Error *apiError `json:"error"`
+	Usage *Usage    `json:"usage"`
 }
 
 type apiError struct {
@@ -191,30 +216,35 @@ func (c *Client) Models(ctx context.Context) ([]ModelInfo, error) {
 
 // Stream sends the request and invokes onText for each content delta and
 // onThink for each reasoning_content delta (both may be nil). It returns the
-// final assistant message (with any accumulated tool calls).
-func (c *Client) Stream(ctx context.Context, req Request, onText, onThink func(string)) (Message, error) {
+// final assistant message (with any accumulated tool calls) plus the usage
+// the provider reports on the terminal chunk (stream_options:include_usage).
+func (c *Client) Stream(ctx context.Context, req Request, onText, onThink func(string)) (Message, Usage, error) {
 	req.Stream = true
+	req.StreamOptions = &struct {
+		IncludeUsage bool `json:"include_usage"`
+	}{IncludeUsage: true}
 	body, err := json.Marshal(req)
 	if err != nil {
-		return Message{}, err
+		return Message{}, Usage{}, err
 	}
 	hr, err := http.NewRequestWithContext(ctx, "POST", c.BaseURL+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
-		return Message{}, err
+		return Message{}, Usage{}, err
 	}
 	hr.Header.Set("Content-Type", "application/json")
 	hr.Header.Set("Authorization", "Bearer "+c.APIKey)
 	resp, err := c.HTTP.Do(hr)
 	if err != nil {
-		return Message{}, err
+		return Message{}, Usage{}, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return Message{}, &HTTPError{Status: resp.Status, Body: strings.TrimSpace(string(b))}
+		return Message{}, Usage{}, &HTTPError{Status: resp.Status, Body: strings.TrimSpace(string(b))}
 	}
 
 	msg := Message{Role: "assistant"}
+	var usage Usage      // from the terminal chunk (include_usage); zero if omitted
 	var calls []ToolCall // indexed by stream tool_call index
 	finish := ""
 	sc := bufio.NewScanner(resp.Body)
@@ -233,7 +263,10 @@ func (c *Client) Stream(ctx context.Context, req Request, onText, onThink func(s
 			continue
 		}
 		if ch.Error != nil {
-			return Message{}, fmt.Errorf("api error: %s", ch.Error.Message)
+			return Message{}, usage, fmt.Errorf("api error: %s", ch.Error.Message)
+		}
+		if ch.Usage != nil {
+			usage = *ch.Usage // the terminal usage chunk carries empty choices
 		}
 		if len(ch.Choices) == 0 {
 			continue
@@ -268,7 +301,7 @@ func (c *Client) Stream(ctx context.Context, req Request, onText, onThink func(s
 		}
 	}
 	if err := sc.Err(); err != nil {
-		return Message{}, err
+		return Message{}, usage, err
 	}
 	// Never execute tool calls from a max_tokens-truncated response: the
 	// streamed JSON arguments may be silently incomplete.
@@ -277,32 +310,33 @@ func (c *Client) Stream(ctx context.Context, req Request, onText, onThink func(s
 		msg.Content += "\n[response truncated by max_tokens; tool calls discarded]"
 	}
 	msg.ToolCalls = calls
-	return msg, nil
+	return msg, usage, nil
 }
 
 // Complete sends a non-streaming chat request and returns the assistant text
-// content. It's used internally by compaction's summary call, where streaming
-// would just add UI noise for a one-shot synthesis.
-func (c *Client) Complete(ctx context.Context, req Request) (string, error) {
+// content plus the reported usage. It's used internally by compaction's
+// summary call, where streaming would just add UI noise for a one-shot
+// synthesis.
+func (c *Client) Complete(ctx context.Context, req Request) (string, Usage, error) {
 	req.Stream = false
 	body, err := json.Marshal(req)
 	if err != nil {
-		return "", err
+		return "", Usage{}, err
 	}
 	hr, err := http.NewRequestWithContext(ctx, "POST", c.BaseURL+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
-		return "", err
+		return "", Usage{}, err
 	}
 	hr.Header.Set("Content-Type", "application/json")
 	hr.Header.Set("Authorization", "Bearer "+c.APIKey)
 	resp, err := c.HTTP.Do(hr)
 	if err != nil {
-		return "", err
+		return "", Usage{}, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return "", &HTTPError{Status: resp.Status, Body: strings.TrimSpace(string(b))}
+		return "", Usage{}, &HTTPError{Status: resp.Status, Body: strings.TrimSpace(string(b))}
 	}
 	var out struct {
 		Choices []struct {
@@ -310,12 +344,17 @@ func (c *Client) Complete(ctx context.Context, req Request) (string, error) {
 				Content string `json:"content"`
 			} `json:"message"`
 		} `json:"choices"`
+		Usage *Usage `json:"usage"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return "", err
+		return "", Usage{}, err
 	}
 	if len(out.Choices) == 0 {
-		return "", fmt.Errorf("no choices in completion response")
+		return "", Usage{}, fmt.Errorf("no choices in completion response")
 	}
-	return out.Choices[0].Message.Content, nil
+	var usage Usage
+	if out.Usage != nil {
+		usage = *out.Usage
+	}
+	return out.Choices[0].Message.Content, usage, nil
 }

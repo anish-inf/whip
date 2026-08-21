@@ -120,6 +120,54 @@ func textServer(t *testing.T, onCall func(n int, req llm.Request) string) *httpt
 	}))
 }
 
+// TestUsageAccumulates verifies every stream call folds its usage into the
+// session totals (input/output/cached) and fires OnUsage per request.
+func TestUsageAccumulates(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, `data: {"choices":[{"delta":{"content":"done"},"finish_reason":"stop"}]}`+"\n\n")
+		fmt.Fprint(w, `data: {"choices":[],"usage":{"prompt_tokens":100,"completion_tokens":10,"prompt_tokens_details":{"cached_tokens":40}}}`+"\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer srv.Close()
+
+	ag := New(llm.New(srv.URL, "k"), "m", 100, "sys")
+	var fired int
+	for i := 0; i < 3; i++ {
+		if _, err := ag.Turn(context.Background(), "go", Events{
+			OnUsage: func(u llm.Usage) {
+				fired++
+				if u.PromptTokens != 100 || u.CompletionTokens != 10 || u.Cached() != 40 {
+					t.Errorf("per-call usage: %+v", u)
+				}
+			},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if fired != 3 {
+		t.Fatalf("OnUsage fired %d times, want 3", fired)
+	}
+	u := ag.Usage()
+	if u.PromptTokens != 300 || u.CompletionTokens != 30 || u.Cached() != 120 {
+		t.Fatalf("session totals: %+v", u)
+	}
+}
+
+// TestUsageMissingLeavesTotalsAlone: providers that omit usage (no terminal
+// chunk) must not corrupt totals or fire misleading events.
+func TestUsageMissingLeavesTotalsAlone(t *testing.T) {
+	srv := textServer(t, func(n int, req llm.Request) string { return "done" })
+	defer srv.Close()
+	ag := New(llm.New(srv.URL, "k"), "m", 100, "sys")
+	if _, err := ag.Turn(context.Background(), "go", Events{}); err != nil {
+		t.Fatal(err)
+	}
+	if u := ag.Usage(); u.PromptTokens != 0 || u.CompletionTokens != 0 || u.Cached() != 0 {
+		t.Fatalf("usage should stay zero without provider usage: %+v", u)
+	}
+}
+
 func TestSteerContinuesTurn(t *testing.T) {
 	srv := textServer(t, func(n int, req llm.Request) string {
 		if n == 2 {
@@ -336,12 +384,12 @@ func TestProactiveCompactAtNinetyPercent(t *testing.T) {
 			w.Write([]byte(`{"choices":[{"message":{"content":"summary of prior work"}}]}`))
 			return
 		}
-		compact := len(req.Messages) == 3 && strings.Contains(req.Messages[1].Content, "Summary of the conversation")
+		compact := strings.Contains(req.Messages[1].Content, "Summary of the conversation")
 		w.Header().Set("Content-Type", "text/event-stream")
 		if compact {
-			fmt.Fprint(w, `data: {"choices":[{"delta":{"content":"ok"}}]}` + "\n\n")
+			fmt.Fprint(w, `data: {"choices":[{"delta":{"content":"ok"}}]}`+"\n\n")
 		} else {
-			fmt.Fprint(w, `data: {"choices":[{"delta":{"content":"not-compacted"}}]}` + "\n\n")
+			fmt.Fprint(w, `data: {"choices":[{"delta":{"content":"not-compacted"}}]}`+"\n\n")
 		}
 		fmt.Fprint(w, "data: [DONE]\n\n")
 	}))

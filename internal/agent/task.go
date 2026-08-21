@@ -35,7 +35,9 @@ func taskTool(parent *Agent) tools.Tool {
 			sub := New(parent.Client, parent.Model, parent.MaxTokens, subagentPrompt())
 			sub.Effort = parent.Effort
 			sub.Tools = tools.All()
-			return sub.Turn(ctx, a.Prompt, Events{})
+			// roll the subagent's spend into the parent's session totals
+			report, err := sub.Turn(ctx, a.Prompt, Events{OnUsage: parent.AddUsage})
+			return report, err
 		},
 	}
 }
