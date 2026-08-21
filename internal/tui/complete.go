@@ -21,6 +21,7 @@ var commands = []cand{
 	{"/help", "Show available commands"},
 	{"/model", "<model> [provider] — switch model"},
 	{"/mouse", "Toggle mouse capture (off = native terminal selection)"},
+	{"/theme", "[light|dark|auto] — color scheme (bare toggles)"},
 	{"/quit", "Exit loopy"},
 	{"/resume", "[id] — browse and resume previous sessions"},
 	{"/tasks", "List background subagents (running/done) and their reports"},

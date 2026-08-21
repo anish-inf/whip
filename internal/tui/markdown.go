@@ -88,6 +88,16 @@ func SetLightTheme(light bool) {
 	mdMu.Unlock()
 }
 
+// CurrentTheme reports the active scheme ("light"/"dark") for the UI.
+func CurrentTheme() string {
+	mdMu.Lock()
+	defer mdMu.Unlock()
+	if mdLight {
+		return "light"
+	}
+	return "dark"
+}
+
 // unregisterChromaStyle drops glamour's global chroma style ("charm").
 // Glamour registers it once per process, guarded by "if not present" — so
 // the FIRST theme to render a code block wins forever and a later theme

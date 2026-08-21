@@ -206,7 +206,8 @@ func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string) (s
 	}
 	// (mouse off leaves capture disabled so the terminal's own selection works;
 	// a later /mouse command toggles it back on)
-	detectColorScheme() // pick the glamour style that matches the terminal bg
+	cfgThemeValue = cfg.Theme // config override feeds detection
+	detectColorScheme()       // pick the glamour style that matches the terminal bg
 	p := tea.NewProgram(m, opts...)
 	m.prog = p
 	// install the interactive bash runner so the agent's bash tool can hand
@@ -359,6 +360,30 @@ func (m *model) persistRewrite() {
 	}
 	m.saved = 1 // re-save everything after the system prompt
 	m.persist()
+}
+
+// setTheme switches the color scheme ("light"/"dark"/"auto") live and
+// persists it: markdown re-renders under the new glamour style and every
+// AdaptiveColor UI style follows lipgloss.
+func (m *model) setTheme(theme string) {
+	switch theme {
+	case "light":
+		SetLightTheme(true)
+		lipgloss.SetHasDarkBackground(false)
+		m.cfg.Theme = "light"
+	case "dark":
+		SetLightTheme(false)
+		lipgloss.SetHasDarkBackground(true)
+		m.cfg.Theme = "dark"
+	default: // auto: re-detect, don't persist a choice
+		m.cfg.Theme = ""
+		detectColorScheme()
+	}
+	if err := m.cfg.Save(); err != nil {
+		m.append(errStyle.Render("config save failed: " + err.Error()))
+	}
+	m.refreshVP() // re-render the transcript under the new scheme
+	m.append(dimStyle.Render("◐ theme: " + CurrentTheme()))
 }
 
 // setEffort changes the reasoning effort and stores it as the new default.
@@ -571,18 +596,29 @@ func cwd() string {
 	return "?"
 }
 
+// cfgThemeValue is the config's theme override, read at startup by
+// detectColorScheme (set from Run before calling it).
+var cfgThemeValue string
+
+func cfgTheme() string { return cfgThemeValue }
+
 // detectColorScheme figures out whether the terminal background is light and
 // calls SetLightTheme so markdown renders with a matching (high-contrast)
 // glamour style. Priority:
-//  1. LOOPY_THEME=light|dark (explicit override)
-//  2. COLORFGBG (set by many terminals; last field is the bg color index)
-//  3. an OSC 11 background query on /dev/tty with a short timeout — skipped
-//     entirely over ssh/mosh or inside tmux, where the query can hang
-//  4. default: dark (the safe assumption for coding terminals)
+//  1. config "theme" (set via /theme or the ctrl+p palette)
+//  2. LOOPY_THEME=light|dark (explicit env override)
+//  3. COLORFGBG (set by many terminals; last field is the bg color index)
+//  4. an OSC 11 background query on /dev/tty with a short timeout
+//  5. default: dark (the safe assumption for coding terminals)
 func detectColorScheme() {
 	setScheme := func(light bool) {
 		SetLightTheme(light)                  // glamour markdown style
 		lipgloss.SetHasDarkBackground(!light) // AdaptiveColor picks
+	}
+	// config theme wins over env (it's set interactively via /theme)
+	if t := strings.ToLower(cfgTheme()); t == "light" || t == "dark" {
+		setScheme(t == "light")
+		return
 	}
 	switch strings.ToLower(os.Getenv("LOOPY_THEME")) {
 	case "light":
@@ -1675,6 +1711,18 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 	case "/tasks":
 		m.append(m.tasksView())
 		return m, nil
+	case "/theme":
+		if len(fields) > 1 {
+			switch fields[1] {
+			case "light", "dark", "auto":
+				m.setTheme(fields[1])
+			default:
+				m.append(errStyle.Render("usage: /theme light|dark|auto"))
+			}
+		} else {
+			m.setTheme(map[string]string{"light": "dark", "dark": "light"}[CurrentTheme()])
+		}
+		return m, nil
 	case "/mouse":
 		m.mouseOn = !m.mouseOn
 		cfg := m.cfg
@@ -1740,7 +1788,7 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 		m.openPicker()
 	case "/help":
 		m.append(dimStyle.Render(
-			"/model <name> [provider] — switch model\n/compact [model] [provider]|off — compact now at 90% context, or pick the compaction model\n/mouse — toggle mouse capture (off = native terminal selection)\n/tasks — list background subagents (task tool with background:true runs concurrently)\n/resume [id] — resume a previous session\n/goal <text> — keep working until the goal is met (resume | clear)\n/clear — reset conversation\n/quit — exit\ntab — complete · ctrl+o — toggle thinking tokens · ctrl+e — expand the last tool result · ctrl+j / shift+enter — newline · ctrl+v — paste image · esc — interrupt the agent · while busy with queued messages: ↑/↓ select, del removes · PgUp/PgDn — scroll · shift-drag — select text (native) · ctrl+c ctrl+c — quit"))
+			"/model <name> [provider] — switch model\n/compact [model] [provider]|off — compact now at 90% context, or pick the compaction model\n/mouse — toggle mouse capture (off = native terminal selection)\n/theme [light|dark|auto] — color scheme (bare toggles)\n/tasks — list background subagents (task tool with background:true runs concurrently)\n/resume [id] — resume a previous session\n/goal <text> — keep working until the goal is met (resume | clear)\n/clear — reset conversation\n/quit — exit\ntab — complete · ctrl+o — toggle thinking tokens · ctrl+e — expand the last tool result · ctrl+j / shift+enter — newline · ctrl+v — paste image · esc — interrupt the agent · while busy with queued messages: ↑/↓ select, del removes · PgUp/PgDn — scroll · shift-drag — select text (native) · ctrl+c ctrl+c — quit"))
 	case "/model":
 		if len(fields) < 2 {
 			m.openModelPicker()

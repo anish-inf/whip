@@ -91,6 +91,7 @@ type Config struct {
 	DefaultEffort   string              `json:"defaultEffort,omitempty"`   // reasoning effort for new sessions: "", "low", "medium", "high"
 	CompactModel    string              `json:"compactModel,omitempty"`    // model for compaction summaries; "" = the conversation's model
 	CompactProvider string              `json:"compactProvider,omitempty"` // provider for the compaction model; "" = the conversation's provider
+	Theme           string              `json:"theme,omitempty"`           // "light", "dark", or "" (auto-detect at startup)
 	Mouse           *bool               `json:"mouse,omitempty"`           // false disables capture so native terminal selection works
 	Providers       map[string]Provider `json:"providers"`
 	Models          map[string]Model    `json:"models"`

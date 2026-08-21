@@ -190,6 +190,19 @@ func (m *model) paletteItems() []paletteItem {
 			},
 			stepBack: func(m *model) { m.showThinking = false; m.flushThink() },
 			stepFwd:  func(m *model) { m.showThinking = true }},
+		{title: "Theme", category: "Display",
+			dynDesc: func(m *model) string { return "current: " + CurrentTheme() },
+			dynHint: func(m *model) string { return "/theme · ←/→" },
+			run: func(m *model) (tea.Model, tea.Cmd) {
+				if CurrentTheme() == "light" {
+					m.setTheme("dark")
+				} else {
+					m.setTheme("light")
+				}
+				return m, nil
+			},
+			stepBack: func(m *model) { m.setTheme("light") },
+			stepFwd:  func(m *model) { m.setTheme("dark") }},
 		{title: "Mouse capture", category: "Display",
 			dynDesc: func(m *model) string { return "off = native terminal selection" },
 			dynHint: func(m *model) string { return "/mouse" },
