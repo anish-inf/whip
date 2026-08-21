@@ -63,7 +63,25 @@ type Model struct {
 	Name      string   `json:"name,omitempty"`
 	Providers []string `json:"providers"`    // provider keys, first is the default
 	ID        string   `json:"id,omitempty"` // model id sent to the API; defaults to the map key
-	MaxTokens int      `json:"maxTokens,omitempty"`
+	// Context is the model's context window (max INPUT tokens). The provider's
+	// /models context_length overrides it when advertised; this is the fallback
+	// and the value shown for providers that don't report one.
+	Context int `json:"context,omitempty"`
+	// MaxOut caps OUTPUT tokens (the max_tokens request param). 0 uses the
+	// provider's max_completion_tokens when advertised, else a sane default.
+	MaxOut int `json:"maxOut,omitempty"`
+	// MaxTokens is the legacy field name for Context (it was misnamed: it held
+	// the context window, not an output cap). Read on load for back-compat.
+	MaxTokens int `json:"maxTokens,omitempty"`
+}
+
+// ContextWindow returns the model's context (input) size, honoring the legacy
+// maxTokens field for configs written before the rename.
+func (m Model) ContextWindow() int {
+	if m.Context > 0 {
+		return m.Context
+	}
+	return m.MaxTokens
 }
 
 // Config is the root of ~/.loopy/config.json (JSONC: comments allowed).
@@ -262,9 +280,9 @@ func Default() *Config {
 			},
 		},
 		Models: map[string]Model{
-			"kimi-k3-fast":           {Providers: []string{"inference"}, MaxTokens: 131072},
-			"glm-5.2-fast":           {Providers: []string{"inference"}, MaxTokens: 128000},
-			"deepseek-v4-flash-0731": {Providers: []string{"inference"}, MaxTokens: 384000},
+			"kimi-k3-fast":           {Providers: []string{"inference"}, Context: 131072},
+			"glm-5.2-fast":           {Providers: []string{"inference"}, Context: 128000},
+			"deepseek-v4-flash-0731": {Providers: []string{"inference"}, Context: 384000},
 		},
 	}
 }

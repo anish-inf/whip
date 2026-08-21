@@ -240,7 +240,12 @@ func (m *model) fetchCatalogs() {
 		config.LogEvent("catalog.fetch", fmt.Sprintf("%s ok: %d models", name, len(infos)))
 		models := make([]config.ModelInfoLite, len(infos))
 		for i, mi := range infos {
-			models[i] = config.ModelInfoLite{ID: mi.ID, ContextLength: mi.ContextLength, ReasoningEfforts: mi.ReasoningEfforts}
+			models[i] = config.ModelInfoLite{
+				ID:                  mi.ID,
+				ContextLength:       mi.ContextLength,
+				MaxCompletionTokens: mi.MaxCompletionTokens,
+				ReasoningEfforts:    mi.ReasoningEfforts,
+			}
 		}
 		cats[name] = config.Catalog{FetchedAt: time.Now(), BaseURL: prov.BaseURL, Models: models}
 		dirty = true

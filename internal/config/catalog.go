@@ -19,9 +19,10 @@ type Catalog struct {
 
 // ModelInfoLite is the subset of the provider's /models entry loopy uses.
 type ModelInfoLite struct {
-	ID               string   `json:"id"`
-	ContextLength    int      `json:"contextLength,omitempty"` // model's context window, 0 if unadvertised
-	ReasoningEfforts []string `json:"reasoningEfforts,omitempty"`
+	ID                  string   `json:"id"`
+	ContextLength       int      `json:"contextLength,omitempty"`       // model's context window (input), 0 if unadvertised
+	MaxCompletionTokens int      `json:"maxCompletionTokens,omitempty"` // provider's output cap, 0 if unadvertised
+	ReasoningEfforts    []string `json:"reasoningEfforts,omitempty"`
 }
 
 // ContextLength reports the advertised context window for a model id
@@ -30,6 +31,17 @@ func (c Catalog) ContextLength(id string) int {
 	for _, mi := range c.Models {
 		if mi.ID == id {
 			return mi.ContextLength
+		}
+	}
+	return 0
+}
+
+// MaxCompletionTokens reports the advertised output-token cap for a model id
+// (0 when unknown — callers must fall back to the configured context).
+func (c Catalog) MaxCompletionTokens(id string) int {
+	for _, mi := range c.Models {
+		if mi.ID == id {
+			return mi.MaxCompletionTokens
 		}
 	}
 	return 0
