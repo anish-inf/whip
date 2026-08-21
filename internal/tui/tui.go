@@ -390,13 +390,38 @@ func (m *model) inputContentHeight() int {
 	return h
 }
 
+// growInput resizes the input box to fit its content (capped at MaxHeight).
+// When the box grows, the textarea's internal viewport keeps the scroll offset
+// it computed for the smaller height — repositionView only ever scrolls down
+// to follow the cursor, never back up — so the top lines would be clipped out
+// of view. The textarea doesn't expose its viewport, so on growth we rebuild
+// it at the new height (a fresh viewport starts at the top), preserving the
+// content and cursor-at-end.
+func (m *model) growInput() {
+	if m.width <= 0 {
+		return
+	}
+	h := max(1, min(m.inputContentHeight(), m.input.MaxHeight))
+	if h == m.input.Height() {
+		return
+	}
+	if h < m.input.Height() {
+		m.input.SetHeight(h) // shrinking never clips
+		return
+	}
+	val := m.input.Value()
+	ti := newInput()
+	ti.SetWidth(m.input.Width() + 2) // Width() is content width; SetWidth takes total
+	ti.SetHeight(h)
+	ti.SetValue(val)
+	ti.CursorEnd()
+	m.input = ti
+}
+
 // layout gives the viewport whatever height the chrome doesn't need,
 // growing the input box with its content so the whole prompt stays visible.
 func (m *model) layout() {
-	// wrapped content height, capped by textarea.MaxHeight
-	if m.width > 0 {
-		m.input.SetHeight(max(1, min(m.inputContentHeight(), m.input.MaxHeight)))
-	}
+	m.growInput()
 	chrome := 4 + m.input.Height() // header + tips + blanks + input + bottom pad
 	if m.busy {
 		chrome += 2 // blank line above the spinner + the spinner line itself
