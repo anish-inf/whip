@@ -46,6 +46,7 @@ const (
 	panelEffort
 	panelGoal
 	panelCompact
+	panelTheme
 )
 
 // ppanel is a palette sub-panel: the interactive editor behind a row. Key
@@ -64,8 +65,8 @@ type ppanel struct {
 	prepare string // panelGoal: text submitted when the editor closes
 
 	cands []string // panelCompact: model names from config
-	list  []string // panelCompact: "current" + cands
-	midx  int      // panelCompact: selection, 0 = current model
+	list  []string // panelCompact: "current" + cands; panelTheme: {"auto","light","dark"}
+	midx  int      // panelCompact: selection, 0 = current model; panelTheme: selection
 
 	err string // inline error from a failed apply (bad compact model, …)
 }
@@ -192,14 +193,21 @@ func (m *model) paletteItems() []paletteItem {
 			stepFwd:  func(m *model) { m.showThinking = true }},
 		{title: "Theme", category: "Display",
 			dynDesc: func(m *model) string { return "current: " + CurrentTheme() },
-			dynHint: func(m *model) string { return "/theme · ←/→" },
-			run: func(m *model) (tea.Model, tea.Cmd) {
-				if CurrentTheme() == "light" {
-					m.setTheme("dark")
-				} else {
-					m.setTheme("light")
+			dynHint: func(m *model) string { return "/theme" },
+			panel: func(m *model) *ppanel {
+				list := []string{"auto", "light", "dark"}
+				cur := m.cfg.Theme
+				if cur == "" {
+					cur = "auto"
 				}
-				return m, nil
+				pp := &ppanel{kind: panelTheme, title: "Theme", list: list}
+				for i, t := range list {
+					if t == cur {
+						pp.midx = i
+						break
+					}
+				}
+				return pp
 			},
 			stepBack: func(m *model) { m.setTheme("light") },
 			stepFwd:  func(m *model) { m.setTheme("dark") }},
@@ -238,6 +246,20 @@ func (m *model) openPalette() {
 	all := m.paletteItems()
 	m.palette = &palette{all: all}
 	m.palette.applyFilter(m)
+}
+
+// openPaletteOn opens the palette and drills straight into the named row's
+// sub-panel (used by bare slash commands like /theme that should land on a
+// switcher, not toggle blindly).
+func (m *model) openPaletteOn(title string) {
+	m.openPalette()
+	for i, it := range m.palette.items {
+		if strings.EqualFold(it.title, title) && it.panel != nil {
+			m.palette.idx = i
+			m.palette.stack = append(m.palette.stack, it.panel(m))
+			return
+		}
+	}
 }
 
 // paletteFilterMatch is a cheap fuzzy match: all query runes must appear in
@@ -475,6 +497,21 @@ func (m *model) panelKey(msg tea.KeyMsg, pp *ppanel) (tea.Model, tea.Cmd) {
 			}
 		}
 
+	case panelTheme:
+		switch msg.Type {
+		case tea.KeyEsc, tea.KeyCtrlC:
+			pop()
+		case tea.KeyUp, tea.KeyCtrlP, tea.KeyShiftTab:
+			pp.midx = (pp.midx - 1 + len(pp.list)) % len(pp.list)
+		case tea.KeyDown, tea.KeyCtrlN, tea.KeyTab:
+			pp.midx = (pp.midx + 1) % len(pp.list)
+		case tea.KeyLeft, tea.KeyRight, tea.KeyEnter:
+			m.setTheme(pp.list[pp.midx]) // applies live; re-renders the transcript
+			if msg.Type == tea.KeyEnter {
+				pop()
+			}
+		}
+
 	case panelGoal:
 		switch msg.Type {
 		case tea.KeyEsc, tea.KeyCtrlC:
@@ -680,6 +717,24 @@ func (m *model) panelView(pp *ppanel) string {
 		}
 		if pp.err != "" {
 			b.WriteString(errStyle.Render("  "+pp.err) + "\n")
+		}
+		b.WriteString("\n" + dimStyle.Render("  ↑/↓ select · enter/←/→ apply · esc back"))
+
+	case panelTheme:
+		cur := m.cfg.Theme
+		if cur == "" {
+			cur = "auto"
+		}
+		for i, name := range pp.list {
+			mark := ""
+			if name == cur {
+				mark = dimStyle.Render("  (current)")
+			}
+			if i == pp.midx {
+				b.WriteString(botStyle.Render(" → "+name) + mark + "\n")
+			} else {
+				b.WriteString("   " + name + mark + "\n")
+			}
 		}
 		b.WriteString("\n" + dimStyle.Render("  ↑/↓ select · enter/←/→ apply · esc back"))
 

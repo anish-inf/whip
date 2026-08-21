@@ -1720,7 +1720,7 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 				m.append(errStyle.Render("usage: /theme light|dark|auto"))
 			}
 		} else {
-			m.setTheme(map[string]string{"light": "dark", "dark": "light"}[CurrentTheme()])
+			m.openPaletteOn("theme") // bare: open the switcher, don't toggle blind
 		}
 		return m, nil
 	case "/mouse":

@@ -4,7 +4,10 @@ import (
 	"strings"
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
+
+	"github.com/context-labs/loopy/internal/config"
 )
 
 // /theme light must switch markdown rendering to the light style (dark text
@@ -38,17 +41,41 @@ func TestThemeCommandSwitchesRendering(t *testing.T) {
 	m.setTheme("dark") // leave tests in dark default
 }
 
-// bare /theme toggles.
-func TestThemeToggleBare(t *testing.T) {
+// bare /theme opens the theme switcher (palette panel) instead of toggling
+// blindly — the whole point is to see the choices.
+func TestThemeBareOpensSwitcher(t *testing.T) {
 	m := compactCmdModel()
-	m.setTheme("dark")
 	m.command("/theme")
-	if CurrentTheme() != "light" {
-		t.Fatalf("bare /theme should toggle to light, got %q", CurrentTheme())
+	if m.palette == nil {
+		t.Fatal("bare /theme should open the palette")
 	}
-	m.command("/theme")
-	if CurrentTheme() != "dark" {
-		t.Fatalf("second toggle should return to dark, got %q", CurrentTheme())
+	pp := m.palette.top()
+	if pp == nil || pp.kind != panelTheme {
+		t.Fatalf("expected the theme panel, got %+v", pp)
+	}
+	// the panel lists auto/light/dark with the current one selected
+	if len(pp.list) != 3 || pp.list[0] != "auto" || pp.list[1] != "light" || pp.list[2] != "dark" {
+		t.Fatalf("theme panel list: %v", pp.list)
+	}
+	// navigate to light and apply with enter
+	tm, _ := m.paletteKey(tea.KeyMsg{Type: tea.KeyDown})
+	m = tm.(*model)
+	tm, _ = m.paletteKey(tea.KeyMsg{Type: tea.KeyEnter})
+	m = tm.(*model)
+	if CurrentTheme() != "light" {
+		t.Fatalf("selecting light in the switcher should apply it, got %q", CurrentTheme())
+	}
+	if m.palette.top() != nil {
+		t.Fatal("enter should pop back to the root list")
+	}
+	m.setTheme("dark") // leave dark default for other tests
+}
+
+// Theme defaults to auto ("" in config) unless the user picks one.
+func TestThemeDefaultsToAuto(t *testing.T) {
+	cfg := config.Default()
+	if cfg.Theme != "" {
+		t.Fatalf("default theme should be auto (\"\"), got %q", cfg.Theme)
 	}
 }
 
