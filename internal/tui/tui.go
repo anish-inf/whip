@@ -34,7 +34,10 @@ type textMsg string
 type toolStartMsg struct{ name, args string }
 type toolEndMsg struct{ name, result string }
 type steeredMsg string
-type turnDoneMsg struct{ err error }
+type turnDoneMsg struct {
+	final string
+	err   error
+}
 
 // menu is the open completion dropdown.
 type menu struct {
@@ -76,6 +79,9 @@ type model struct {
 
 	queue      []string // messages typed while busy, sent after the turn ends
 	interrupt1 bool     // first ctrl+c pressed while busy; second cancels
+
+	goal       string // active /goal; the loop continues until GOAL_MET
+	goalRounds int    // continuation turns spent on the current goal
 }
 
 // picker is the /resume session browser. metas is newest-first; the list is
@@ -156,7 +162,12 @@ func (m *model) resume(id string) error {
 	}
 	m.histIdx = len(m.hist)
 	m.blocks = nil
+	m.goal = meta.Goal
+	m.goalRounds = 0
 	m.append(dimStyle.Render(fmt.Sprintf("resumed %s · %s · %s @ %s", meta.ID, meta.Title, m.modelName, m.provName)))
+	if m.goal != "" {
+		m.append(dimStyle.Render("◎ goal restored — /goal resume to keep working on it"))
+	}
 	m.seedTranscript(msgs)
 	return nil
 }
@@ -199,7 +210,17 @@ func (m *model) persist() {
 		m.append(errStyle.Render("session save failed: " + err.Error()))
 		return
 	}
+	m.store.SetGoal(m.sessionID, m.goal)
 	m.saved = len(m.agent.Messages)
+}
+
+// setGoal updates the active goal and persists it with the session.
+func (m *model) setGoal(goal string) {
+	m.goal = goal
+	m.goalRounds = 0
+	if m.store != nil && m.sessionID != "" {
+		m.store.SetGoal(m.sessionID, goal)
+	}
 }
 
 func buildAgent(cfg *config.Config, modelName, provName, sysPrompt string) (*agent.Agent, string, string, error) {
@@ -353,6 +374,20 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			next := m.queue[0]
 			m.queue = m.queue[1:]
 			return m.submit(next)
+		}
+		// goal loop: keep working until the model explicitly declares GOAL_MET
+		if m.goal != "" && msg.err == nil {
+			if goalMet(msg.final) {
+				m.append(dimStyle.Render("◎ goal met after " + fmt.Sprint(m.goalRounds) + " round(s)"))
+				m.setGoal("")
+				return m, nil
+			}
+			if m.goalRounds >= maxGoalRounds {
+				m.append(errStyle.Render(fmt.Sprintf("◎ goal paused after %d rounds — /goal resume to continue, /goal clear to drop", m.goalRounds)))
+				return m, nil
+			}
+			m.goalRounds++
+			return m.submit(goalContinuePrompt(m.goal))
 		}
 		return m, nil
 
@@ -662,7 +697,7 @@ func (m *model) submit(text string) (tea.Model, tea.Cmd) {
 	}
 
 	go func() {
-		_, err := m.agent.Turn(ctx, expandMentions(text), agent.Events{
+		final, err := m.agent.Turn(ctx, expandMentions(text), agent.Events{
 			OnText: onText,
 			OnToolStart: func(n, a string) {
 				flush()
@@ -675,7 +710,7 @@ func (m *model) submit(text string) (tea.Model, tea.Cmd) {
 			},
 		})
 		flush()
-		p.Send(turnDoneMsg{err})
+		p.Send(turnDoneMsg{final: final, err: err})
 	}()
 	m.append(youStyle.Render("❯ ") + text)
 	return m, m.spin.Tick
@@ -689,9 +724,35 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 	case "/clear":
 		m.agent.Messages = m.agent.Messages[:1] // keep system prompt
 		m.blocks = nil
+		m.setGoal("")    // clear before detaching so the old session's goal is dropped too
 		m.sessionID = "" // next turn starts a fresh session
 		m.saved = 1
 		m.append(dimStyle.Render("(conversation cleared)"))
+	case "/goal":
+		switch {
+		case len(fields) == 1:
+			if m.goal == "" {
+				m.append(dimStyle.Render("no goal set — /goal <text> to set one"))
+			} else {
+				m.append(dimStyle.Render(fmt.Sprintf("◎ goal (round %d/%d): %s", m.goalRounds, maxGoalRounds, m.goal)))
+			}
+		case fields[1] == "clear":
+			m.setGoal("")
+			m.append(dimStyle.Render("(goal cleared)"))
+		case fields[1] == "resume":
+			if m.goal == "" {
+				m.append(errStyle.Render("no goal to resume — set one with /goal <text>"))
+				break
+			}
+			m.goalRounds = 0
+			m.append(dimStyle.Render("◎ resuming goal: " + m.goal))
+			return m.submit(goalContinuePrompt(m.goal))
+		default:
+			goal := strings.TrimSpace(strings.TrimPrefix(text, "/goal"))
+			m.setGoal(goal)
+			m.append(dimStyle.Render("◎ goal set: " + goal))
+			return m.submit(goal)
+		}
 	case "/resume":
 		if len(fields) > 1 {
 			if err := m.resume(fields[1]); err != nil {
@@ -702,7 +763,7 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 		m.openPicker()
 	case "/help":
 		m.append(dimStyle.Render(
-			"/model <name> [provider] — switch model\n/resume [id] — resume a previous session\n/clear — reset conversation\n/quit — exit\ntab — complete · PgUp/PgDn — scroll · ctrl+c — interrupt / quit"))
+			"/model <name> [provider] — switch model\n/resume [id] — resume a previous session\n/goal <text> — keep working until the goal is met (resume | clear)\n/clear — reset conversation\n/quit — exit\ntab — complete · PgUp/PgDn — scroll · ctrl+c — interrupt / quit"))
 	case "/model":
 		if len(fields) < 2 {
 			names := ""
@@ -743,6 +804,9 @@ func (m *model) currentView() string {
 func (m *model) View() string {
 	var b strings.Builder
 	header := fmt.Sprintf(" loopy · %s @ %s · %s", m.modelName, m.provName, cwd())
+	if m.goal != "" {
+		header += " · ◎ " + truncLine(m.goal, 40)
+	}
 	if !m.follow {
 		header += fmt.Sprintf(" · ↑ %d%%", int(m.vp.ScrollPercent()*100))
 	}

@@ -53,6 +53,8 @@ Full exploration reports: [learnings/other-harnesses/opencode/](learnings/other-
 
 ## Agent loop
 
+- [x] `/goal <text>` (codex-style): keep driving turns until the model verifies and explicitly declares `GOAL_MET` — continuing is the default, so it can't terminate early like claude's; `/goal resume` re-engages (also after `/resume` of a session — goals persist), `/goal clear` drops, 20-round cap pauses with a resume hint
+
 - [ ] Parallel tool-call execution with per-path file mutation lock (pi: `withFileMutationQueue`, `executeToolCallsParallel`)
 - [ ] Retry with backoff on provider errors (pi settings: `retry: {maxRetries, baseDelayMs}`)
 - [ ] Streamed partial tool output (bash `onUpdate` throttled at 100ms in pi)

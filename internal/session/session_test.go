@@ -96,3 +96,25 @@ func TestStoreEdgeCases(t *testing.T) {
 		t.Fatal("expected corrupt-row error")
 	}
 }
+
+func TestGoalPersistence(t *testing.T) {
+	st, err := Open(filepath.Join(t.TempDir(), "s.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	id, _ := st.Create("/tmp", "m", "p")
+	st.Save(id, 1, []llm.Message{{Role: "system"}, {Role: "user", Content: "q"}}, "m", "p")
+
+	if err := st.SetGoal(id, "finish the thing"); err != nil {
+		t.Fatal(err)
+	}
+	meta, _, err := st.Load(id)
+	if err != nil || meta.Goal != "finish the thing" {
+		t.Fatalf("goal not restored: %+v %v", meta, err)
+	}
+	st.SetGoal(id, "")
+	if meta, _, _ = st.Load(id); meta.Goal != "" {
+		t.Fatalf("goal not cleared: %+v", meta)
+	}
+}

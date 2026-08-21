@@ -15,6 +15,7 @@ type cand struct {
 
 var commands = []cand{
 	{"/clear", "Reset the conversation"},
+	{"/goal", "<text> — work until done; also: resume, clear"},
 	{"/help", "Show available commands"},
 	{"/model", "<model> [provider] — switch model"},
 	{"/quit", "Exit loopy"},

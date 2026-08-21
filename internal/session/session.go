@@ -23,7 +23,8 @@ CREATE TABLE IF NOT EXISTS sessions (
 	cwd        TEXT NOT NULL,
 	model      TEXT NOT NULL,
 	provider   TEXT NOT NULL,
-	title      TEXT NOT NULL DEFAULT ''
+	title      TEXT NOT NULL DEFAULT '',
+	goal       TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS messages (
 	session_id TEXT NOT NULL REFERENCES sessions(id),
@@ -40,6 +41,7 @@ type Meta struct {
 	Model     string
 	Provider  string
 	CWD       string
+	Goal      string
 	UpdatedAt time.Time
 }
 
@@ -57,7 +59,15 @@ func Open(path string) (*Store, error) {
 	if _, err := db.Exec(schema); err != nil {
 		return nil, err
 	}
+	// migrate pre-goal databases; duplicate-column errors are expected
+	db.Exec(`ALTER TABLE sessions ADD COLUMN goal TEXT NOT NULL DEFAULT ''`)
 	return &Store{db: db}, nil
+}
+
+// SetGoal stores the session's active goal ("" clears it).
+func (s *Store) SetGoal(id, goal string) error {
+	_, err := s.db.Exec(`UPDATE sessions SET goal=? WHERE id=?`, goal, id)
+	return err
 }
 
 func (s *Store) Close() error { return s.db.Close() }
@@ -108,7 +118,7 @@ func (s *Store) Save(id string, from int, msgs []llm.Message, model, provider st
 
 // Load resolves idOrPrefix to a session and returns its metadata and messages.
 func (s *Store) Load(idOrPrefix string) (Meta, []llm.Message, error) {
-	rows, err := s.db.Query(`SELECT id, title, model, provider, cwd, updated_at FROM sessions WHERE id LIKE ?||'%' LIMIT 3`, idOrPrefix)
+	rows, err := s.db.Query(`SELECT id, title, model, provider, cwd, goal, updated_at FROM sessions WHERE id LIKE ?||'%' LIMIT 3`, idOrPrefix)
 	if err != nil {
 		return Meta{}, nil, err
 	}
@@ -147,7 +157,7 @@ func (s *Store) Load(idOrPrefix string) (Meta, []llm.Message, error) {
 
 // Recent returns up to n sessions, newest first.
 func (s *Store) Recent(n int) ([]Meta, error) {
-	rows, err := s.db.Query(`SELECT id, title, model, provider, cwd, updated_at FROM sessions
+	rows, err := s.db.Query(`SELECT id, title, model, provider, cwd, goal, updated_at FROM sessions
 		WHERE EXISTS (SELECT 1 FROM messages WHERE session_id = sessions.id)
 		ORDER BY updated_at DESC LIMIT ?`, n)
 	if err != nil {
@@ -181,7 +191,7 @@ func scanMetas(rows *sql.Rows) ([]Meta, error) {
 	for rows.Next() {
 		var m Meta
 		var updated string
-		if err := rows.Scan(&m.ID, &m.Title, &m.Model, &m.Provider, &m.CWD, &updated); err != nil {
+		if err := rows.Scan(&m.ID, &m.Title, &m.Model, &m.Provider, &m.CWD, &m.Goal, &updated); err != nil {
 			return nil, err
 		}
 		m.UpdatedAt, _ = time.Parse(time.RFC3339, updated)
