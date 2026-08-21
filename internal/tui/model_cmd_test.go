@@ -57,28 +57,22 @@ func TestModelBareEnterOpensPicker(t *testing.T) {
 	}
 }
 
-// Regression: the same via the ctrl+p palette (menu pre-focused, /model selected).
+// The ctrl+p palette's first suggestion is Switch model; enter opens the
+// interactive model picker.
 func TestModelPaletteEnterOpensPicker(t *testing.T) {
 	m := modelCmdModel()
-	// ctrl+p prefills "/" and opens the menu
 	tm, _ := m.key(tea.KeyMsg{Type: tea.KeyCtrlP})
 	m = tm.(*model)
-	_ = m
-	if m.menu == nil {
-		t.Fatal("ctrl+p should open the command menu")
+	if m.palette == nil {
+		t.Fatal("ctrl+p should open the command palette")
 	}
-	// navigate down to /model (sorted: clear, compact, effort, goal, help, model)
-	for i := 0; i < 5; i++ {
-		tm, _ := m.key(tea.KeyMsg{Type: tea.KeyDown})
-		m = tm.(*model)
-	}
-	if got := m.menu.cands[m.menu.idx].Text; got != "/model" {
-		t.Fatalf("expected /model selected, got %q", got)
+	if len(m.palette.items) == 0 || m.palette.items[0].title != "Switch model" {
+		t.Fatalf("first suggestion should be Switch model, got %+v", m.palette.items)
 	}
 	tm, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = tm.(*model)
 	if m.mpicker == nil {
-		t.Fatalf("palette /model + enter should open the picker; input=%q", m.input.Value())
+		t.Fatalf("palette Switch model + enter should open the picker; input=%q", m.input.Value())
 	}
 }
 
