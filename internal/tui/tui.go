@@ -1948,7 +1948,7 @@ func wrap(s string, width int) string {
 	if width <= 0 {
 		return s
 	}
-	return lipgloss.NewStyle().Width(width).Render(s)
+	return ansi.Wrap(s, width, " ") // word-aware: break at spaces, not mid-token
 }
 
 func truncLine(s string, width int) string {
