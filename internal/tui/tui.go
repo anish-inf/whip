@@ -24,6 +24,8 @@ import (
 	"github.com/context-labs/loopy/internal/skills"
 	"github.com/context-labs/loopy/internal/tools"
 	"github.com/context-labs/loopy/internal/tools/bashrun"
+
+	"github.com/charmbracelet/x/ansi"
 )
 
 var (
@@ -309,11 +311,7 @@ func (m *model) seedTranscript(msgs []llm.Message) {
 				m.appendAssistantBlock(strings.TrimRight(msg.Content, "\n"))
 			}
 			for _, tc := range msg.ToolCalls {
-				args := tc.Function.Arguments
-				if len(args) > 120 {
-					args = args[:120] + "…"
-				}
-				m.append(toolStyle.Render("⚒ "+tc.Function.Name+" ") + dimStyle.Render(args))
+				m.append(toolStyle.Render("⚒ "+tc.Function.Name+" ") + dimStyle.Render(tc.Function.Arguments))
 			}
 		}
 	}
@@ -723,11 +721,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case toolStartMsg:
 		m.flushThink()
 		m.flushCurrent()
-		args := msg.args
-		if len(args) > 120 {
-			args = args[:120] + "…"
-		}
-		m.append(toolStyle.Render("⚒ "+msg.name+" ") + dimStyle.Render(args))
+		// full args, wrapped at render time like every other block — no
+		// truncation: the command being run must always be fully visible
+		m.append(toolStyle.Render("⚒ "+msg.name+" ") + dimStyle.Render(msg.args))
 		return m, nil
 
 	case toolEndMsg:
@@ -1820,9 +1816,9 @@ func (m *model) View() string {
 		}
 		b.WriteString(dimStyle.Render(fmt.Sprintf(" ⧗ queued (%d) — enter on empty input to steer into this turn%s", len(m.queue), nav)) + "\n")
 		for i, q := range m.queue {
-			line := truncLine(youStyle.Render(" ❯ ")+q, m.width)
+			line := wrap(youStyle.Render(" ❯ ")+q, m.width)
 			if i == m.queueSel {
-				line = botStyle.Render(" → ") + truncLine(q, max(m.width-4, 8)) + dimStyle.Render("  (del to remove)")
+				line = wrap(botStyle.Render(" → ")+q+dimStyle.Render("  (del to remove)"), m.width)
 			}
 			b.WriteString(line + "\n")
 		}
@@ -1863,10 +1859,10 @@ func (m *model) pickerView() string {
 		}
 		line := fmt.Sprintf("%s  %s · %s · %s @ %s", meta.ID, title, ago(meta.UpdatedAt), meta.Model, meta.Provider)
 		if i != p.idx {
-			rows = append(rows, truncLine("    "+line, m.width))
+			rows = append(rows, wrap("    "+line, m.width))
 			continue
 		}
-		rows = append(rows, botStyle.Render(truncLine("  → "+line, m.width)))
+		rows = append(rows, wrap(botStyle.Render("  → ")+line, m.width))
 		prev := p.previews[meta.ID]
 		rows = append(rows, previewBlock(youStyle.Render("❯ "), prev[0], m.width)...)
 		rows = append(rows, previewBlock(botStyle.Render("● "), prev[1], m.width)...)
@@ -1880,21 +1876,31 @@ func (m *model) pickerView() string {
 }
 
 // previewBlock renders up to previewLines lines of a message under a prefix.
+// previewBlock renders up to previewLines *rendered* lines of a message
+// under a prefix, wrapping each source line at the given width (no
+// truncation — long lines wrap instead of ending in "…").
 func previewBlock(prefix, text string, width int) []string {
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return nil
 	}
-	lines := strings.Split(text, "\n")
-	out := []string{"      " + prefix + truncLine(lines[0], max(width-8, 8))}
-	for _, l := range lines[1:] {
-		if len(out) == previewLines {
-			out = append(out, dimStyle.Render(fmt.Sprintf("        … +%d lines", len(lines)-previewLines)))
-			break
+	w := max(width-8, 8)
+	var lines []string
+	for i, l := range strings.Split(text, "\n") {
+		wrapped := strings.Split(ansi.Hardwrap(l, w, true), "\n")
+		for j, wl := range wrapped {
+			if i == 0 && j == 0 {
+				lines = append(lines, "      "+prefix+wl)
+			} else {
+				lines = append(lines, "        "+wl)
+			}
 		}
-		out = append(out, dimStyle.Render("        "+truncLine(l, max(width-8, 8))))
 	}
-	return out
+	if len(lines) > previewLines {
+		lines = append(lines[:previewLines],
+			dimStyle.Render(fmt.Sprintf("        … +%d lines (full text after resume)", len(lines)-previewLines)))
+	}
+	return lines
 }
 
 func ago(t time.Time) string {
