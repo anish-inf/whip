@@ -31,19 +31,21 @@ func catalogPath() (string, error) {
 	return filepath.Join(dir, "models.json"), nil
 }
 
-// LoadCatalogs reads ~/.loopy/models.json (missing file is not an error).
+// LoadCatalogs reads ~/.loopy/models.json. A missing or unreadable file is
+// not an error and yields an empty (non-nil) map, so callers can always write
+// into the result.
 func LoadCatalogs() map[string]Catalog {
+	cats := map[string]Catalog{}
 	p, err := catalogPath()
 	if err != nil {
-		return nil
+		return cats
 	}
 	data, err := os.ReadFile(p)
 	if err != nil {
-		return nil
+		return cats
 	}
-	var cats map[string]Catalog
-	if json.Unmarshal(data, &cats) != nil {
-		return nil
+	if json.Unmarshal(data, &cats) != nil || cats == nil {
+		return map[string]Catalog{}
 	}
 	return cats
 }

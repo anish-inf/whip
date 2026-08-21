@@ -173,6 +173,9 @@ func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string) (s
 // and sends the merged result to the UI.
 func (m *model) fetchCatalogs() {
 	cats := config.LoadCatalogs()
+	if cats == nil { // defensive; LoadCatalogs already returns non-nil
+		cats = map[string]config.Catalog{}
+	}
 	dirty := false
 	for name, prov := range m.cfg.Providers {
 		if c, ok := cats[name]; ok && !c.Stale() && c.BaseURL == prov.BaseURL {

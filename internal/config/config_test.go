@@ -246,3 +246,15 @@ func TestSaveWritesJSONCHeader(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestLoadCatalogsAlwaysNonNil(t *testing.T) {
+	t.Setenv("HOME", t.TempDir()) // no ~/.loopy/models.json exists
+	cats := LoadCatalogs()
+	if cats == nil {
+		t.Fatal("LoadCatalogs must return a non-nil map so callers can write into it")
+	}
+	cats["inference"] = Catalog{} // must not panic
+	if len(cats) != 1 {
+		t.Fatalf("expected to hold the written entry, got %d", len(cats))
+	}
+}
