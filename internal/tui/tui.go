@@ -602,10 +602,11 @@ func detectColorScheme() {
 			}
 		}
 	}
-	if os.Getenv("SSH_TTY") != "" || os.Getenv("SSH_CONNECTION") != "" ||
-		os.Getenv("MOSH_IP") != "" || os.Getenv("TMUX") != "" {
-		return // risky to query: keep the dark default
-	}
+	// Query the terminal directly whenever we have one. OSC 11 passes through
+	// ssh and tmux fine (tmux needs no passthrough for a *response*: the pane
+	// answers the query itself); mosh is the exception — its terminal layer
+	// swallows the round trip, so the 300ms timeout keeps startup snappy and
+	// we keep the dark default.
 	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
 	if err != nil {
 		return

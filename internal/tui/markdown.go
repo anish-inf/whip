@@ -5,6 +5,7 @@ import (
 	"strings"
 	"sync"
 
+	chromaStyles "github.com/alecthomas/chroma/v2/styles"
 	"github.com/charmbracelet/glamour"
 	glamouransi "github.com/charmbracelet/glamour/ansi"
 	"github.com/charmbracelet/glamour/styles"
@@ -70,6 +71,7 @@ func stripLinePadding(s string) string {
 var (
 	mdMu           sync.Mutex
 	mdAtWidth      int
+	mdAtLight      bool // theme the cached renderer was built for
 	mdRendererC    *glamour.TermRenderer
 	mdRendererErr  bool // style init failed once: don't retry per message
 	mdLight        bool // light terminal background detected (set at startup)
@@ -86,13 +88,31 @@ func SetLightTheme(light bool) {
 	mdMu.Unlock()
 }
 
-// mdStyle picks the glamour style for the detected background.
+// unregisterChromaStyle drops glamour's global chroma style ("charm").
+// Glamour registers it once per process, guarded by "if not present" — so
+// the FIRST theme to render a code block wins forever and a later theme
+// switch keeps the wrong syntax colors (a light render poisons every later
+// dark render with color 235). Deleting the entry on theme change lets the
+// next render register the right palette.
+func unregisterChromaStyle() {
+	delete(chromaStyles.Registry, "charm")
+}
+
+// mdStyle picks the glamour style for the detected background. The light
+// variant gets a higher-contrast inline-code treatment: stock Light uses
+// salmon (203) on near-white (254), which is nearly unreadable — dark red on
+// a light-gray chip instead.
 func mdStyle() glamouransi.StyleConfig {
 	if mdLight {
-		return styles.LightStyleConfig
+		st := styles.LightStyleConfig
+		st.Code.Color = strPtr("124")           // dark red
+		st.Code.BackgroundColor = strPtr("255") // lightest gray chip
+		return st
 	}
 	return styles.DarkStyleConfig
 }
+
+func strPtr(s string) *string { return &s }
 
 // mdRenderer returns a cached renderer per width (glamour builds a
 // style-traversed renderer per Render call otherwise).
@@ -102,9 +122,16 @@ func mdRenderer(width int) *glamour.TermRenderer {
 	if mdRendererErr {
 		return nil
 	}
-	if mdRendererC != nil && mdAtWidth == width {
+	// Glamour registers its chroma style ("charm") in a process-global
+	// registry, first-registration-wins — so a render under one theme leaves
+	// that theme's syntax colors in place for every later render under the
+	// other theme. The registry entry is keyed by name, not theme: drop it
+	// whenever the cached renderer's theme isn't the current one, and also
+	// when the entry's origin is unknown (first call after a theme flip).
+	if mdRendererC != nil && mdAtWidth == width && mdAtLight == mdLight {
 		return mdRendererC
 	}
+	unregisterChromaStyle()
 	st := mdStyle()
 	margin := uint(2)
 	st.Document.Margin = &margin
@@ -117,7 +144,7 @@ func mdRenderer(width int) *glamour.TermRenderer {
 		mdRendererErr = true
 		return nil
 	}
-	mdRendererC, mdAtWidth = r, width
+	mdRendererC, mdAtWidth, mdAtLight = r, width, mdLight
 	return r
 }
 
