@@ -118,6 +118,7 @@ func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string) (s
 	ti.BlurredStyle.Prompt = dimStyle
 	ti.Focus()
 
+	ag.Effort = cfg.DefaultEffort
 	m := &model{
 		cfg: cfg, agent: ag, modelName: mn, provName: pn, sysPrompt: sysPrompt,
 		input: ti, spin: spinner.New(spinner.WithSpinner(spinner.Dot)), follow: true, saved: 1,
@@ -216,6 +217,15 @@ func (m *model) persist() {
 	}
 	m.store.SetGoal(m.sessionID, m.goal)
 	m.saved = len(m.agent.Messages)
+}
+
+// setEffort changes the reasoning effort and stores it as the new default.
+func (m *model) setEffort(lv string) {
+	m.agent.Effort = lv
+	m.cfg.DefaultEffort = lv
+	if err := m.cfg.Save(); err != nil {
+		m.append(errStyle.Render("config save failed: " + err.Error()))
+	}
 }
 
 // setGoal updates the active goal and persists it with the session.
@@ -319,7 +329,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// clicking the ⚡ control in the header cycles reasoning effort
 		if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft &&
 			msg.Y == 0 && msg.X >= m.effortX {
-			m.agent.Effort = nextEffort(m.agent.Effort)
+			m.setEffort(nextEffort(m.agent.Effort))
 			return m, nil
 		}
 		if m.picker == nil && m.mpicker == nil {
@@ -559,6 +569,10 @@ func (m *model) switchModel(name, prov string) {
 	ag.Effort = m.agent.Effort
 	ag.Messages = append(ag.Messages, m.agent.Messages[1:]...) // carry history
 	m.agent, m.modelName, m.provName = ag, mn, pn
+	m.cfg.DefaultModel, m.cfg.DefaultProvider = mn, pn // store the switch as the new default
+	if err := m.cfg.Save(); err != nil {
+		m.append(errStyle.Render("config save failed: " + err.Error()))
+	}
 	m.append(dimStyle.Render("→ " + mn + " @ " + pn))
 }
 
@@ -798,9 +812,9 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 				m.append(errStyle.Render("unknown effort level; use off, low, medium, or high"))
 				break
 			}
-			m.agent.Effort = lv
+			m.setEffort(lv)
 		} else {
-			m.agent.Effort = nextEffort(m.agent.Effort)
+			m.setEffort(nextEffort(m.agent.Effort))
 		}
 		m.append(dimStyle.Render("⚡ effort: " + effortLabel(m.agent.Effort)))
 	case "/goal":

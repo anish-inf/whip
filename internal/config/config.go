@@ -70,6 +70,7 @@ type Model struct {
 type Config struct {
 	DefaultModel    string              `json:"defaultModel"`
 	DefaultProvider string              `json:"defaultProvider,omitempty"` // override the model's first provider
+	DefaultEffort   string              `json:"defaultEffort,omitempty"`   // reasoning effort for new sessions: "", "low", "medium", "high"
 	Providers       map[string]Provider `json:"providers"`
 	Models          map[string]Model    `json:"models"`
 }
