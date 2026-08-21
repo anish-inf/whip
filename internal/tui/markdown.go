@@ -7,6 +7,7 @@ import (
 
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/glamour/styles"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // renderMarkdown renders assistant message text as rich terminal markdown
@@ -18,14 +19,28 @@ import (
 // OSC background query mid-session can hang over mosh/tmux, and the TUI
 // already commits to plain ANSI colors everywhere else.
 func renderMarkdown(s string, width int) string {
-	if strings.TrimSpace(s) == "" || width <= 0 {
+	if strings.TrimSpace(s) == "" {
 		return s
 	}
+	width = max(width, 8) // glamour treats width<=0 as its ~80-col default
 	out, err := mdRenderer(width).Render(s)
 	if err != nil {
 		return s
 	}
-	return stripLinePadding(strings.Trim(out, "\n")) // glamour frames every document with blank lines
+	return wrapWideLines(stripLinePadding(strings.Trim(out, "\n")), width)
+}
+
+// wrapWideLines hard-wraps any rendered line still wider than width.
+// Glamour never breaks code-fence or table content, so a long line overflows
+// the terminal; ansi.Hardwrap is cell- and escape-aware (styles stay intact).
+func wrapWideLines(s string, width int) string {
+	lines := strings.Split(s, "\n")
+	for i, l := range lines {
+		if ansi.StringWidth(l) > width {
+			lines[i] = ansi.Hardwrap(l, width, true) // ANSI-aware, breaks mid-word
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 // padStripRE matches glamour's right-padding at end of line: runs of (SGR

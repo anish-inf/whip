@@ -37,8 +37,17 @@ func TestRenderMarkdownFallback(t *testing.T) {
 	if got := renderMarkdown("", 80); got != "" {
 		t.Errorf("empty input should pass through, got %q", got)
 	}
-	if got := renderMarkdown("plain text", 0); got != "plain text" {
-		t.Errorf("zero width should pass through, got %q", got)
+	// width<=0 is clamped to the minimum render width, never passed through
+	// unwrapped (that was the overflow bug)
+	out := renderMarkdown("plain text", 0)
+	plain := strings.Join(strings.Fields(ansi.Strip(out)), " ")
+	if plain != "plain text" {
+		t.Errorf("content must survive the clamp, got %q", out)
+	}
+	for _, l := range strings.Split(out, "\n") {
+		if ansi.StringWidth(l) > 8 {
+			t.Errorf("clamped render must respect width 8: %q", l)
+		}
 	}
 }
 
