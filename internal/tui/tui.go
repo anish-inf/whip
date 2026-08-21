@@ -305,21 +305,25 @@ func (m *model) resume(id string) error {
 	return nil
 }
 
-// seedTranscript re-renders stored messages into the viewport.
+// seedTranscript re-renders stored messages into the viewport. Blocks are
+// appended in one batch with a single refreshVP at the end: a resumed
+// session costs one render pass, not one per message.
 func (m *model) seedTranscript(msgs []llm.Message) {
 	for _, msg := range msgs {
 		switch msg.Role {
 		case "user":
-			m.append(youStyle.Render("❯ ") + msg.Content)
+			m.blocks = append(m.blocks, block{kind: blockText, text: youStyle.Render("❯ ") + msg.Content})
 		case "assistant":
 			if strings.TrimSpace(msg.Content) != "" {
-				m.appendAssistantBlock(strings.TrimRight(msg.Content, "\n"))
+				m.blocks = append(m.blocks, block{kind: blockAssistant, text: strings.TrimRight(msg.Content, "\n")})
 			}
 			for _, tc := range msg.ToolCalls {
-				m.append(toolStyle.Render("⚒ "+tc.Function.Name+" ") + dimStyle.Render(tc.Function.Arguments))
+				m.blocks = append(m.blocks, block{kind: blockText, text: toolStyle.Render("⚒ "+tc.Function.Name+" ") + dimStyle.Render(tc.Function.Arguments)})
 			}
 		}
 	}
+	m.follow = true
+	m.refreshVP()
 }
 
 // persist writes any unsaved messages to the session store.
@@ -377,7 +381,10 @@ func (m *model) setTheme(theme string) {
 		m.cfg.Theme = "dark"
 	default: // auto: re-detect, don't persist a choice
 		m.cfg.Theme = ""
-		detectColorScheme()
+		how := detectColorScheme()
+		m.refreshVP()
+		m.append(dimStyle.Render(fmt.Sprintf("◐ theme: %s (auto: %s)", CurrentTheme(), how)))
+		return
 	}
 	if err := m.cfg.Save(); err != nil {
 		m.append(errStyle.Render("config save failed: " + err.Error()))
@@ -473,6 +480,24 @@ type block struct {
 	// y0/y1 are the block's line range in the last rendered content (set by
 	// refreshVP); used to map a mouse click to the block under it.
 	y0, y1 int
+	// cache of the last render: valid while !stale and width matches.
+	rendered string
+	lines    int
+	width    int
+	stale    bool
+}
+
+// renderAt returns the block rendered at width, re-rendering only when the
+// cache is cold (first render, width change, or text/expand mutation). This
+// is what makes appends and resume cheap: unchanged blocks never re-render.
+func (b *block) renderAt(width int) string {
+	if !b.stale && b.width == width {
+		return b.rendered
+	}
+	b.rendered = b.render(width)
+	b.lines = lipgloss.Height(b.rendered)
+	b.width, b.stale = width, false
+	return b.rendered
 }
 
 // render renders the block at width (the full terminal width; assistant
@@ -506,6 +531,7 @@ func (b *block) toggle() bool {
 		return false
 	}
 	b.expanded = !b.expanded
+	b.stale = true
 	return true
 }
 
@@ -530,19 +556,28 @@ func (m *model) appendRaw(kind blockKind, text string) {
 }
 
 // refreshVP rebuilds the viewport content, bottom-anchored: short transcripts
-// are padded from the top so messages grow upward from the input.
-// ponytail: O(transcript) re-join per append; rope/ring buffer if huge sessions drag
+// are padded from the top so messages grow upward from the input. Block
+// renders are cached per width (renderAt), so a rebuild is an O(transcript)
+// join of cached strings; the expensive glamour markdown render only happens
+// for blocks that are new, mutated, or hit by a width change. This is what
+// keeps resume and streaming appends near-linear.
 func (m *model) refreshVP() {
+	if m.width == 0 {
+		return // tea hasn't started (resume path): the first WindowSizeMsg renders once at the real width
+	}
 	var b strings.Builder
+	if n := len(m.blocks); n > 0 {
+		b.Grow(n*24 + 1<<20) // one big allocation up front
+	}
 	line := 0
 	for i := range m.blocks {
 		if i > 0 {
 			b.WriteString("\n\n") // blank line between blocks
 			line += 2
 		}
-		r := m.blocks[i].render(m.width)
+		r := m.blocks[i].renderAt(m.width)
 		m.blocks[i].y0 = line
-		m.blocks[i].y1 = line + lipgloss.Height(r) - 1
+		m.blocks[i].y1 = line + m.blocks[i].lines - 1
 		b.WriteString(r)
 		line = m.blocks[i].y1 + 1
 	}
@@ -610,7 +645,10 @@ func cfgTheme() string { return cfgThemeValue }
 //  3. COLORFGBG (set by many terminals; last field is the bg color index)
 //  4. an OSC 11 background query on /dev/tty with a short timeout
 //  5. default: dark (the safe assumption for coding terminals)
-func detectColorScheme() {
+//
+// detectColorScheme returns a short human-readable note naming the source of
+// the decision (shown by /theme auto so a wrong pick is diagnosable).
+func detectColorScheme() string {
 	setScheme := func(light bool) {
 		SetLightTheme(light)                  // glamour markdown style
 		lipgloss.SetHasDarkBackground(!light) // AdaptiveColor picks
@@ -618,15 +656,15 @@ func detectColorScheme() {
 	// config theme wins over env (it's set interactively via /theme)
 	if t := strings.ToLower(cfgTheme()); t == "light" || t == "dark" {
 		setScheme(t == "light")
-		return
+		return "config"
 	}
 	switch strings.ToLower(os.Getenv("LOOPY_THEME")) {
 	case "light":
 		setScheme(true)
-		return
+		return "LOOPY_THEME"
 	case "dark":
 		setScheme(false)
-		return
+		return "LOOPY_THEME"
 	}
 	if v := os.Getenv("COLORFGBG"); v != "" {
 		if i := strings.LastIndex(v, ";"); i >= 0 {
@@ -634,18 +672,18 @@ func detectColorScheme() {
 			if _, err := fmt.Sscanf(v[i+1:], "%d", &bg); err == nil {
 				// standard palette: 0-6 dark, 7+ light (15 = white)
 				setScheme(bg == 7 || bg >= 8)
-				return
+				return "COLORFGBG"
 			}
 		}
 	}
-	// Query the terminal directly whenever we have one. OSC 11 passes through
-	// ssh and tmux fine (tmux needs no passthrough for a *response*: the pane
-	// answers the query itself); mosh is the exception — its terminal layer
-	// swallows the round trip, so the 300ms timeout keeps startup snappy and
-	// we keep the dark default.
+	// Query the terminal directly whenever we have one. Note: inside tmux the
+	// pane answers OSC 11 with tmux's OWN configured color, which often
+	// differs from the real terminal — so over ssh/tmux an "answered" value
+	// may be wrong; treat the query as best-effort and prefer the terminal's
+	// env hints above.
 	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
 	if err != nil {
-		return
+		return "dark default (no tty)"
 	}
 	defer tty.Close()
 	type result struct{ light bool }
@@ -657,8 +695,9 @@ func detectColorScheme() {
 	select {
 	case r := <-done:
 		setScheme(r.light)
+		return "terminal query"
 	case <-time.After(300 * time.Millisecond):
-		// no answer: terminal didn't respond; keep the dark default
+		return "dark default (query timed out)"
 	}
 }
 
@@ -759,6 +798,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.key(msg)
 
 	case tea.MouseMsg:
+		// shift+click/drag must pass through so the terminal's native
+		// selection (copy) works while mouse capture is on — consuming the
+		// event here is what breaks drag-to-copy
+		if msg.Shift {
+			return m, nil
+		}
 		// clicking the ⚡ control in the header cycles reasoning effort
 		if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft &&
 			msg.Y == 0 && msg.X >= m.effortX {
@@ -1529,6 +1574,7 @@ func (m *model) prepareTurn(text string) string {
 func (m *model) appendAssistant(s string) {
 	if m.inMsg && len(m.blocks) > 0 && m.blocks[len(m.blocks)-1].kind == blockAssistant {
 		m.blocks[len(m.blocks)-1].text += "\n\n" + s // same message: merge
+		m.blocks[len(m.blocks)-1].stale = true
 		m.follow = true
 		m.refreshVP()
 		return
