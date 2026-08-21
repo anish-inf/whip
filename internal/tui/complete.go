@@ -23,13 +23,14 @@ var commands = []cand{
 	{"/mouse", "Toggle mouse capture (off = native terminal selection)"},
 	{"/quit", "Exit loopy"},
 	{"/resume", "[id] — browse and resume previous sessions"},
+	{"/tasks", "List background subagents (running/done) and their reports"},
 }
 
 // execNow lists commands the menu runs immediately on enter (they act
 // sensibly with no arguments); others insert themselves for arguments.
 var execNow = map[string]bool{
 	"/clear": true, "/compact": true, "/effort": true, "/help": true,
-	"/model": true, "/mouse": true, "/quit": true, "/resume": true,
+	"/model": true, "/mouse": true, "/quit": true, "/resume": true, "/tasks": true,
 }
 
 // completions splits val into an untouched head and candidates for its last

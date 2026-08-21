@@ -84,7 +84,7 @@ func TestCompactCommandRejectsUnknownModel(t *testing.T) {
 	if m.compactModel != "" || m.agent.CompactModel != "" {
 		t.Fatal("unknown model must not become the compaction model")
 	}
-	if !strings.Contains(m.blocks[len(m.blocks)-1], "unknown model") {
+	if !strings.Contains(m.blocks[len(m.blocks)-1].text, "unknown model") {
 		t.Fatalf("expected an error note, got %v", m.blocks)
 	}
 }

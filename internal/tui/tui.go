@@ -53,6 +53,7 @@ type turnDoneMsg struct {
 type catalogsMsg map[string]config.Catalog // background /models fetch result
 type usageMsg llm.Usage                    // one request's token usage
 type quitArmMsg struct{}                   // the idle ctrl+c arm window expired
+type taskUpdateMsg struct{}                // a background subagent started/settled — redraw
 type thinkMsg string                       // streamed reasoning tokens
 type imageMsg struct {                     // ctrl+v clipboard image result
 	path string // clipboard image saved to disk
@@ -76,8 +77,8 @@ type model struct {
 	input  textarea.Model
 	spin   spinner.Model
 	vp     viewport.Model
-	blocks []string // finalized transcript, pre-wrapped
-	follow bool     // auto-scroll to bottom on new content
+	blocks []block // finalized transcript (raw; rendered at the current width)
+	follow bool    // auto-scroll to bottom on new content
 	width  int
 	height int
 
@@ -175,6 +176,7 @@ func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string) (s
 		compactModel: cfg.CompactModel, compactProv: cfg.CompactProvider,
 	}
 	m.applyCompactModel()
+	m.wireTasks() // redraw the UI when background subagents start/settle
 	if dir, derr := config.Dir(); derr == nil {
 		if st, serr := session.Open(dir + "/sessions.db"); serr == nil {
 			m.store = st
@@ -272,6 +274,7 @@ func (m *model) resume(id string) error {
 		m.agent.ContextLimit = m.contextLimitFor(m.provName, m.agent.Model)
 	}
 	m.applyCompactModel()
+	m.wireTasks()
 	m.agent.Messages = append(m.agent.Messages, msgs...)
 	if contains(m.effortsFor(), effort) {
 		m.agent.Effort = effort
@@ -300,10 +303,10 @@ func (m *model) seedTranscript(msgs []llm.Message) {
 	for _, msg := range msgs {
 		switch msg.Role {
 		case "user":
-			m.append(wrap(youStyle.Render("❯ ")+msg.Content, m.width))
+			m.append(youStyle.Render("❯ ") + msg.Content)
 		case "assistant":
 			if strings.TrimSpace(msg.Content) != "" {
-				m.appendAssistant(strings.TrimRight(msg.Content, "\n"))
+				m.appendAssistantBlock(strings.TrimRight(msg.Content, "\n"))
 			}
 			for _, tc := range msg.ToolCalls {
 				args := tc.Function.Arguments
@@ -417,13 +420,56 @@ func buildAgent(cfg *config.Config, modelName, provName, sysPrompt string) (*age
 	return ag, modelName, provName, nil
 }
 
+// blockKind classifies a transcript block so a resize can re-render it at
+// the new width. Assistant text reflows through glamour (markdown); every
+// other block — user input, tool calls/results, status lines — re-wraps
+// plainly (its styling is baked in at append time; only the wrap changes).
+type blockKind int
+
+const (
+	blockText      blockKind = iota // already-styled line(s): re-wrap on resize
+	blockAssistant                  // raw markdown: re-render through glamour
+)
+
+// block is one finalized transcript entry. Text holds raw markdown for
+// blockAssistant (no "● " prefix) and styled content otherwise.
+type block struct {
+	kind blockKind
+	text string
+}
+
+// render renders the block at width (the full terminal width; assistant
+// blocks get their marker + indent here so a resize re-renders everything).
+func (b block) render(width int) string {
+	switch b.kind {
+	case blockAssistant:
+		w := width - 2 // body indents under the "● " marker
+		if w <= 0 {
+			w = 80 // no terminal size yet: sane default
+		}
+		body := indentLines(renderMarkdown(b.text, w), 2)
+		return botStyle.Render("● ") + strings.TrimPrefix(body, "  ")
+	default:
+		return wrap(b.text, width)
+	}
+}
+
 // append adds finalized blocks to the transcript, separating blocks with a
 // blank line so consecutive messages and tool calls breathe.
 func (m *model) append(blocks ...string) {
-	if len(m.blocks) > 0 && len(blocks) > 0 {
-		m.blocks = append(m.blocks, "")
+	for _, s := range blocks {
+		m.appendRaw(blockText, s)
 	}
-	m.blocks = append(m.blocks, blocks...)
+}
+
+// appendAssistant appends raw assistant markdown; rendering happens in
+// refreshVP at the current width.
+func (m *model) appendAssistantBlock(s string) {
+	m.appendRaw(blockAssistant, s)
+}
+
+func (m *model) appendRaw(kind blockKind, text string) {
+	m.blocks = append(m.blocks, block{kind: kind, text: text})
 	m.follow = true
 	m.refreshVP()
 }
@@ -432,7 +478,14 @@ func (m *model) append(blocks ...string) {
 // are padded from the top so messages grow upward from the input.
 // ponytail: O(transcript) re-join per append; rope/ring buffer if huge sessions drag
 func (m *model) refreshVP() {
-	content := strings.Join(m.blocks, "\n")
+	var b strings.Builder
+	for i, blk := range m.blocks {
+		if i > 0 {
+			b.WriteString("\n\n") // blank line between blocks
+		}
+		b.WriteString(blk.render(m.width))
+	}
+	content := b.String()
 	if n := lipgloss.Height(content); n < m.vp.Height {
 		content = strings.Repeat("\n", m.vp.Height-n) + content
 	}
@@ -557,8 +610,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
+		resized := msg.Width != m.width // width change → re-wrap the whole transcript
 		m.width, m.height = msg.Width, msg.Height
 		m.input.SetWidth(msg.Width - 2)
+		if resized {
+			m.refreshVP() // every block re-renders at the new width
+		}
 		return m, nil
 
 	case tea.KeyMsg:
@@ -679,7 +736,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case steeredMsg:
 		m.flushThink()
 		m.flushCurrent()
-		m.append(wrap(youStyle.Render("❯ ")+string(msg)+dimStyle.Render("  (steered)"), m.width))
+		m.append(youStyle.Render("❯ ") + string(msg) + dimStyle.Render("  (steered)"))
 		return m, nil
 
 	case compactMsg:
@@ -742,6 +799,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case quitArmMsg:
 		m.quit1 = false // the arm window closed; next ctrl+c starts fresh
+		return m, nil
+
+	case taskUpdateMsg:
+		// a background subagent started or settled; redraw so /tasks and the
+		// header badge reflect it. The registry holds the state; nothing to do.
 		return m, nil
 
 	case imageMsg:
@@ -1082,6 +1144,61 @@ func (m *model) applyCompactModel() {
 	}
 }
 
+// wireTasks makes the active agent's background-task registry nudge the UI on
+// every start/settle. OnChange runs on the worker goroutine, so it only sends
+// a message (never touches UI state directly).
+func (m *model) wireTasks() {
+	if m.prog == nil {
+		return // headless (tests)
+	}
+	m.agent.Tasks().OnChange = func(*agent.BackgroundTask) {
+		m.prog.Send(taskUpdateMsg{})
+	}
+}
+
+// runningTasks counts background subagents still in flight (for the header badge).
+func (m *model) runningTasks() int {
+	n := 0
+	for _, t := range m.agent.Tasks().List() {
+		if t.Status == agent.TaskRunning {
+			n++
+		}
+	}
+	return n
+}
+
+// tasksView renders the background-subagent list for /tasks.
+func (m *model) tasksView() string {
+	tasks := m.agent.Tasks().List()
+	if len(tasks) == 0 {
+		return dimStyle.Render("(no background tasks)")
+	}
+	var b strings.Builder
+	b.WriteString(dimStyle.Render(fmt.Sprintf("background tasks (%d):", len(tasks))))
+	for _, t := range tasks {
+		icon := "⏳"
+		switch t.Status {
+		case agent.TaskDone:
+			icon = "✓"
+		case agent.TaskError, agent.TaskCancelled:
+			icon = "✗"
+		}
+		line := fmt.Sprintf("  %s %s  %s", icon, t.ID, t.Description)
+		if t.Status == agent.TaskRunning {
+			line += dimStyle.Render(fmt.Sprintf("  (%ds)", int(time.Since(t.StartedAt).Seconds())))
+		}
+		b.WriteString("\n" + toolStyle.Render(line))
+		if t.Status != agent.TaskRunning {
+			report := t.Report
+			if len(report) > 200 {
+				report = report[:200] + "…"
+			}
+			b.WriteString("\n" + dimStyle.Render("      "+strings.ReplaceAll(report, "\n", " ")))
+		}
+	}
+	return b.String()
+}
+
 // switchModel rebuilds the agent on a new model/provider, carrying history.
 func (m *model) switchModel(name, prov string) {
 	ag, mn, pn, err := buildAgent(m.cfg, name, prov, m.sysPrompt)
@@ -1093,6 +1210,7 @@ func (m *model) switchModel(name, prov string) {
 	ag.Messages = append(ag.Messages, m.agent.Messages[1:]...) // carry history
 	ag.CompactClient, ag.CompactModel = m.agent.CompactClient, m.agent.CompactModel
 	m.agent, m.modelName, m.provName = ag, mn, pn
+	m.wireTasks()
 	if !contains(m.effortsFor(), ag.Effort) {
 		m.setEffort("") // the new model doesn't support the current level
 	}
@@ -1249,18 +1367,18 @@ func (m *model) prepareTurn(text string) string {
 // markdown (glamour) and prefixing the first line of each segment with "● ".
 // A rendered segment can reflow to a different height than the raw text, so
 // the whole segment lands as one block.
+// appendAssistant finalizes an in-flight assistant segment into the
+// transcript as raw markdown (rendered at the current width in refreshVP).
+// Consecutive segments of one message merge into a single block so the whole
+// message re-renders as one markdown document on resize.
 func (m *model) appendAssistant(s string) {
-	w := m.width - 2 // -2: body indents under the marker
-	if w <= 0 {
-		w = 80 // no terminal size yet (pre-WindowSizeMsg): sane default
+	if m.inMsg && len(m.blocks) > 0 && m.blocks[len(m.blocks)-1].kind == blockAssistant {
+		m.blocks[len(m.blocks)-1].text += "\n\n" + s // same message: merge
+		m.follow = true
+		m.refreshVP()
+		return
 	}
-	rendered := renderMarkdown(s, w)
-	if !m.inMsg {
-		body := indentLines(rendered, 2)
-		m.append(botStyle.Render("● ") + strings.TrimPrefix(body, "  "))
-	} else {
-		m.append(indentLines(rendered, 2))
-	}
+	m.appendAssistantBlock(s)
 	m.inMsg = true
 }
 
@@ -1285,7 +1403,7 @@ func (m *model) appendThink(s string) {
 		s = "◌ " + s
 		m.inThink = true
 	}
-	m.append(thinkingStyle.Render(wrap(s, m.width)))
+	m.append(thinkingStyle.Render(s))
 }
 
 // flushThink moves any in-flight partial reasoning line into the transcript
@@ -1426,6 +1544,9 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 			}
 		}()
 		return m, m.spin.Tick
+	case "/tasks":
+		m.append(m.tasksView())
+		return m, nil
 	case "/mouse":
 		m.mouseOn = !m.mouseOn
 		cfg := m.cfg
@@ -1491,7 +1612,7 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 		m.openPicker()
 	case "/help":
 		m.append(dimStyle.Render(
-			"/model <name> [provider] — switch model\n/compact [model] [provider]|off — compact now at 90% context, or pick the compaction model\n/mouse — toggle mouse capture (off = native terminal selection)\n/resume [id] — resume a previous session\n/goal <text> — keep working until the goal is met (resume | clear)\n/clear — reset conversation\n/quit — exit\ntab — complete · ctrl+o — toggle thinking tokens · ctrl+j / shift+enter — newline · ctrl+v — paste image · esc — interrupt the agent · while busy with queued messages: ↑/↓ select, del removes · PgUp/PgDn — scroll · shift-drag — select text (native) · ctrl+c — interrupt / quit"))
+			"/model <name> [provider] — switch model\n/compact [model] [provider]|off — compact now at 90% context, or pick the compaction model\n/mouse — toggle mouse capture (off = native terminal selection)\n/tasks — list background subagents (task tool with background:true runs concurrently)\n/resume [id] — resume a previous session\n/goal <text> — keep working until the goal is met (resume | clear)\n/clear — reset conversation\n/quit — exit\ntab — complete · ctrl+o — toggle thinking tokens · ctrl+j / shift+enter — newline · ctrl+v — paste image · esc — interrupt the agent · while busy with queued messages: ↑/↓ select, del removes · PgUp/PgDn — scroll · shift-drag — select text (native) · ctrl+c ctrl+c — quit"))
 	case "/model":
 		if len(fields) < 2 {
 			m.openModelPicker()
@@ -1579,6 +1700,10 @@ func (m *model) View() string {
 	}
 	if m.agent.ContextLimit > 0 {
 		left += fmt.Sprintf(" · %d%% ctx", agent.EstimateTokens(m.agent.Messages)*100/m.agent.ContextLimit)
+	}
+	// running background subagents get a badge; /tasks lists them
+	if n := m.runningTasks(); n > 0 {
+		left += fmt.Sprintf(" · ⚙ %d bg", n)
 	}
 	// right-aligned clickable effort control; ◌ marks thinking display
 	right := "⚡ " + effortLabel(m.agent.Effort) + " "

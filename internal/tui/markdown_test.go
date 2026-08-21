@@ -4,8 +4,11 @@ import (
 	"strings"
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 )
+
+func mkWinSize(w, h int) tea.WindowSizeMsg { return tea.WindowSizeMsg{Width: w, Height: h} }
 
 func TestRenderMarkdownBasics(t *testing.T) {
 	out := renderMarkdown("# Title\n\nsome **bold** text\n\n- a\n- b\n\n```go\nfmt.Println()\n```", 80)
@@ -69,8 +72,8 @@ func TestIndentLines(t *testing.T) {
 	}
 }
 
-// Assistant segments land in the transcript markdown-rendered with the ●
-// marker on the first line and the body aligned under it.
+// Assistant segments land in the transcript as raw markdown; rendering (with
+// the ● marker and body indent) happens per-width in block.render.
 func TestAppendAssistantRendersMarkdown(t *testing.T) {
 	m := compactCmdModel()
 	m.width = 80
@@ -78,20 +81,58 @@ func TestAppendAssistantRendersMarkdown(t *testing.T) {
 	if len(m.blocks) == 0 {
 		t.Fatal("no transcript block")
 	}
-	block := ansi.Strip(m.blocks[0])
-	if !strings.HasPrefix(block, "● ") {
-		t.Errorf("first line should carry the marker: %q", block)
+	if m.blocks[0].kind != blockAssistant {
+		t.Fatalf("assistant text should be stored raw (blockAssistant), got %v", m.blocks[0].kind)
 	}
-	if !strings.Contains(block, "• one") || !strings.Contains(block, "• two") {
-		t.Errorf("list should be rendered: %q", block)
+	rendered := ansi.Strip(m.blocks[0].render(80))
+	if !strings.HasPrefix(rendered, "● ") {
+		t.Errorf("first line should carry the marker: %q", rendered)
 	}
-	if strings.Contains(block, "**") {
-		t.Errorf("markdown markers should be consumed: %q", block)
+	if !strings.Contains(rendered, "• one") || !strings.Contains(rendered, "• two") {
+		t.Errorf("list should be rendered: %q", rendered)
 	}
-	// continuation segment: no second marker
+	if strings.Contains(rendered, "**") {
+		t.Errorf("markdown markers should be consumed: %q", rendered)
+	}
+	// continuation segment: merges into the same block (one marker, one doc)
 	m.appendAssistant("more text")
-	full := ansi.Strip(strings.Join(m.blocks, "\n"))
+	if len(m.blocks) != 1 {
+		t.Fatalf("continuation should merge into the open block, got %d blocks", len(m.blocks))
+	}
+	full := ansi.Strip(m.blocks[0].render(80))
 	if strings.Count(full, "● ") != 1 {
 		t.Errorf("continuation segment must not add a second marker:\n%s", full)
+	}
+	if !strings.Contains(full, "more text") {
+		t.Errorf("merged content missing: %q", full)
+	}
+}
+
+// A width change re-renders the whole transcript: assistant markdown reflows
+// and status/tool lines re-wrap.
+func TestResizeRewrapsTranscript(t *testing.T) {
+	m := compactCmdModel()
+	m.width = 80
+	m.appendAssistant("a paragraph of assistant text that should reflow when the terminal gets narrower")
+	m.append(dimStyle.Render("status line with enough words to need rewrapping at a narrow width ok"))
+	// narrow the terminal via a WindowSizeMsg (the real resize path)
+	tm, _ := m.Update(mkWinSize(40, 24))
+	m = tm.(*model)
+	for _, b := range m.blocks {
+		for i, l := range strings.Split(ansi.Strip(b.render(m.width)), "\n") {
+			if w := ansi.StringWidth(l); w > 40 {
+				t.Errorf("after resize to 40: block line %d is %d wide: %q", i, w, l)
+			}
+		}
+	}
+	// and back wide again
+	tm, _ = m.Update(mkWinSize(120, 24))
+	m = tm.(*model)
+	for _, b := range m.blocks {
+		for i, l := range strings.Split(ansi.Strip(b.render(m.width)), "\n") {
+			if w := ansi.StringWidth(l); w > 120 {
+				t.Errorf("after resize to 120: block line %d is %d wide", i, w)
+			}
+		}
 	}
 }

@@ -291,3 +291,69 @@ func TestLogEventNeverFails(t *testing.T) {
 	t.Setenv("LOOPY_HOME", "/nonexistent-\x7f-impossible") // Dir() will fail MkdirAll
 	LogEvent("config.load", "should not panic or error")
 }
+
+// ContextWindow prefers the new `context` field but falls back to the legacy
+// `maxTokens` for configs written before the rename.
+func TestContextWindowBackCompat(t *testing.T) {
+	if got := (Model{Context: 200000}).ContextWindow(); got != 200000 {
+		t.Fatalf("context field: %d", got)
+	}
+	if got := (Model{MaxTokens: 131072}).ContextWindow(); got != 131072 {
+		t.Fatalf("legacy maxTokens: %d", got)
+	}
+	if got := (Model{Context: 200000, MaxTokens: 131072}).ContextWindow(); got != 200000 {
+		t.Fatalf("context should win over legacy: %d", got)
+	}
+	if got := (Model{}).ContextWindow(); got != 0 {
+		t.Fatalf("empty: %d", got)
+	}
+}
+
+// The catalog reports the provider's output cap (max_completion_tokens)
+// separately from the input window (context_length).
+func TestCatalogMaxCompletionTokens(t *testing.T) {
+	c := Catalog{Models: []ModelInfoLite{
+		{ID: "a", ContextLength: 1000000, MaxCompletionTokens: 128000},
+		{ID: "b", ContextLength: 200000}, // no output cap advertised
+	}}
+	if got := c.MaxCompletionTokens("a"); got != 128000 {
+		t.Fatalf("a: %d", got)
+	}
+	if got := c.MaxCompletionTokens("b"); got != 0 {
+		t.Fatalf("b should be 0 when unadvertised: %d", got)
+	}
+	if got := c.MaxCompletionTokens("nope"); got != 0 {
+		t.Fatalf("unknown: %d", got)
+	}
+	if got := c.ContextLength("a"); got != 1000000 {
+		t.Fatalf("ctx a: %d", got)
+	}
+}
+
+// A config mixing old maxTokens with new context/maxOut parses both.
+func TestLoadMixedTokenFields(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	os.MkdirAll(filepath.Join(home, ".loopy"), 0o700)
+	src := `{
+  "defaultModel": "m1",
+  "providers": { "a": { "baseUrl": "https://a", "api": "openai-completions" } },
+  "models": {
+    "m1": { "providers": ["a"], "maxTokens": 131072 },
+    "m2": { "providers": ["a"], "context": 200000, "maxOut": 64000 }
+  }
+}
+`
+	os.WriteFile(filepath.Join(home, ".loopy", "config.json"), []byte(src), 0o600)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.Models["m1"].ContextWindow(); got != 131072 {
+		t.Fatalf("m1 legacy context: %d", got)
+	}
+	m2 := cfg.Models["m2"]
+	if m2.ContextWindow() != 200000 || m2.MaxOut != 64000 {
+		t.Fatalf("m2: %+v", m2)
+	}
+}

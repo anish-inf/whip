@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"sync"
@@ -98,10 +99,24 @@ func Run(ctx context.Context, opts Options) Result {
 // /dev/null, and a fresh session with no controlling terminal. A program that
 // tries to open /dev/tty for a password fails fast rather than hanging on
 // loopy's terminal.
+//
+// The subtlety that justifies hand-rolling Start/Wait: a detached grandchild
+// (nohup, `sleep 30 &`, a daemonized server) inherits the stdout/stderr pipes
+// and keeps them open after the direct child exits. cmd.Run / cmd.Wait would
+// block on io.Copy waiting for pipe EOF that never comes — the agent hangs
+// even though the command "finished". We capture via explicit pipes and close
+// our read ends the moment the process exits, so a lingering grandchild can't
+// stall us. (We don't get the grandchild's later output, which is correct —
+// it outlived the command.)
 func runPiped(ctx context.Context, cmd *exec.Cmd) Result {
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &out
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return Result{Exit: "pipe: " + err.Error()}
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return Result{Exit: "pipe: " + err.Error()}
+	}
 	if devNull := openDevNull(); devNull != nil {
 		cmd.Stdin = devNull
 		defer devNull.Close()
@@ -111,46 +126,70 @@ func runPiped(ctx context.Context, cmd *exec.Cmd) Result {
 	// loopy's terminal and blocking its input loop.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 
-	// Run the command ourselves (rather than exec.Cmd.Run) so we can close the
-	// output pipes after the process exits. A bare Run would block reading the
-	// pipe while a detached grandchild (nohup, `&` background jobs, daemons)
-	// still holds the write end open — the agent would hang even though the
-	// command itself finished. We close the pipes via the goroutine Run starts
-	// on Wait, so a grandchild keeping them open can't stall us.
-	err := cmd.Start()
-	res := Result{}
-	if err == nil {
-		track(cmd) // register for KillAll on loopy exit
-		// Kill the process group if the run context is cancelled/times out.
-		done := make(chan struct{})
-		defer close(done)
-		go func() {
-			select {
-			case <-ctx.Done():
-				if cmd.Process != nil {
-					_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-				}
-			case <-done:
-			}
-		}()
-		err = cmd.Wait()
-		res.Output = out.String()
-		untrack(cmd)
+	if err := cmd.Start(); err != nil {
+		return Result{Exit: exitString(err)}
 	}
+	track(cmd) // register for KillAll on loopy exit
+	defer untrack(cmd)
+
+	// Drain both pipes concurrently; the readers finish on pipe EOF (process
+	// exit) OR when we close them below after Wait returns.
+	var out bytes.Buffer
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	wg.Add(2)
+	drain := func(r io.Reader) {
+		defer wg.Done()
+		buf := make([]byte, 4096)
+		for {
+			n, rerr := r.Read(buf)
+			if n > 0 {
+				mu.Lock()
+				out.Write(buf[:n])
+				mu.Unlock()
+			}
+			if rerr != nil {
+				return
+			}
+		}
+	}
+	go drain(stdout)
+	go drain(stderr)
+	// Kill the process group if the run context is cancelled/times out.
+	watchDone := make(chan struct{})
+	defer close(watchDone)
+	go func() {
+		select {
+		case <-ctx.Done():
+			if cmd.Process != nil {
+				_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+			}
+		case <-watchDone:
+		}
+	}()
+
+	waitErr := cmd.Wait()
+	// The process exited. Close our read ends so the drain goroutines see EOF
+	// even if a detached grandchild still holds the write end open.
+	stdout.Close()
+	stderr.Close()
+	wg.Wait()
+
+	res := Result{Output: out.String()}
 	if ctx.Err() == context.DeadlineExceeded {
 		res.TimedOut = true
 		res.Killed = true
 		res.Exit = "timed out"
 		return res
 	}
-	if isCancelled(ctx, err) {
+	if isCancelled(ctx, waitErr) {
 		res.Killed = true
 		res.Exit = "cancelled"
 		return res
 	}
-	res.Exit = exitString(err)
-	if err != nil {
-		res.Killed = isKilledBySignal(err)
+	res.Exit = exitString(waitErr)
+	if waitErr != nil {
+		res.Killed = isKilledBySignal(waitErr)
 	}
 	return res
 }

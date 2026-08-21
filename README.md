@@ -30,7 +30,9 @@ loopy -m kimi-k3-fast -p inference   # pick model AND provider
 
 `task --list` shows the rest (build, test, fmt, vet, tidy).
 
-In-session: `/model <name> [provider]`, `/clear`, `/help`, `/quit`, ctrl+c interrupts.
+In-session: `/model <name> [provider]`, `/tasks` (background subagents), `/clear`, `/help`, `/quit`. ctrl+c once interrupts; ctrl+c twice quits (and kills any agent-spawned child processes).
+
+The `task` tool runs tool calls in **parallel** (per-path file-mutation locks keep edits to the same file serial) and supports `background: true` to launch a subagent that works concurrently and reports back when done.
 
 ## Config — `~/.loopy/config.json`
 
@@ -50,10 +52,16 @@ inference.net on first run:
     }
   },
   "models": {
-    "kimi-k3-fast": { "providers": ["inference"], "maxTokens": 131072 }
+    "kimi-k3-fast": { "providers": ["inference"], "context": 131072 }
   }
 }
 ```
+
+`context` is the model's **input** window (context limit); it drives the header's
+% full and proactive compaction. The provider's `/models` `context_length`
+overrides it when advertised. `maxOut` (optional) caps **output** tokens; 0 uses
+the provider's `max_completion_tokens`, else `context`. The old `maxTokens` field
+still parses (it always meant the context window) but is superseded by `context`.
 
 Any OpenAI-compatible endpoint works as a provider. Key resolution:
 `apiKeyEnv` env var → `apiKey` literal → for api.inference.net, the key stored

@@ -55,7 +55,7 @@ Full exploration reports: [learnings/other-harnesses/opencode/](learnings/other-
 
 - [x] `/goal <text>` (codex-style): keep driving turns until the model verifies and explicitly declares `GOAL_MET` — continuing is the default, so it can't terminate early like claude's; `/goal resume` re-engages (also after `/resume` of a session — goals persist), `/goal clear` drops, 20-round cap pauses with a resume hint
 
-- [ ] Parallel tool-call execution with per-path file mutation lock (pi: `withFileMutationQueue`, `executeToolCallsParallel`)
+- [x] Parallel tool-call execution with per-path file mutation lock (pi: `withFileMutationQueue`, `executeToolCallsParallel`) — `agent.runTools` fans a tool-call batch out to goroutines; write/edit serialize through a per-canonical-path channel semaphore, bash takes a global lock; results land in call order, OnToolStart/End fire per call
 - [ ] Retry with backoff on provider errors (pi settings: `retry: {maxRetries, baseDelayMs}`)
 - [ ] Streamed partial tool output (bash `onUpdate` throttled at 100ms in pi)
 - [ ] Spill truncated bash output to a temp file and mention the path (pi bash tool)
@@ -67,7 +67,7 @@ Full exploration reports: [learnings/other-harnesses/opencode/](learnings/other-
 - [x] Subagents: a `task` tool that runs a self-contained prompt in a fresh agent with the same tools (minus `task` — no recursion) and returns its final report
 - [x] `$skill-name` invocation (codex-style) with live completion dropdown; skills re-indexed every turn and every `$` keystroke, so new skills load without restarting the harness
 - [ ] Custom agent definitions (`.agents/*.md` with model/tools/prompt frontmatter; opencode agents config `packages/core/src/config/agent.ts`)
-- [ ] Parallel subagents + live progress streaming into the transcript (pi streams tool `onUpdate`)
+- [x] Parallel/background subagents (pi streams tool `onUpdate`; opencode `background-job.ts`) — `task` with `background:true` runs concurrently and reports back via a steered message; a `taskRegistry` keyed by id holds a `Done` channel whose single close broadcasts completion to every waiter; `/tasks` lists them, a `⚙ N bg` header badge shows running count, `/tasks` updates live via `OnChange`
 - [ ] `@agent` mentions to target a named subagent (opencode autocomplete)
 
 ## Models & providers

@@ -48,6 +48,9 @@ type Agent struct {
 	pending   []string // steered user messages awaiting injection
 	compacted bool     // a compaction already happened this turn — don't retry-loop
 
+	files *fileLocks // per-path mutation locks for parallel tool calls
+	bg    *taskRegistry
+
 	usageMu sync.Mutex
 	usage   llm.Usage // session totals across every API call (PromptTokens = input)
 }
@@ -107,6 +110,8 @@ func New(client *llm.Client, model string, maxTokens int, systemPrompt string) *
 		Messages:  []llm.Message{{Role: "system", Content: systemPrompt}},
 	}
 	a.Tools = append(tools.All(), taskTool(a))
+	a.files = newFileLocks()
+	a.bg = newTaskRegistry()
 	return a
 }
 
@@ -152,19 +157,15 @@ func (a *Agent) Turn(ctx context.Context, input string, ev Events) (string, erro
 			return "", err
 		}
 		a.Messages = append(a.Messages, msg)
-		for _, tc := range msg.ToolCalls {
-			if ev.OnToolStart != nil {
-				ev.OnToolStart(tc.Function.Name, tc.Function.Arguments)
+		if len(msg.ToolCalls) > 0 {
+			results := a.runTools(ctx, msg.ToolCalls, ev)
+			for i, tc := range msg.ToolCalls {
+				a.Messages = append(a.Messages, llm.Message{
+					Role:       "tool",
+					Content:    results[i],
+					ToolCallID: tc.ID,
+				})
 			}
-			result := tools.Execute(ctx, a.Tools, tc.Function.Name, json.RawMessage(tc.Function.Arguments))
-			if ev.OnToolEnd != nil {
-				ev.OnToolEnd(tc.Function.Name, result)
-			}
-			a.Messages = append(a.Messages, llm.Message{
-				Role:       "tool",
-				Content:    result,
-				ToolCallID: tc.ID,
-			})
 			if ctx.Err() != nil {
 				return "", ctx.Err()
 			}
@@ -181,6 +182,69 @@ func (a *Agent) Turn(ctx context.Context, input string, ev Events) (string, erro
 			return msg.Content, nil
 		}
 	}
+}
+
+// runTools executes a batch of tool calls concurrently, returning one result
+// per call in the original order (the API matches tool results to call IDs, so
+// order must be preserved even though execution is parallel). This is the
+// channel-native version of pi's executeToolCallsParallel + withFileMutationQueue:
+//
+//   - Each call runs in its own goroutine; a buffered results channel collects
+//     (index, output) pairs, and a final pass lays them back out in order.
+//   - Mutations to the same file serialize through a per-path channel
+//     semaphore (fileLocks), so two edits to foo.go can't interleave; edits to
+//     different files run truly in parallel.
+//   - bash takes a global lock: its side effects aren't attributable to a path.
+//   - OnToolStart/OnToolEnd fire per call so the UI shows each tool as it
+//     begins and lands, not in a burst at the end.
+func (a *Agent) runTools(ctx context.Context, calls []llm.ToolCall, ev Events) []string {
+	results := make([]string, len(calls))
+	type outcome struct {
+		i   int
+		out string
+	}
+	outCh := make(chan outcome, len(calls)) // buffered: never blocks the workers
+
+	var wg sync.WaitGroup
+	for i, tc := range calls {
+		wg.Add(1)
+		go func(i int, tc llm.ToolCall) {
+			defer wg.Done()
+			name, args := tc.Function.Name, tc.Function.Arguments
+
+			// Serialize against other mutations before starting. Acquiring here
+			// (before OnToolStart) keeps "running" rows honest: a tool only
+			// shows as running once it actually holds its lock.
+			var release func()
+			if path, ok := toolMutationPath(name, args); ok {
+				release = a.files.acquirePath(path)
+			} else if name == "bash" {
+				release = a.files.acquireGlobal()
+			}
+			if release != nil {
+				defer release()
+			}
+
+			if ev.OnToolStart != nil {
+				ev.OnToolStart(name, args)
+			}
+			out := tools.Execute(ctx, a.Tools, name, json.RawMessage(args))
+			if ev.OnToolEnd != nil {
+				ev.OnToolEnd(name, out)
+			}
+			outCh <- outcome{i, out}
+		}(i, tc)
+	}
+
+	// Close the channel when all workers finish so the range loop terminates.
+	go func() {
+		wg.Wait()
+		close(outCh)
+	}()
+	for oc := range outCh {
+		results[oc.i] = oc.out
+	}
+	return results
 }
 
 // compactKeepBack counts assistant turns (and any tool results they pulled in)
