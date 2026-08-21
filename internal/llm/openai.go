@@ -21,6 +21,24 @@ type Message struct {
 	Content    string     `json:"content"`
 	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
 	ToolCallID string     `json:"tool_call_id,omitempty"`
+	// Authored marks a user message the human actually typed and submitted, as
+	// opposed to one loopy injected on their behalf (steered background-task
+	// results, goal-check continuations). Internal only — never sent to the
+	// provider. Used so input-history recall cycles only real submissions.
+	Authored bool `json:"authored,omitempty"`
+}
+
+// stripAuthored returns a copy of msgs with the internal Authored marker
+// cleared — it's loopy-local bookkeeping (input-history recall) and must never
+// reach the provider. It copies because req.Messages typically aliases the
+// caller's conversation slice, which must keep the flag for storage/recall.
+func stripAuthored(msgs []Message) []Message {
+	out := make([]Message, len(msgs))
+	copy(out, msgs)
+	for i := range out {
+		out[i].Authored = false
+	}
+	return out
 }
 
 // ToolCall is a model-requested tool invocation.
@@ -223,6 +241,7 @@ func (c *Client) Stream(ctx context.Context, req Request, onText, onThink func(s
 	req.StreamOptions = &struct {
 		IncludeUsage bool `json:"include_usage"`
 	}{IncludeUsage: true}
+	req.Messages = stripAuthored(req.Messages)
 	body, err := json.Marshal(req)
 	if err != nil {
 		return Message{}, Usage{}, err
@@ -319,6 +338,7 @@ func (c *Client) Stream(ctx context.Context, req Request, onText, onThink func(s
 // synthesis.
 func (c *Client) Complete(ctx context.Context, req Request) (string, Usage, error) {
 	req.Stream = false
+	req.Messages = stripAuthored(req.Messages)
 	body, err := json.Marshal(req)
 	if err != nil {
 		return "", Usage{}, err

@@ -123,7 +123,19 @@ func New(client *llm.Client, model string, maxTokens int, systemPrompt string) *
 // auto-compacts (summarizing old turns) and retries once before surfacing
 // the error to the caller.
 func (a *Agent) Turn(ctx context.Context, input string, ev Events) (string, error) {
-	a.Messages = append(a.Messages, llm.Message{Role: "user", Content: input})
+	return a.turn(ctx, input, false, ev)
+}
+
+// TurnAuthored is Turn for a message the human actually typed and submitted
+// (vs. a steered background-task result or goal-continuation loopy injects).
+// The message is marked Authored so input-history recall cycles only real
+// submissions.
+func (a *Agent) TurnAuthored(ctx context.Context, input string, ev Events) (string, error) {
+	return a.turn(ctx, input, true, ev)
+}
+
+func (a *Agent) turn(ctx context.Context, input string, authored bool, ev Events) (string, error) {
+	a.Messages = append(a.Messages, llm.Message{Role: "user", Content: input, Authored: authored})
 	for {
 		if err := a.maybeCompact(ctx, ev); err != nil {
 			return "", err

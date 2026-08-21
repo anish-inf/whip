@@ -120,6 +120,40 @@ func textServer(t *testing.T, onCall func(n int, req llm.Request) string) *httpt
 	}))
 }
 
+// TurnAuthored marks the user message as genuinely typed (for input-history
+// recall); plain Turn (steered/goal/background paths) leaves it unmarked.
+func TestTurnAuthoredMarksMessage(t *testing.T) {
+	srv := textServer(t, func(n int, req llm.Request) string { return "done" })
+	defer srv.Close()
+
+	ag := New(llm.New(srv.URL, "k"), "m", 100, "sys")
+	if _, err := ag.TurnAuthored(context.Background(), "i typed this", Events{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ag.Turn(context.Background(), "injected by loopy", Events{}); err != nil {
+		t.Fatal(err)
+	}
+
+	var typed, injected bool
+	for _, m := range ag.Messages {
+		if m.Role != "user" {
+			continue
+		}
+		switch m.Content {
+		case "i typed this":
+			typed = m.Authored
+		case "injected by loopy":
+			injected = m.Authored
+		}
+	}
+	if !typed {
+		t.Error("TurnAuthored message must carry Authored=true")
+	}
+	if injected {
+		t.Error("plain Turn message must carry Authored=false")
+	}
+}
+
 // TestUsageAccumulates verifies every stream call folds its usage into the
 // session totals (input/output/cached) and fires OnUsage per request.
 func TestUsageAccumulates(t *testing.T) {

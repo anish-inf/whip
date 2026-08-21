@@ -1112,7 +1112,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			m.goalRounds++
-			return m.submit(goalContinuePrompt(m.goal))
+			return m.submitGoal(goalContinuePrompt(m.goal))
 		}
 		return m, nil
 
@@ -1914,7 +1914,18 @@ func (m *model) flushCurrent() {
 	m.inMsg = false
 }
 
+// submit sends a message the human typed; it counts for input-history recall.
 func (m *model) submit(text string) (tea.Model, tea.Cmd) {
+	return m.submitTurn(text, true)
+}
+
+// submitGoal sends a loopy-injected goal-continuation; not a typed submission,
+// so it must not appear in up-arrow input history.
+func (m *model) submitGoal(text string) (tea.Model, tea.Cmd) {
+	return m.submitTurn(text, false)
+}
+
+func (m *model) submitTurn(text string, authored bool) (tea.Model, tea.Cmd) {
 	m.busy = true
 	prepared := m.prepareTurn(text)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1963,7 +1974,11 @@ func (m *model) submit(text string) (tea.Model, tea.Cmd) {
 	}
 
 	go func() {
-		final, err := m.agent.Turn(ctx, prepared, agent.Events{
+		turn := m.agent.Turn
+		if authored {
+			turn = m.agent.TurnAuthored
+		}
+		final, err := turn(ctx, prepared, agent.Events{
 			OnText:  onText,
 			OnThink: onThink,
 			OnToolStart: func(n, a string) {
@@ -2102,7 +2117,7 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 			}
 			m.goalRounds = 0
 			m.append(dimStyle.Render("◎ resuming goal: " + m.goal))
-			return m.submit(goalContinuePrompt(m.goal))
+			return m.submitGoal(goalContinuePrompt(m.goal))
 		default:
 			goal := strings.TrimSpace(strings.TrimPrefix(text, "/goal"))
 			m.setGoal(goal)

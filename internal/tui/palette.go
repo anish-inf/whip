@@ -559,7 +559,7 @@ func (m *model) commitGoal(pp *ppanel) {
 		if goal != "" && !m.busy {
 			m.goalRounds = 0
 			m.append(dimStyle.Render("◎ resuming goal: " + goal))
-			m.submit(goalContinuePrompt(goal))
+			m.submitGoal(goalContinuePrompt(goal))
 		}
 		return
 	}

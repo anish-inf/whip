@@ -75,15 +75,15 @@ func TestUserHistory(t *testing.T) {
 	a, _ := st.Create("/proj/a", "m", "p")
 	st.Save(a, 0, []llm.Message{
 		{Role: "system", Content: "sys"},
-		{Role: "user", Content: "from folder A"},
+		{Role: "user", Content: "from folder A", Authored: true},
 		{Role: "assistant", Content: "ans"},
 	}, "m", "p")
 	b, _ := st.Create("/proj/b", "m", "p")
 	st.Save(b, 0, []llm.Message{
 		{Role: "system", Content: "sys"},
-		{Role: "user", Content: "from folder B"},
+		{Role: "user", Content: "from folder B", Authored: true},
 		{Role: "assistant", Content: "ans"},
-		{Role: "user", Content: "from folder A"}, // duplicate of A's message
+		{Role: "user", Content: "from folder A", Authored: true}, // duplicate of A's message
 	}, "m", "p")
 
 	hist, err := st.UserHistory(0)
@@ -101,6 +101,36 @@ func TestUserHistory(t *testing.T) {
 	lim, _ := st.UserHistory(1)
 	if len(lim) != 1 {
 		t.Fatalf("limit: got %d", len(lim))
+	}
+}
+
+// History recall must skip messages loopy injected on the user's behalf
+// (steered background-task results, goal-continuation prompts) — only genuinely
+// typed submissions are recalled.
+func TestUserHistorySkipsInjected(t *testing.T) {
+	st, err := Open(filepath.Join(t.TempDir(), "s.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	id, _ := st.Create("/proj/x", "m", "p")
+	st.Save(id, 0, []llm.Message{
+		{Role: "system", Content: "sys"},
+		{Role: "user", Content: "real question I typed", Authored: true},
+		{Role: "assistant", Content: "ans"},
+		{Role: "user", Content: "[background task task-1 done] some report\n\n…"}, // injected, Authored=false
+		{Role: "user", Content: "[goal check] The session goal is:\n…"},           // injected, Authored=false
+		{Role: "user", Content: "another typed message", Authored: true},
+	}, "m", "p")
+
+	hist, err := st.UserHistory(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"another typed message", "real question I typed"}
+	if strings.Join(hist, "|") != strings.Join(want, "|") {
+		t.Fatalf("UserHistory = %v, want only typed messages %v", hist, want)
 	}
 }
 

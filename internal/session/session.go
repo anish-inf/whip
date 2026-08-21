@@ -181,7 +181,11 @@ func (s *Store) Recent(n int) ([]Meta, error) {
 // UserHistory returns user-message contents across ALL sessions (every folder),
 // newest first and de-duplicated, for up-arrow input recall. Order is by the
 // session's last activity then the message's position within it, so the most
-// recently typed input comes first.
+// recently typed input comes first. Only messages the human actually typed are
+// recalled: steered background-task
+// results and goal-continuation prompts are stored as role "user" too, but
+// they're injected by loopy, not written by the user. Those carry Authored=false
+// and are skipped; only Authored=true messages come back.
 func (s *Store) UserHistory(limit int) ([]string, error) {
 	rows, err := s.db.Query(`SELECT m.content FROM messages m
 		JOIN sessions s ON s.id = m.session_id
@@ -201,6 +205,9 @@ func (s *Store) UserHistory(limit int) ([]string, error) {
 		var msg llm.Message
 		if err := json.Unmarshal([]byte(data), &msg); err != nil {
 			continue // skip malformed rows rather than fail the whole recall
+		}
+		if !msg.Authored {
+			continue // injected by loopy (steered task result / goal prompt), not typed
 		}
 		content := strings.TrimSpace(msg.Content)
 		if content == "" || seen[content] {

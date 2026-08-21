@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -23,6 +24,26 @@ func sseServer(t *testing.T, lines ...string) *httptest.Server {
 			w.Write([]byte(l + "\n\n"))
 		}
 	}))
+}
+
+// The internal Authored marker (input-history bookkeeping) must never reach the
+// provider — the request body must not contain it even when a message carries it.
+func TestStreamStripsAuthoredFlag(t *testing.T) {
+	var body []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n"))
+	}))
+	defer srv.Close()
+
+	msgs := []Message{{Role: "user", Content: "typed by me", Authored: true}}
+	if _, _, err := New(srv.URL, "test-key").Stream(context.Background(), Request{Model: "m", Messages: msgs}, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(body), "authored") {
+		t.Fatalf("Authored flag leaked to provider: %s", body)
+	}
 }
 
 func TestModels(t *testing.T) {
