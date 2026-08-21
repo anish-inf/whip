@@ -93,6 +93,7 @@ type Config struct {
 	CompactProvider string              `json:"compactProvider,omitempty"` // provider for the compaction model; "" = the conversation's provider
 	Theme           string              `json:"theme,omitempty"`           // "light", "dark", or "" (auto-detect at startup)
 	Mouse           *bool               `json:"mouse,omitempty"`           // false disables capture so native terminal selection works
+	GoalMaxRounds   int                 `json:"goalMaxRounds,omitempty"`   // global goal-loop round cap; 0 = DefaultGoalMaxRounds; projects.json may override per folder
 	Providers       map[string]Provider `json:"providers"`
 	Models          map[string]Model    `json:"models"`
 }

@@ -170,7 +170,7 @@ func (m *model) paletteItems() []paletteItem {
 		{title: "Goal", category: "Session",
 			dynDesc: func(m *model) string {
 				if m.goal == "" {
-					return "keep working until the goal is met"
+					return fmt.Sprintf("keep working until the goal is met (max %d rounds)", m.goalMaxRounds())
 				}
 				return truncLine(m.goal, 40)
 			},
@@ -740,7 +740,7 @@ func (m *model) panelView(pp *ppanel) string {
 
 	case panelGoal:
 		b.WriteString(" " + youStyle.Render("❯ ") + pp.prepare + dimStyle.Render("█"))
-		b.WriteString("\n\n" + dimStyle.Render("  type the goal · empty clears · enter/esc apply"))
+		b.WriteString("\n\n" + dimStyle.Render(fmt.Sprintf("  type the goal · empty clears · enter/esc apply · max %d rounds (/goal rounds)", m.goalMaxRounds())))
 	}
 	b.WriteString("\n")
 	return b.String()

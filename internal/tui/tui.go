@@ -979,7 +979,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.setGoal("")
 				return m, nil
 			}
-			if m.goalRounds >= maxGoalRounds {
+			if m.goalRounds >= m.goalMaxRounds() {
 				m.append(errStyle.Render(fmt.Sprintf("◎ goal paused after %d rounds — /goal resume to continue, /goal clear to drop", m.goalRounds)))
 				return m, nil
 			}
@@ -1816,11 +1816,13 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 			if m.goal == "" {
 				m.append(dimStyle.Render("no goal set — /goal <text> to set one"))
 			} else {
-				m.append(dimStyle.Render(fmt.Sprintf("◎ goal (round %d/%d): %s", m.goalRounds, maxGoalRounds, m.goal)))
+				m.append(dimStyle.Render(fmt.Sprintf("◎ goal (round %d/%d): %s", m.goalRounds, m.goalMaxRounds(), m.goal)))
 			}
 		case fields[1] == "clear":
 			m.setGoal("")
 			m.append(dimStyle.Render("(goal cleared)"))
+		case fields[1] == "rounds":
+			m.goalRoundsCommand(fields[2:])
 		case fields[1] == "resume":
 			if m.goal == "" {
 				m.append(errStyle.Render("no goal to resume — set one with /goal <text>"))
@@ -1845,7 +1847,7 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 		m.openPicker()
 	case "/help":
 		m.append(dimStyle.Render(
-			"/model <name> [provider] — switch model\n/compact [model] [provider]|off — compact now at 90% context, or pick the compaction model\n/mouse — toggle mouse capture (off = native terminal selection)\n/theme [light|dark|auto] — color scheme (bare toggles)\n/tasks — list background subagents (task tool with background:true runs concurrently)\n/resume [id] — resume a previous session\n/goal <text> — keep working until the goal is met (resume | clear)\n/clear — reset conversation\n/quit — exit\ntab — complete · ctrl+o — toggle thinking tokens · ctrl+e — expand the last tool result · ctrl+j / shift+enter — newline · ctrl+v — paste image · esc — interrupt the agent · while busy with queued messages: ↑/↓ select, del removes · PgUp/PgDn — scroll · drag — select/copy text (native) · ctrl+c ctrl+c — quit"))
+			"/model <name> [provider] — switch model\n/compact [model] [provider]|off — compact now at 90% context, or pick the compaction model\n/mouse — toggle mouse capture (off = native terminal selection)\n/theme [light|dark|auto] — color scheme (bare toggles)\n/tasks — list background subagents (task tool with background:true runs concurrently)\n/resume [id] — resume a previous session\n/goal <text> — keep working until the goal is met (resume | clear | rounds <n>|default [--global])\n/clear — reset conversation\n/quit — exit\ntab — complete · ctrl+o — toggle thinking tokens · ctrl+e — expand the last tool result · ctrl+j / shift+enter — newline · ctrl+v — paste image · esc — interrupt the agent · while busy with queued messages: ↑/↓ select, del removes · PgUp/PgDn — scroll · drag — select/copy text (native) · ctrl+c ctrl+c — quit"))
 	case "/model":
 		if len(fields) < 2 {
 			m.openModelPicker()

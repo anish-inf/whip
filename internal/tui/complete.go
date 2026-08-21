@@ -17,7 +17,7 @@ var commands = []cand{
 	{"/clear", "Reset the conversation"},
 	{"/compact", "[model] [provider]|off — compact now, or pick the compaction model"},
 	{"/effort", "[level] — reasoning effort: off·low·medium·high (bare cycles)"},
-	{"/goal", "<text> — work until done; also: resume, clear"},
+	{"/goal", "<text> — work until done; also: resume, clear, rounds <n>|default [--global]"},
 	{"/help", "Show available commands"},
 	{"/model", "<model> [provider] — switch model"},
 	{"/mouse", "Toggle mouse capture (off = native terminal selection)"},
