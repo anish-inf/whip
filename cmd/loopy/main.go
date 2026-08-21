@@ -5,12 +5,10 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"path/filepath"
 
 	"github.com/abe/loopy/internal/agent"
 	"github.com/abe/loopy/internal/config"
 	"github.com/abe/loopy/internal/llm"
-	"github.com/abe/loopy/internal/skills"
 	"github.com/abe/loopy/internal/tui"
 )
 
@@ -37,12 +35,9 @@ Guidelines:
 - Show file paths clearly when working with files
 
 Current working directory: %s`, wd)
-
-	dirs := []string{filepath.Join(wd, ".agents", "skills")}
-	if home, err := os.UserHomeDir(); err == nil {
-		dirs = append(dirs, filepath.Join(home, ".loopy", "skills"))
-	}
-	return prompt + skills.PromptBlock(skills.Scan(dirs...))
+	// the skills block is appended fresh each turn by the TUI, so newly added
+	// skills are picked up without restarting
+	return prompt
 }
 
 func main() {

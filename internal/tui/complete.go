@@ -23,8 +23,8 @@ var commands = []cand{
 }
 
 // completions splits val into an untouched head and candidates for its last
-// token: slash commands, /model arguments, or filesystem paths.
-func completions(val string, models, providers []cand) (head string, cands []cand) {
+// token: slash commands, /model arguments, $skills, or filesystem paths.
+func completions(val string, models, providers, skillCands []cand) (head string, cands []cand) {
 	i := strings.LastIndexByte(val, ' ')
 	head, token := val[:i+1], val[i+1:]
 	fields := strings.Fields(head)
@@ -35,6 +35,8 @@ func completions(val string, models, providers []cand) (head string, cands []can
 		cands = filterPrefix(models, token)
 	case len(fields) == 2 && fields[0] == "/model":
 		cands = filterPrefix(providers, token)
+	case strings.HasPrefix(token, "$"): // codex-style skill invocation
+		cands = filterPrefix(skillCands, token)
 	case strings.HasPrefix(token, "@"): // @file mentions complete like paths
 		for _, c := range pathMatches(token[1:]) {
 			cands = append(cands, cand{"@" + c.Text, c.Desc})

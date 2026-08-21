@@ -16,6 +16,19 @@ type Skill struct {
 	Path        string // path to the SKILL.md
 }
 
+// DefaultDirs returns loopy's skill locations: project .agents/skills, then
+// user ~/.loopy/skills.
+func DefaultDirs() []string {
+	var dirs []string
+	if wd, err := os.Getwd(); err == nil {
+		dirs = append(dirs, filepath.Join(wd, ".agents", "skills"))
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		dirs = append(dirs, filepath.Join(home, ".loopy", "skills"))
+	}
+	return dirs
+}
+
 // Scan reads <dir>/<skill>/SKILL.md for each dir, skipping anything unreadable.
 func Scan(dirs ...string) []Skill {
 	var out []Skill

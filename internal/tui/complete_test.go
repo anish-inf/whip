@@ -19,17 +19,17 @@ func TestCompletions(t *testing.T) {
 	provs := []cand{{"inference", ""}}
 
 	// slash commands
-	head, cs := completions("/m", models, provs)
+	head, cs := completions("/m", models, provs, nil)
 	if head != "" || len(cs) != 1 || cs[0].Text != "/model" {
 		t.Fatalf("command completion: %q %v", head, texts(cs))
 	}
 	// /model first arg
-	head, cs = completions("/model k", models, provs)
+	head, cs = completions("/model k", models, provs, nil)
 	if head != "/model " || len(cs) != 1 || cs[0].Text != "kimi-k3-fast" {
 		t.Fatalf("model completion: %q %v", head, texts(cs))
 	}
 	// /model second arg
-	_, cs = completions("/model kimi-k3-fast inf", models, provs)
+	_, cs = completions("/model kimi-k3-fast inf", models, provs, nil)
 	if len(cs) != 1 || cs[0].Text != "inference" {
 		t.Fatalf("provider completion: %v", texts(cs))
 	}
@@ -37,7 +37,7 @@ func TestCompletions(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "alpha.txt"), nil, 0o644)
 	os.Mkdir(filepath.Join(dir, "alphadir"), 0o755)
-	head, cs = completions("fix "+dir+"/al", models, provs)
+	head, cs = completions("fix "+dir+"/al", models, provs, nil)
 	if head != "fix " || len(cs) != 2 {
 		t.Fatalf("path completion: %q %v", head, texts(cs))
 	}
@@ -45,18 +45,18 @@ func TestCompletions(t *testing.T) {
 		t.Fatalf("dir should get trailing slash: %v", texts(cs))
 	}
 	// no match
-	_, cs = completions("/nope", models, provs)
+	_, cs = completions("/nope", models, provs, nil)
 	if len(cs) != 0 {
 		t.Fatalf("expected no candidates, got %v", texts(cs))
 	}
 	// slash-command args must never fall through to path completion
 	for _, in := range []string{"/goal make yourself better", "/goal make yourself better ", "/resume ab"} {
-		if _, cs = completions(in, models, provs); len(cs) != 0 {
+		if _, cs = completions(in, models, provs, nil); len(cs) != 0 {
 			t.Fatalf("%q: expected no candidates, got %v", in, texts(cs))
 		}
 	}
 	// but @ mentions inside slash args still complete
-	if _, cs = completions("/goal fix @"+dir+"/al", models, provs); len(cs) != 2 {
+	if _, cs = completions("/goal fix @"+dir+"/al", models, provs, nil); len(cs) != 2 {
 		t.Fatalf("@ inside slash args: %v", texts(cs))
 	}
 }

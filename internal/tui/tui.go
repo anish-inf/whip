@@ -19,6 +19,7 @@ import (
 	"github.com/abe/loopy/internal/config"
 	"github.com/abe/loopy/internal/llm"
 	"github.com/abe/loopy/internal/session"
+	"github.com/abe/loopy/internal/skills"
 )
 
 var (
@@ -476,8 +477,9 @@ func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.input.Reset()
 				m.menu = nil
 			case len(m.queue) > 0: // grok-style: empty enter force-steers the queue
+				sk := skills.Scan(skills.DefaultDirs()...)
 				for _, q := range m.queue {
-					m.agent.Steer(expandMentions(q))
+					m.agent.Steer(expandMentions(expandSkills(q, sk)))
 				}
 				m.queue = nil
 			}
@@ -594,7 +596,7 @@ func (m *model) openPicker() {
 
 // openMenu computes candidates for the current input (tab pressed).
 func (m *model) openMenu() {
-	head, cands := completions(m.input.Value(), m.modelCands(), m.providerCands())
+	head, cands := completions(m.input.Value(), m.modelCands(), m.providerCands(), m.skillCands())
 	switch len(cands) {
 	case 0:
 	case 1:
@@ -605,13 +607,13 @@ func (m *model) openMenu() {
 	}
 }
 
-// refreshMenu keeps a live dropdown open while typing a slash command or an
-// @file mention, re-filtering on every keystroke; otherwise closes it.
+// refreshMenu keeps a live dropdown open while typing a slash command, an
+// @file mention, or a $skill, re-filtering on every keystroke; otherwise closes it.
 func (m *model) refreshMenu() {
 	val := m.input.Value()
 	token := val[strings.LastIndexByte(val, ' ')+1:]
-	if strings.HasPrefix(val, "/") || strings.HasPrefix(token, "@") {
-		head, cands := completions(val, m.modelCands(), m.providerCands())
+	if strings.HasPrefix(val, "/") || strings.HasPrefix(token, "@") || strings.HasPrefix(token, "$") {
+		head, cands := completions(val, m.modelCands(), m.providerCands(), m.skillCands())
 		if len(cands) > 0 {
 			idx := 0
 			if m.menu != nil && m.menu.idx < len(cands) {
@@ -658,6 +660,29 @@ func (m *model) providerCands() []cand {
 	return out
 }
 
+// skillCands rescans skill dirs so newly added skills appear immediately.
+// ponytail: full rescan per keystroke; cache with a TTL if a huge skill tree drags
+func (m *model) skillCands() []cand {
+	sk := skills.Scan(skills.DefaultDirs()...)
+	out := make([]cand, 0, len(sk))
+	for _, s := range sk {
+		d := s.Description
+		if len(d) > 80 {
+			d = d[:80] + "…"
+		}
+		out = append(out, cand{"$" + s.Name, d})
+	}
+	return out
+}
+
+// prepareTurn refreshes the system prompt's skills block (so new skills load
+// without a restart) and expands $skill / @file tokens in the input.
+func (m *model) prepareTurn(text string) string {
+	sk := skills.Scan(skills.DefaultDirs()...)
+	m.agent.Messages[0].Content = m.sysPrompt + skills.PromptBlock(sk)
+	return expandMentions(expandSkills(text, sk))
+}
+
 // appendAssistant writes assistant text into the transcript, prefixing the
 // first line of each segment.
 func (m *model) appendAssistant(s string) {
@@ -681,6 +706,7 @@ func (m *model) flushCurrent() {
 
 func (m *model) submit(text string) (tea.Model, tea.Cmd) {
 	m.busy = true
+	prepared := m.prepareTurn(text)
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancel = cancel
 	p := m.prog
@@ -713,7 +739,7 @@ func (m *model) submit(text string) (tea.Model, tea.Cmd) {
 	}
 
 	go func() {
-		final, err := m.agent.Turn(ctx, expandMentions(text), agent.Events{
+		final, err := m.agent.Turn(ctx, prepared, agent.Events{
 			OnText: onText,
 			OnToolStart: func(n, a string) {
 				flush()
