@@ -79,7 +79,12 @@ type Config struct {
 }
 
 // Dir returns the loopy home directory (~/.loopy), creating it if needed.
+// LOOPY_HOME overrides the location — used by tests to keep fixture writes
+// far away from the real config.
 func Dir() (string, error) {
+	if d := os.Getenv("LOOPY_HOME"); d != "" {
+		return d, os.MkdirAll(d, 0o700)
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
@@ -96,6 +101,14 @@ func path() (string, error) {
 	return filepath.Join(dir, "config.json"), nil
 }
 
+// fingerprint summarizes a config for the operation log: enough to spot a
+// clobbering write (providers/models collapsing, fixture values appearing)
+// without logging secrets.
+func (c *Config) fingerprint() string {
+	return fmt.Sprintf("providers=%d models=%d default=%q compact=%q",
+		len(c.Providers), len(c.Models), c.DefaultModel, c.CompactModel)
+}
+
 // Load reads ~/.loopy/config.json, writing a default config on first run. The
 // file is JSONC: comments and trailing commas are allowed.
 func Load() (*Config, error) {
@@ -106,6 +119,7 @@ func Load() (*Config, error) {
 	data, err := os.ReadFile(p)
 	if os.IsNotExist(err) {
 		cfg := Default()
+		logf("config.load", "missing file, writing defaults (%s)", cfg.fingerprint())
 		return cfg, cfg.Save()
 	}
 	if err != nil {
@@ -113,20 +127,25 @@ func Load() (*Config, error) {
 	}
 	var cfg Config
 	if err := parseJSONC(data, &cfg); err != nil {
+		logf("config.load", "PARSE FAILURE %s: %v (%d bytes)", p, err, len(data))
 		return nil, fmt.Errorf("parse %s: %w", p, err)
 	}
 	// Recover from a clobbered/empty config: no providers and no models is
 	// never a usable state, so prefer the backup, else regenerate defaults.
 	if len(cfg.Providers) == 0 && len(cfg.Models) == 0 {
+		logf("config.load", "CLOBBERED/EMPTY config detected (%d bytes on disk), attempting recovery", len(data))
 		if bak, err := os.ReadFile(p + ".bak"); err == nil {
 			var restored Config
 			if parseJSONC(bak, &restored) == nil && (len(restored.Providers) > 0 || len(restored.Models) > 0) {
+				logf("config.load", "restored from .bak (%s)", restored.fingerprint())
 				return &restored, restored.Save()
 			}
 		}
 		def := Default()
+		logf("config.load", "no usable .bak; regenerated defaults (%s)", def.fingerprint())
 		return def, def.Save()
 	}
+	logf("config.load", "ok (%s)", cfg.fingerprint())
 	return &cfg, nil
 }
 
@@ -144,6 +163,7 @@ func (c *Config) Save() error {
 		if existing, err := os.ReadFile(p); err == nil {
 			var cur Config
 			if parseJSONC(existing, &cur) == nil && (len(cur.Providers) > 0 || len(cur.Models) > 0) {
+				logf("config.save", "REFUSED empty overwrite of healthy config (disk had providers=%d models=%d)", len(cur.Providers), len(cur.Models))
 				return fmt.Errorf("refusing to overwrite %s: existing config has providers/models but the value being saved is empty", p)
 			}
 		}
@@ -152,16 +172,27 @@ func (c *Config) Save() error {
 	if err != nil {
 		return err
 	}
+	// log the before/after fingerprint so a bad write is attributable
 	if existing, err := os.ReadFile(p); err == nil && len(existing) > 0 {
+		var cur Config
+		if parseJSONC(existing, &cur) == nil {
+			logf("config.save", "before=(%s) after=(%s)", cur.fingerprint(), c.fingerprint())
+		} else {
+			logf("config.save", "before=(unparseable, %d bytes) after=(%s)", len(existing), c.fingerprint())
+		}
 		// best-effort backup before replacing
 		_ = os.WriteFile(p+".bak", existing, 0o600)
+	} else {
+		logf("config.save", "first write (%s)", c.fingerprint())
 	}
 	tmp := p + ".tmp"
 	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		logf("config.save", "write tmp failed: %v", err)
 		return err
 	}
 	if err := os.Rename(tmp, p); err != nil {
 		os.Remove(tmp)
+		logf("config.save", "rename failed: %v", err)
 		return err
 	}
 	return nil

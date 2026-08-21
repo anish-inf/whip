@@ -86,7 +86,7 @@ Full exploration reports: [learnings/other-harnesses/opencode/](learnings/other-
 
 ## Theming & config
 
-- [x] ctrl+p command palette (opencode-style): fuzzy command list with descriptions; bare commands execute on enter, arg commands insert themselves
+- [x] ctrl+p command palette (opencode-style): modal dialog (own filter line, esc pops, ↑/↓ wraps, enter runs), category headers, "Suggested" group pinned when the filter is empty, dimmed keybind/slash hints teach shortcuts, cheap subsequence fuzzy filter; actions dispatch through the same m.command registry as slash commands
 - [ ] Single keybind+command registry: palette, slash commands, help, and footer hints all derived from one table (opencode `config/keybind.ts` — the highest value-per-line idea in that repo)
 - [ ] One generic fuzzy-select widget reused by every picker: model, session, theme, timeline (opencode `ui/dialog-select.tsx`)
 - [ ] KV table in sessions.db for palette-toggleable UI prefs — no config ceremony per toggle (opencode `context/kv.tsx` pattern)

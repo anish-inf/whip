@@ -89,6 +89,7 @@ type model struct {
 	menu         *menu
 	picker       *picker
 	mpicker      *modelPicker
+	palette      *palette // ctrl+p command palette (modal dialog)
 	cancel       context.CancelFunc
 	prog         *tea.Program
 
@@ -176,6 +177,7 @@ func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string) (s
 			m.store = st
 			defer st.Close()
 		} else {
+			config.LogEvent("session.open", "FAILED: "+serr.Error())
 			m.append(errStyle.Render("sessions disabled: " + serr.Error()))
 		}
 	}
@@ -225,8 +227,10 @@ func (m *model) fetchCatalogs() {
 		infos, err := llm.New(prov.BaseURL, key).Models(ctx)
 		cancel()
 		if err != nil {
+			config.LogEvent("catalog.fetch", name+" failed: "+err.Error())
 			continue // keep any stale cache
 		}
+		config.LogEvent("catalog.fetch", fmt.Sprintf("%s ok: %d models", name, len(infos)))
 		models := make([]config.ModelInfoLite, len(infos))
 		for i, mi := range infos {
 			models[i] = config.ModelInfoLite{ID: mi.ID, ContextLength: mi.ContextLength, ReasoningEfforts: mi.ReasoningEfforts}
@@ -308,12 +312,14 @@ func (m *model) persist() {
 	if m.sessionID == "" {
 		id, err := m.store.Create(cwd(), m.modelName, m.provName)
 		if err != nil {
+			config.LogEvent("session.save", "create failed: "+err.Error())
 			m.append(errStyle.Render("session save failed: " + err.Error()))
 			return
 		}
 		m.sessionID = id
 	}
 	if err := m.store.Save(m.sessionID, m.saved, m.agent.Messages, m.modelName, m.provName); err != nil {
+		config.LogEvent("session.save", "FAILED id="+m.sessionID+": "+err.Error())
 		m.append(errStyle.Render("session save failed: " + err.Error()))
 		return
 	}
@@ -740,6 +746,9 @@ func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.iactive != nil {
 		return m.iactiveKey(msg)
 	}
+	if m.palette != nil {
+		return m.paletteKey(msg)
+	}
 	if m.picker != nil {
 		return m.pickerKey(msg)
 	}
@@ -862,13 +871,13 @@ func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.input, cmd = m.input.Update(msg)
 			return m, cmd
 		}
+		if msg.Type == tea.KeyCtrlP { // command palette (opencode-style modal)
+			m.openPalette()
+			return m, nil
+		}
 		if msg.Type == tea.KeyUp {
 			m.histPrev()
 			return m, nil
-		}
-		if msg.Type == tea.KeyCtrlP { // command palette: the / menu, prefilled
-			m.input.SetValue("/")
-			m.refreshMenu()
 		}
 		return m, nil
 
@@ -1517,6 +1526,10 @@ func (m *model) View() string {
 	left = truncLine(left, max(m.width-len(right)-2, 0))
 	pad := max(m.width-len(left)-len(right)-1, 1)
 	b.WriteString(dimStyle.Render(left+strings.Repeat(" ", pad)) + toolStyle.Render(right) + "\n")
+	if m.palette != nil {
+		b.WriteString(m.paletteView())
+		return b.String()
+	}
 	if m.picker != nil {
 		b.WriteString(m.pickerView())
 		return b.String()

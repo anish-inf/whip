@@ -3,6 +3,8 @@ package tui
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -12,6 +14,9 @@ import (
 )
 
 func compactCmdModel() *model {
+	// NOTE: any test that drives setEffort/switchModel/compactCommand writes
+	// through cfg.Save(); TestMain points LOOPY_HOME at a scratch dir so
+	// those writes can never reach the real ~/.loopy/config.json.
 	// serve the compaction summary so a bare /compact completes in-test
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(`{"choices":[{"message":{"content":"sim"}}]}`))
@@ -38,6 +43,21 @@ func compactCmdModel() *model {
 	m.width = 80
 	m.input.SetWidth(78)
 	return m
+}
+
+// Regression guard for the config corruption bug: running a persistence
+// command from a test must write under the isolated LOOPY_HOME, never the
+// user's real ~/.loopy.
+func TestCompactCommandNeverTouchesRealHome(t *testing.T) {
+	m := compactCmdModel()
+	m.compactCommand([]string{"glm-5.2-fast"}) // triggers cfg.Save()
+	dir := os.Getenv("LOOPY_HOME")
+	if dir == "" || dir == filepath.Join(os.Getenv("HOME"), ".loopy") {
+		t.Fatalf("tests must run with an isolated LOOPY_HOME, got %q", dir)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "config.json")); err != nil {
+		t.Fatalf("expected the save to land under LOOPY_HOME: %v", err)
+	}
 }
 
 func TestCompactCommandSelectsModel(t *testing.T) {

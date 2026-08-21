@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -257,4 +258,36 @@ func TestLoadCatalogsAlwaysNonNil(t *testing.T) {
 	if len(cats) != 1 {
 		t.Fatalf("expected to hold the written entry, got %d", len(cats))
 	}
+}
+
+func TestLogEventWritesAndRotates(t *testing.T) {
+	t.Setenv("LOOPY_HOME", t.TempDir())
+
+	LogEvent("config.save", "before=(providers=1) after=(providers=1)")
+	LogEvent("catalog.fetch", "inference ok: 42 models")
+	dir, _ := Dir()
+	b, err := os.ReadFile(filepath.Join(dir, "loopy.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(b)
+	if !strings.Contains(s, "config.save") || !strings.Contains(s, "catalog.fetch") || !strings.Contains(s, "pid=") {
+		t.Fatalf("log content: %q", s)
+	}
+
+	// rotation: oversize log rolls to loopy.log.1
+	os.WriteFile(filepath.Join(dir, "loopy.log"), make([]byte, logMaxBytes+1), 0o600)
+	LogEvent("config.load", "after rotation")
+	if _, err := os.Stat(filepath.Join(dir, "loopy.log.1")); err != nil {
+		t.Fatalf("expected rotation: %v", err)
+	}
+	b, _ = os.ReadFile(filepath.Join(dir, "loopy.log"))
+	if !strings.Contains(string(b), "after rotation") {
+		t.Fatalf("fresh log should hold the new event: %q", b)
+	}
+}
+
+func TestLogEventNeverFails(t *testing.T) {
+	t.Setenv("LOOPY_HOME", "/nonexistent-\x7f-impossible") // Dir() will fail MkdirAll
+	LogEvent("config.load", "should not panic or error")
 }
