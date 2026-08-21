@@ -238,3 +238,48 @@ func TestToolMutationPath(t *testing.T) {
 		t.Fatal("malformed write args fall back to global")
 	}
 }
+
+// Subscribers registered via Subscribe receive the task's live event stream
+// (fanned in with usage accounting); a settled task rejects new subscribers.
+func TestBackgroundTaskSubscribersSeeLiveStream(t *testing.T) {
+	srv := textServer(t, func(n int, req llm.Request) string {
+		time.Sleep(50 * time.Millisecond) // let the subscriber attach
+		return "stream-body"
+	})
+	defer srv.Close()
+
+	ag := New(llm.New(srv.URL, "k"), "m", 100, "sys")
+	task := ag.StartBackground(context.Background(), "d", "p")
+
+	var got atomic.Int32
+	ok := ag.Tasks().Subscribe(task.ID, Events{OnText: func(s string) { got.Add(int32(len(s))) }})
+	if !ok {
+		t.Fatal("Subscribe on a running task should succeed")
+	}
+	select {
+	case <-task.Done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("task never settled")
+	}
+	if got.Load() == 0 {
+		t.Fatal("subscriber saw no text events")
+	}
+	if ag.Tasks().Subscribe(task.ID, Events{}) {
+		t.Fatal("Subscribe on a settled task should report false")
+	}
+}
+
+// FanIn forwards each fired callback to every source that implements it.
+func TestFanIn(t *testing.T) {
+	var a, b, usage atomic.Int32
+	ev := FanIn(
+		Events{OnText: func(string) { a.Add(1) }, OnUsage: func(llm.Usage) { usage.Add(1) }},
+		Events{OnText: func(string) { b.Add(1) }},
+	)
+	ev.OnText("x")
+	ev.OnThink("y") // nobody implements it: no panic
+	ev.OnUsage(llm.Usage{})
+	if a.Load() != 1 || b.Load() != 1 || usage.Load() != 1 {
+		t.Fatalf("fan-in miscounted: a=%d b=%d usage=%d", a.Load(), b.Load(), usage.Load())
+	}
+}

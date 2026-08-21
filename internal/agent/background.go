@@ -45,13 +45,18 @@ type taskRegistry struct {
 	mu    sync.Mutex
 	tasks map[string]*BackgroundTask
 	seq   atomic.Int64
+	// subs are live event subscribers per task id (the TUI's per-task view).
+	// Events is all callbacks, so fan-out is a slice the worker walks per
+	// event — no channel to close, no per-subscriber goroutine. Kept here
+	// (not on the task) because List/Get snapshot tasks by value.
+	subs map[string][]Events
 	// OnChange fires (from the worker goroutine) when a task starts or settles;
 	// the TUI installs it to redraw the task list live.
 	OnChange func(*BackgroundTask)
 }
 
 func newTaskRegistry() *taskRegistry {
-	return &taskRegistry{tasks: map[string]*BackgroundTask{}}
+	return &taskRegistry{tasks: map[string]*BackgroundTask{}, subs: map[string][]Events{}}
 }
 
 // List returns a snapshot of all tasks, oldest first.
@@ -141,7 +146,7 @@ func (a *Agent) StartBackground(ctx context.Context, description, prompt string)
 		sub.Effort = a.Effort
 		sub.ContextLimit = a.ContextLimit
 		sub.Tools = tools.All()
-		report, err := sub.Turn(taskCtx, prompt, Events{OnUsage: a.AddUsage})
+		report, err := sub.Turn(taskCtx, prompt, FanIn(a.bg.emitter(id), Events{OnUsage: a.AddUsage}))
 		status := TaskDone
 		text := report
 		switch {
@@ -151,12 +156,92 @@ func (a *Agent) StartBackground(ctx context.Context, description, prompt string)
 			status, text = TaskError, err.Error()
 		}
 		a.bg.settle(id, status, text)
+		// subscribers stop here; late events after settle go nowhere (Subscribe
+		// rejects non-running tasks, and settled state is visible via List/Get)
+		a.bg.mu.Lock()
+		delete(a.bg.subs, id)
+		a.bg.mu.Unlock()
 		// Fan the result back into the parent as a steered message so the model
 		// sees it on the next loop boundary — channel-close (settle) → Steer.
 		// text/status are locals (not the shared task struct), so no race.
 		a.Steer(fmt.Sprintf("[background task %s %s] %s\n\n%s", id, status, description, text))
 	}()
 	return t
+}
+
+// Subscribe registers a live event subscriber for a running task. Returns
+// false when the task is unknown or already settled — the caller should then
+// render the stored Report instead of a live stream.
+func (r *taskRegistry) Subscribe(id string, ev Events) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	t, ok := r.tasks[id]
+	if !ok || t.Status != TaskRunning {
+		return false
+	}
+	r.subs[id] = append(r.subs[id], ev)
+	return true
+}
+
+// emitter returns an Events that forwards every callback to the task's
+// current subscribers (the TUI's per-task view). Subscriber callbacks run on
+// the worker goroutine, so they must be cheap and non-blocking.
+func (r *taskRegistry) emitter(id string) Events {
+	return Events{
+		OnText: func(s string) {
+			r.broadcast(id, func(e Events) {
+				if e.OnText != nil {
+					e.OnText(s)
+				}
+			})
+		},
+		OnThink: func(s string) {
+			r.broadcast(id, func(e Events) {
+				if e.OnThink != nil {
+					e.OnThink(s)
+				}
+			})
+		},
+		OnToolStart: func(n, a string) {
+			r.broadcast(id, func(e Events) {
+				if e.OnToolStart != nil {
+					e.OnToolStart(n, a)
+				}
+			})
+		},
+		OnToolEnd: func(n, res string) {
+			r.broadcast(id, func(e Events) {
+				if e.OnToolEnd != nil {
+					e.OnToolEnd(n, res)
+				}
+			})
+		},
+		OnSteer: func(s string) {
+			r.broadcast(id, func(e Events) {
+				if e.OnSteer != nil {
+					e.OnSteer(s)
+				}
+			})
+		},
+		OnCompact: func(took, kept int) {
+			r.broadcast(id, func(e Events) {
+				if e.OnCompact != nil {
+					e.OnCompact(took, kept)
+				}
+			})
+		},
+	}
+}
+
+// broadcast runs a subscriber callback for each of the task's subscribers.
+// The slice is walked under the registry lock; settle deletes the entry, so
+// post-settle events (there should be none) would go nowhere.
+func (r *taskRegistry) broadcast(id string, call func(Events)) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, e := range r.subs[id] {
+		call(e)
+	}
 }
 
 // Tasks returns the registry, creating it lazily.

@@ -129,6 +129,11 @@ type model struct {
 
 	irunner *interactiveRunner // installed on tools.InteractiveBash at startup
 	iactive *interactive       // in-flight interactive command; nil when idle
+
+	tasksFocus bool      // the tasks dock owns ↑/↓/enter/esc instead of the input
+	taskSel    int       // selected row in the dock (index into newest-first tasks)
+	taskVP     *taskView // open per-task detail view; nil when on the main thread
+	dockRows   int       // rendered dock height; layout() maintains it for click math
 }
 
 // picker is the /resume session browser. metas is newest-first; the list is
@@ -789,11 +794,25 @@ func (m *model) layout() {
 	if len(m.queue) > 0 {
 		chrome += len(m.queue) + 1
 	}
+	if m.taskVP != nil {
+		m.refreshTaskVP() // the task pane owns the free area; size it to fit
+	}
+	m.dockRows = lipgloss.Height(m.tasksDock())
+	if m.dockRows > 0 {
+		chrome += m.dockRows + 1 // strip + the blank line above the input
+	}
 	w, h := m.width, max(m.height-chrome, 1)
 	if m.vp.Width != w || m.vp.Height != h {
 		m.vp.Width, m.vp.Height = w, h
 		m.refreshVP()
 	}
+}
+
+// dockTop returns the screen row where the tasks dock starts (its rows are
+// the last rows above the input box and bottom pad). layout() keeps dockRows
+// in sync with what View renders.
+func (m *model) dockTop() int {
+	return m.height - 2 - m.input.Height() - m.dockRows
 }
 
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -825,7 +844,39 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.setEffort(nextEffort(m.effortsFor(), m.agent.Effort))
 			return m, nil
 		}
+		if m.taskVP != nil {
+			// the open task pane owns the free area: wheel scrolls it
+			if msg.Button == tea.MouseButtonWheelUp || msg.Button == tea.MouseButtonWheelDown {
+				var cmd tea.Cmd
+				m.taskVP.vp, cmd = m.taskVP.vp.Update(msg)
+				return m, cmd
+			}
+			return m, nil
+		}
 		if m.picker == nil && m.mpicker == nil {
+			// dock rows sit just above the input box: click selects/opens,
+			// wheel scrolls the selection through the strip
+			if top, n := m.dockTop(), len(m.dockTasks()); n > 0 && msg.Y >= top && msg.Y < top+n {
+				if msg.Button == tea.MouseButtonWheelUp || msg.Button == tea.MouseButtonWheelDown {
+					m.tasksFocus = true
+					if msg.Button == tea.MouseButtonWheelUp {
+						m.taskSel = max(m.taskSel-1, 0)
+					} else {
+						m.taskSel = min(m.taskSel+1, n-1)
+					}
+					return m, nil
+				}
+				if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
+					sel := m.taskSel
+					if m.tasksFocus {
+						sel = msg.Y - top
+					}
+					m.tasksFocus = true
+					m.taskSel = min(sel, n-1)
+					m.openTask(m.dockTasks()[m.taskSel].ID)
+					return m, nil
+				}
+			}
 			// click on a collapsed tool result expands it (and vice versa)
 			if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft &&
 				msg.Y > 1 && m.palette == nil {
@@ -1006,8 +1057,37 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case taskUpdateMsg:
-		// a background subagent started or settled; redraw so /tasks and the
-		// header badge reflect it. The registry holds the state; nothing to do.
+		// a background subagent started or settled; the dock shows it. An
+		// open view of a settled task reloads from the stored report.
+		if m.taskVP != nil {
+			if t, ok := m.agent.Tasks().Get(m.taskVP.id); ok && t.Status != agent.TaskRunning && m.taskVP.live {
+				m.openTask(m.taskVP.id) // reseed with the final report
+			} else {
+				m.refreshTaskVP()
+			}
+		}
+		return m, nil
+
+	case taskEventMsg:
+		// one live event from the open task's subagent stream; append it to
+		// the pane's transcript (deltas coalesce into lines before append)
+		tv := m.taskVP
+		if tv == nil || msg.id != tv.id {
+			return m, nil
+		}
+		switch msg.kind {
+		case 0: // text delta
+			tv.buf.WriteString(msg.s)
+		case 1: // tool start
+			fmt.Fprintf(&tv.buf, "\n%s %s %s\n", toolStyle.Render("⚒"), msg.s, dimStyle.Render(msg.s2))
+		case 2: // tool end
+			preview := strings.Split(strings.TrimRight(msg.s2, "\n"), "\n")
+			if len(preview) > 4 {
+				preview = append(preview[:4], fmt.Sprintf("… +%d lines", len(msg.s2)-4))
+			}
+			fmt.Fprintf(&tv.buf, "%s\n", dimStyle.Render("  "+strings.Join(preview, "\n  ")))
+		}
+		m.refreshTaskVP()
 		return m, nil
 
 	case imageMsg:
@@ -1066,7 +1146,20 @@ func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.refreshMenu()
 		return m, cmd
 	}
+	// an open task detail view owns the keyboard until esc backs out of it
+	if m.taskVP != nil {
+		return m.taskViewKey(msg)
+	}
 	switch msg.Type {
+	case tea.KeyCtrlT:
+		// focus the tasks dock (or unfocus it) — the persistent strip above
+		// the input listing background subagents
+		if len(m.dockTasks()) == 0 {
+			return m, nil
+		}
+		m.tasksFocus = !m.tasksFocus
+		m.clampTaskSel()
+		return m, nil
 	case tea.KeyCtrlC:
 		if m.busy && m.cancel != nil {
 			// explicit interruption: first press arms, second cancels
@@ -1108,6 +1201,10 @@ func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		if m.queueSel >= 0 { // leave queue navigation
 			m.queueSel = -1
+			return m, nil
+		}
+		if m.tasksFocus { // leave dock navigation, back to the main thread
+			m.tasksFocus = false
 			return m, nil
 		}
 		return m, nil
@@ -1153,6 +1250,10 @@ func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.menu.idx = (m.menu.idx + 1) % len(m.menu.cands)
 			return m, nil
 		}
+		if m.tasksFocus {
+			m.taskSel = min(m.taskSel+1, len(m.dockTasks())-1)
+			return m, nil
+		}
 		// while busy with a queue and an empty input, ↓ moves the queue
 		// selection toward newer messages (and off the end to deselect)
 		if m.busy && len(m.queue) > 0 && m.input.Value() == "" {
@@ -1184,6 +1285,10 @@ func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case tea.KeyUp, tea.KeyCtrlP:
 		if m.menu != nil {
 			m.menu.idx = (m.menu.idx + len(m.menu.cands) - 1) % len(m.menu.cands)
+			return m, nil
+		}
+		if m.tasksFocus {
+			m.taskSel = max(m.taskSel-1, 0)
 			return m, nil
 		}
 		// while busy with a queue and an empty input, ↑ selects queued messages
@@ -1254,6 +1359,11 @@ func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, nil // completed something; next enter submits
 			}
 			// selection was already fully typed — fall through to submit
+		}
+		if m.tasksFocus { // open the selected task's detail view
+			m.tasksFocus = false
+			m.openTask(m.dockTasks()[m.taskSel].ID)
+			return m, nil
 		}
 		text := strings.TrimSpace(m.input.Value())
 		if m.busy {
@@ -1839,6 +1949,16 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 		}()
 		return m, m.spin.Tick
 	case "/tasks":
+		if len(fields) > 1 { // /tasks <id>: jump straight into the detail view
+			m.openTask(fields[1])
+			return m, nil
+		}
+		// bare /tasks focuses the dock if it exists, else prints the list
+		if len(m.dockTasks()) > 0 {
+			m.tasksFocus = true
+			m.clampTaskSel()
+			return m, nil
+		}
 		m.append(m.tasksView())
 		return m, nil
 	case "/theme":
@@ -1920,7 +2040,7 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 		m.openPicker()
 	case "/help":
 		m.append(dimStyle.Render(
-			"/model <name> [provider] — switch model\n/compact [model] [provider]|off — compact now at 90% context, or pick the compaction model\n/mouse — toggle mouse capture (off = native terminal selection)\n/theme [light|dark|auto] — color scheme (bare toggles)\n/tasks — list background subagents (task tool with background:true runs concurrently)\n/resume [id] — resume a previous session\n/goal <text> — keep working until the goal is met (resume | clear | rounds <n>|default [--global])\n/clear — reset conversation\n/quit — exit\ntab — complete · ctrl+o — toggle thinking tokens · ctrl+e — expand the last tool result · ctrl+j / shift+enter — newline · ctrl+v — paste image · esc — interrupt the agent · while busy with queued messages: ↑/↓ select, del removes · PgUp/PgDn — scroll · drag — select/copy text (native) · ctrl+c ctrl+c — quit"))
+			"/model <name> [provider] — switch model\n/compact [model] [provider]|off — compact now at 90% context, or pick the compaction model\n/mouse — toggle mouse capture (off = native terminal selection)\n/theme [light|dark|auto] — color scheme (bare toggles)\n/tasks [id] — background subagents: focus the dock, or open one task's live view (ctrl+t toggles dock focus)\n/resume [id] — resume a previous session\n/goal <text> — keep working until the goal is met (resume | clear | rounds <n>|default [--global])\n/clear — reset conversation\n/quit — exit\ntab — complete · ctrl+t — focus the background-tasks dock (↑/↓ select, enter opens, esc backs out) · ctrl+o — toggle thinking tokens · ctrl+e — expand the last tool result · ctrl+j / shift+enter — newline · ctrl+v — paste image · esc — interrupt the agent · while busy with queued messages: ↑/↓ select, del removes · PgUp/PgDn — scroll · drag — select/copy text (native) · ctrl+c ctrl+c — quit"))
 	case "/model":
 		if len(fields) < 2 {
 			m.openModelPicker()
@@ -2034,6 +2154,10 @@ func (m *model) View() string {
 		b.WriteString(m.modelPickerView())
 		return b.String()
 	}
+	if m.taskVP != nil {
+		b.WriteString(m.taskViewView())
+		return b.String()
+	}
 	// One compact hint up top — the full roster lives behind the ctrl+p palette
 	// and the /help command. The bottom hint covers the busy/interactive states.
 	tips := "`ctrl+p` commands"
@@ -2078,6 +2202,10 @@ func (m *model) View() string {
 	if m.quit1 {
 		// first idle ctrl+c armed the quit; make the second press discoverable
 		b.WriteString("\n" + errStyle.Render("press ctrl+c again to quit"))
+	}
+	// the persistent background-subagent strip sits just above the input box
+	if dock := m.tasksDock(); dock != "" {
+		b.WriteString(dock + "\n")
 	}
 	if m.menu != nil {
 		b.WriteString("\n" + m.menuView())
