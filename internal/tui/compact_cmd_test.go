@@ -22,8 +22,9 @@ func compactCmdModel() *model {
 		w.Write([]byte(`{"choices":[{"message":{"content":"sim"}}]}`))
 	}))
 	m := &model{
-		input: newInput(),
-		agent: agent.New(llm.New(srv.URL, "k"), "kimi-k3-fast", 100, "sys"),
+		input:   newInput(),
+		mouseOn: true, // matches the Run() default (wheel scroll + native drag-copy)
+		agent:   agent.New(llm.New(srv.URL, "k"), "kimi-k3-fast", 100, "sys"),
 		cfg: &config.Config{
 			DefaultModel: "kimi-k3-fast",
 			Providers:    map[string]config.Provider{"inference": {BaseURL: "https://x", APIKey: "k"}},

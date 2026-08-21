@@ -2,9 +2,11 @@
 package tui
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"regexp"
 	"strings"
 	"sync"
@@ -188,7 +190,14 @@ func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string) (s
 	ti := newInput()
 
 	ag.Effort = cfg.DefaultEffort
-	mouseOn := false // default OFF: native terminal selection (drag-to-copy) just works
+	// Mouse capture ON by default so the wheel scrolls the transcript viewport
+	// and ⚡/tool clicks work — but only wheel+click reporting (?1000), NOT
+	// cell-motion (?1002). With capture off, tmux's WheelUpPane binding sees
+	// mouse_any_flag=0 and runs 'copy-mode -e', scrolling tmux's own scrollback
+	// instead of the transcript. We don't report motion, so drags aren't sent
+	// to loopy; the tmux drag override (applyTmuxMouseFix) routes MouseDrag1Pane
+	// to copy-mode so plain drag-to-copy keeps working. Explicit config wins.
+	mouseOn := true
 	if cfg.Mouse != nil {
 		mouseOn = *cfg.Mouse
 	}
@@ -218,13 +227,15 @@ func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string) (s
 		}
 	}
 	// Inline rendering (no alt-screen): the transcript lives in the normal
-	// terminal scrollback, so drag-to-select/copy works natively everywhere —
-	// no shift-modifier, no /mouse toggle, no tmux passthrough quirk. This is
-	// what makes copying "just work" in opencode/codex. Mouse capture is off
-	// by default for the same reason; /mouse opts back in for ⚡ clicks.
+	// terminal scrollback, so terminal scrollback owns history. Mouse capture
+	// is ON but wheel+click only (?1000, no motion ?1002): the wheel scrolls
+	// the viewport (capture off → tmux eats it into copy-mode), ⚡ clicks work,
+	// and a plain drag selects/copies natively (no motion reporting means the
+	// terminal/tmux keeps drag-selection; we never see the drag bytes).
 	opts := []tea.ProgramOption{}
 	if m.mouseOn {
-		opts = append(opts, tea.WithMouseCellMotion())
+		opts = append(opts, tea.WithMouseCellMotion(), tea.WithOutput(clickWheelMouseWriter(os.Stdout)))
+		applyTmuxMouseFix()
 	}
 	cfgThemeValue = cfg.Theme // config override feeds detection
 	detectColorScheme()       // pick the glamour style that matches the terminal bg
@@ -241,6 +252,59 @@ func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string) (s
 	// loopy. KillAll SIGKILLs every tracked process group and waits for them.
 	bashrun.KillAll()
 	return m.sessionID, err
+}
+
+// clickWheelMouseWriter downgrades bubbletea's mouse reporting from cell-motion
+// (?1002) to click+wheel only (?1000). bubbletea's WithMouseCellMotion always
+// emits "?1002h" (which turns on motion reporting); with motion on, the
+// terminal/tmux forwards every drag to the app, which kills native drag-to-copy.
+// Rewriting ?1002h→?1000h (and dropping the redundant ?1002l that pairs with it)
+// keeps wheel+click delivery but stops motion/drag bytes, so a plain drag
+// selects text natively while the wheel still scrolls loopy's viewport.
+func clickWheelMouseWriter(w *os.File) *os.File {
+	r, pw, err := os.Pipe()
+	if err != nil {
+		return w // can't intercept; fall back to unfiltered output
+	}
+	go func() {
+		buf := make([]byte, 32*1024)
+		for {
+			n, rerr := r.Read(buf)
+			if n > 0 {
+				chunk := buf[:n]
+				// enable cell-motion → enable click/wheel only
+				chunk = bytes.ReplaceAll(chunk, []byte("\x1b[?1002h"), []byte("\x1b[?1000h"))
+				// drop the paired cell-motion disable (left as a no-op reset)
+				chunk = bytes.ReplaceAll(chunk, []byte("\x1b[?1002l"), []byte("\x1b[?1000l"))
+				if _, werr := w.Write(chunk); werr != nil {
+					return
+				}
+			}
+			if rerr != nil {
+				return
+			}
+		}
+	}()
+	return pw
+}
+
+// applyTmuxMouseFix makes plain drag-to-copy work inside tmux while loopy
+// captures the mouse for wheel/clicks. tmux's default MouseDrag1Pane binding
+// checks mouse_any_flag (set by our ?1000) and forwards the drag to the app,
+// which ignores it — so no highlight ever starts. Rebinding it to copy-mode -M
+// (only when the pane isn't already in a mode and isn't full mouse-tracking)
+// makes the drag open tmux copy-mode selection instead, restoring drag-to-copy.
+// Wheel still reaches loopy: WheelUpPane stays bound to send -M. No-op outside
+// tmux or if tmux isn't available.
+func applyTmuxMouseFix() {
+	if os.Getenv("TMUX") == "" {
+		return
+	}
+	// Only override when the pane can still use copy-mode: not in alt-screen,
+	// not already in a mode, and not full/all mouse tracking (in which case the
+	// app genuinely wants the drag). Then select via copy-mode -M.
+	_ = exec.Command("tmux", "bind-key", "-T", "root", "MouseDrag1Pane", "if-shell", "-F",
+		"#{||:#{alternate_on},#{pane_in_mode},#{mouse_all_flag}}", "send-keys -M", "copy-mode -M").Run()
 }
 
 // fetchCatalogs refreshes each provider's cached model list in the background
@@ -797,8 +861,9 @@ func (m *model) layout() {
 	if m.taskVP != nil {
 		m.refreshTaskVP() // the task pane owns the free area; size it to fit
 	}
-	m.dockRows = lipgloss.Height(m.tasksDock())
-	if m.dockRows > 0 {
+	m.dockRows = 0
+	if dock := m.tasksDock(); dock != "" { // lipgloss.Height("") is 1, not 0
+		m.dockRows = lipgloss.Height(dock)
 		chrome += m.dockRows + 1 // strip + the blank line above the input
 	}
 	w, h := m.width, max(m.height-chrome, 1)
@@ -1981,8 +2046,9 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 		if err := cfg.Save(); err != nil {
 			m.append(errStyle.Render("config save failed: " + err.Error()))
 		}
-		m.append(dimStyle.Render("mouse capture: " + onOff(m.mouseOn) + " (off = native drag-to-copy, the default; on = ⚡ clicks + wheel scroll, hold shift to select)"))
+		m.append(dimStyle.Render("mouse capture: " + onOff(m.mouseOn) + " (on = wheel scroll + ⚡ clicks, the default, drag to select/copy; off = native drag-to-copy, but tmux captures the wheel)"))
 		if m.mouseOn {
+			applyTmuxMouseFix()
 			return m, tea.EnableMouseCellMotion
 		}
 		return m, tea.DisableMouse
@@ -2040,7 +2106,7 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 		m.openPicker()
 	case "/help":
 		m.append(dimStyle.Render(
-			"/model <name> [provider] — switch model\n/compact [model] [provider]|off — compact now at 90% context, or pick the compaction model\n/mouse — toggle mouse capture (off = native terminal selection)\n/theme [light|dark|auto] — color scheme (bare toggles)\n/tasks [id] — background subagents: focus the dock, or open one task's live view (ctrl+t toggles dock focus)\n/resume [id] — resume a previous session\n/goal <text> — keep working until the goal is met (resume | clear | rounds <n>|default [--global])\n/clear — reset conversation\n/quit — exit\ntab — complete · ctrl+t — focus the background-tasks dock (↑/↓ select, enter opens, esc backs out) · ctrl+o — toggle thinking tokens · ctrl+e — expand the last tool result · ctrl+j / shift+enter — newline · ctrl+v — paste image · esc — interrupt the agent · while busy with queued messages: ↑/↓ select, del removes · PgUp/PgDn — scroll · drag — select/copy text (native) · ctrl+c ctrl+c — quit"))
+			"/model <name> [provider] — switch model\n/compact [model] [provider]|off — compact now at 90% context, or pick the compaction model\n/mouse — toggle mouse capture (on = wheel scroll + clicks, drag to copy)\n/theme [light|dark|auto] — color scheme (bare toggles)\n/tasks [id] — background subagents: focus the dock, or open one task's live view (ctrl+t toggles dock focus)\n/resume [id] — resume a previous session\n/goal <text> — keep working until the goal is met (resume | clear | rounds <n>|default [--global])\n/clear — reset conversation\n/quit — exit\ntab — complete · ctrl+t — focus the background-tasks dock (↑/↓ select, enter opens, esc backs out) · ctrl+o — toggle thinking tokens · ctrl+e — expand the last tool result · ctrl+j / shift+enter — newline · ctrl+v — paste image · esc — interrupt the agent · while busy with queued messages: ↑/↓ select, del removes · PgUp/PgDn — scroll · wheel — scroll · drag — select/copy text · ctrl+c ctrl+c — quit"))
 	case "/model":
 		if len(fields) < 2 {
 			m.openModelPicker()
@@ -2196,16 +2262,16 @@ func (m *model) View() string {
 		}
 	}
 	b.WriteString("\n")
+	// the persistent background-subagent strip sits just above the input box
+	if dock := m.tasksDock(); dock != "" {
+		b.WriteString(dock + "\n")
+	}
 	if m.iactive == nil {
 		b.WriteString(m.input.View())
 	}
 	if m.quit1 {
 		// first idle ctrl+c armed the quit; make the second press discoverable
 		b.WriteString("\n" + errStyle.Render("press ctrl+c again to quit"))
-	}
-	// the persistent background-subagent strip sits just above the input box
-	if dock := m.tasksDock(); dock != "" {
-		b.WriteString(dock + "\n")
 	}
 	if m.menu != nil {
 		b.WriteString("\n" + m.menuView())

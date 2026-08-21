@@ -6,12 +6,13 @@ import (
 	"github.com/context-labs/loopy/internal/config"
 )
 
-// Mouse capture defaults OFF so native drag-to-copy works out of the box
-// (opencode/codex behavior); a config "mouse": true opts back into capture.
-func TestMouseDefaultsOff(t *testing.T) {
+// Mouse capture defaults ON (wheel scroll + clicks work) using click/wheel-only
+// reporting (?1000, no motion) so native drag-to-copy still works. A config
+// "mouse": false opts back into no capture.
+func TestMouseDefaultsOn(t *testing.T) {
 	cfg := config.Default()
 	if cfg.Mouse != nil {
-		t.Fatalf("default config must not set mouse (nil = off), got %v", *cfg.Mouse)
+		t.Fatalf("default config must not set mouse (nil = on), got %v", *cfg.Mouse)
 	}
 	b := false
 	cfg2 := &config.Config{Mouse: &b}

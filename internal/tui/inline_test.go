@@ -6,8 +6,10 @@ import (
 )
 
 // The transcript must render inline (no alt-screen) so native drag-to-copy
-// works everywhere: no mouse capture by default, no alt-screen escape in the
-// program options, and the view still assembles header + transcript + input.
+// works everywhere: no alt-screen escape in the view, and the view still
+// assembles header + transcript + input. Mouse capture is ON by default for
+// wheel scroll + clicks (via click/wheel-only ?1000 reporting, no motion, so
+// drag-selection stays native); the model field reflects that default.
 func TestInlineRendering(t *testing.T) {
 	m := compactCmdModel()
 	m.Update(mkWinSize(80, 30))
@@ -21,9 +23,10 @@ func TestInlineRendering(t *testing.T) {
 			t.Errorf("inline view missing %q", want)
 		}
 	}
-	// and mouse stays off by default
-	if m.mouseOn {
-		t.Fatal("mouse capture must default off for native selection")
+	// mouse capture on by default (wheel scroll); drag-copy stays native via
+	// click/wheel-only reporting (no motion), asserted by TestMouseDefaultsOn
+	if !m.mouseOn {
+		t.Fatal("mouse capture must default on for wheel scroll")
 	}
 }
 
