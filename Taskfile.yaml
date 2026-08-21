@@ -47,6 +47,24 @@ tasks:
     cmds:
       - go test ./...
 
+  check:
+    desc: "Format + vet + test (what the pre-commit hook runs)"
+    cmds:
+      - |
+        unformatted=$(gofmt -s -l .)
+        if [ -n "$unformatted" ]; then
+          echo "needs gofmt -s:"; echo "$unformatted"; exit 1
+        fi
+      - go vet ./...
+      - go test ./...
+
+  hooks:
+    desc: "Enable the repo's git hooks (sets core.hooksPath to scripts/git-hooks)"
+    cmds:
+      - git config core.hooksPath scripts/git-hooks
+      - chmod +x scripts/git-hooks/*
+      - echo "git hooks enabled (pre-commit: task check)"
+
   coverage:
     desc: Run tests with per-package coverage report
     cmds:

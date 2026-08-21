@@ -1,0 +1,24 @@
+#!/bin/sh
+# pre-commit: format, vet, and test must all pass before a commit lands.
+# Enabled via `git config core.hooksPath scripts/git-hooks` (see Taskfile
+# `hooks` task). Bypass in an emergency with `git commit --no-verify`.
+set -e
+
+cd "$(git rev-parse --show-toplevel)"
+
+echo "pre-commit: gofmt -s …"
+unformatted=$(gofmt -s -l .)
+if [ -n "$unformatted" ]; then
+	echo "pre-commit: these files need gofmt -s:" >&2
+	echo "$unformatted" >&2
+	echo "run: task fmt  (or gofmt -s -w .)" >&2
+	exit 1
+fi
+
+echo "pre-commit: go vet …"
+go vet ./...
+
+echo "pre-commit: go test …"
+go test ./...
+
+echo "pre-commit: OK"
