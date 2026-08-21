@@ -111,8 +111,32 @@ func runPiped(ctx context.Context, cmd *exec.Cmd) Result {
 	// loopy's terminal and blocking its input loop.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 
-	err := cmd.Run()
-	res := Result{Output: out.String()}
+	// Run the command ourselves (rather than exec.Cmd.Run) so we can close the
+	// output pipes after the process exits. A bare Run would block reading the
+	// pipe while a detached grandchild (nohup, `&` background jobs, daemons)
+	// still holds the write end open — the agent would hang even though the
+	// command itself finished. We close the pipes via the goroutine Run starts
+	// on Wait, so a grandchild keeping them open can't stall us.
+	err := cmd.Start()
+	res := Result{}
+	if err == nil {
+		track(cmd) // register for KillAll on loopy exit
+		// Kill the process group if the run context is cancelled/times out.
+		done := make(chan struct{})
+		defer close(done)
+		go func() {
+			select {
+			case <-ctx.Done():
+				if cmd.Process != nil {
+					_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+				}
+			case <-done:
+			}
+		}()
+		err = cmd.Wait()
+		res.Output = out.String()
+		untrack(cmd)
+	}
 	if ctx.Err() == context.DeadlineExceeded {
 		res.TimedOut = true
 		res.Killed = true
@@ -147,6 +171,8 @@ func runInteractive(ctx context.Context, cmd *exec.Cmd, opts Options) Result {
 		return runPiped(ctx, cmd)
 	}
 	defer ptmx.Close()
+	track(cmd) // register for KillAll on loopy exit
+	defer untrack(cmd)
 
 	// Kill the whole process group (bash + any children) on timeout/cancel so
 	// nothing outlives the run.
@@ -322,6 +348,62 @@ func openDevNull() *os.File {
 		return nil
 	}
 	return f
+}
+
+// Registry of in-flight child processes so KillAll can guarantee none outlive
+// loopy. track is called right after a successful Start; untrack after Wait.
+var (
+	trackMu sync.Mutex
+	tracked = map[int]*exec.Cmd{}
+)
+
+func track(cmd *exec.Cmd) {
+	if cmd.Process == nil {
+		return
+	}
+	trackMu.Lock()
+	tracked[cmd.Process.Pid] = cmd
+	trackMu.Unlock()
+}
+
+func untrack(cmd *exec.Cmd) {
+	if cmd.Process == nil {
+		return
+	}
+	trackMu.Lock()
+	delete(tracked, cmd.Process.Pid)
+	trackMu.Unlock()
+}
+
+// KillAll SIGKILLs every tracked child process group and waits briefly for
+// them to die. Called on loopy exit so an agent-spawned server or watcher
+// never outlives the harness. Safe to call more than once.
+func KillAll() {
+	trackMu.Lock()
+	procs := make([]*exec.Cmd, 0, len(tracked))
+	for _, c := range tracked {
+		procs = append(procs, c)
+	}
+	trackMu.Unlock()
+	for _, c := range procs {
+		if c.Process != nil {
+			// negative pid kills the whole process group (bash + children)
+			_ = syscall.Kill(-c.Process.Pid, syscall.SIGKILL)
+		}
+	}
+	// Give the kernel a moment to reap; don't block exit indefinitely.
+	deadline := time.Now().Add(2 * time.Second)
+	for _, c := range procs {
+		if c.Process == nil {
+			continue
+		}
+		for time.Now().Before(deadline) {
+			if err := c.Process.Signal(syscall.Signal(0)); err != nil {
+				break // process gone
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
 }
 
 // KeyBytes converts a small set of named special keys to their terminal byte

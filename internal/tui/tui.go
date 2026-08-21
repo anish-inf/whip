@@ -23,6 +23,7 @@ import (
 	"github.com/context-labs/loopy/internal/session"
 	"github.com/context-labs/loopy/internal/skills"
 	"github.com/context-labs/loopy/internal/tools"
+	"github.com/context-labs/loopy/internal/tools/bashrun"
 )
 
 var (
@@ -51,6 +52,7 @@ type turnDoneMsg struct {
 }
 type catalogsMsg map[string]config.Catalog // background /models fetch result
 type usageMsg llm.Usage                    // one request's token usage
+type quitArmMsg struct{}                   // the idle ctrl+c arm window expired
 type thinkMsg string                       // streamed reasoning tokens
 type imageMsg struct {                     // ctrl+v clipboard image result
 	path string // clipboard image saved to disk
@@ -104,6 +106,7 @@ type model struct {
 	queue      []string // messages typed while busy, sent after the turn ends
 	queueSel   int      // selected queued message, -1 = none (not navigating)
 	interrupt1 bool     // first ctrl+c pressed while busy; second cancels
+	quit1      bool     // first ctrl+c pressed while idle; second quits (armed briefly)
 
 	goal       string // active /goal; the loop continues until GOAL_MET
 	goalRounds int    // continuation turns spent on the current goal
@@ -204,6 +207,10 @@ func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string) (s
 	tools.InteractiveBash = m.irunner
 	go m.fetchCatalogs()
 	_, err = p.Run()
+	// The UI has exited (quit, /quit, or a signal) — make sure no agent-spawned
+	// child process (a server the model started, a watcher, a daemon) outlives
+	// loopy. KillAll SIGKILLs every tracked process group and waits for them.
+	bashrun.KillAll()
 	return m.sessionID, err
 }
 
@@ -713,6 +720,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// reads those); this message just forces a redraw mid-stream.
 		return m, nil
 
+	case quitArmMsg:
+		m.quit1 = false // the arm window closed; next ctrl+c starts fresh
+		return m, nil
+
 	case imageMsg:
 		switch {
 		case msg.err != nil:
@@ -781,7 +792,14 @@ func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.cancel()
 			return m, nil
 		}
-		return m, tea.Quit
+		// idle: two presses within a short window quit, so a stray ctrl+c
+		// can't nuke the session. First press arms + hints; second quits.
+		if m.quit1 {
+			m.quit1 = false
+			return m, tea.Quit
+		}
+		m.quit1 = true
+		return m, tea.Tick(2*time.Second, func(time.Time) tea.Msg { return quitArmMsg{} })
 
 	case tea.KeyPgUp, tea.KeyPgDown:
 		var cmd tea.Cmd
@@ -1212,7 +1230,11 @@ func (m *model) prepareTurn(text string) string {
 // A rendered segment can reflow to a different height than the raw text, so
 // the whole segment lands as one block.
 func (m *model) appendAssistant(s string) {
-	rendered := renderMarkdown(s, m.width-2) // -2: body indents under the marker
+	w := m.width - 2 // -2: body indents under the marker
+	if w <= 0 {
+		w = 80 // no terminal size yet (pre-WindowSizeMsg): sane default
+	}
+	rendered := renderMarkdown(s, w)
 	if !m.inMsg {
 		body := indentLines(rendered, 2)
 		m.append(botStyle.Render("● ") + strings.TrimPrefix(body, "  "))
@@ -1378,8 +1400,10 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 		go func() {
 			took := len(ag.Messages)
 			err := ag.ManualCompact(ctx, agent.Events{})
-			p.Send(compactMsg{took: took - len(ag.Messages), kept: len(ag.Messages), err: err})
-			p.Send(turnDoneMsg{}) // clear busy state
+			if p != nil { // nil in headless tests; compaction still ran
+				p.Send(compactMsg{took: took - len(ag.Messages), kept: len(ag.Messages), err: err})
+				p.Send(turnDoneMsg{}) // clear busy state
+			}
 		}()
 		return m, m.spin.Tick
 	case "/mouse":
@@ -1597,6 +1621,10 @@ func (m *model) View() string {
 	b.WriteString("\n")
 	if m.iactive == nil {
 		b.WriteString(m.input.View())
+	}
+	if m.quit1 {
+		// first idle ctrl+c armed the quit; make the second press discoverable
+		b.WriteString("\n" + errStyle.Render("press ctrl+c again to quit"))
 	}
 	if m.menu != nil {
 		b.WriteString("\n" + m.menuView())

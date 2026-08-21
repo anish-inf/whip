@@ -32,7 +32,7 @@ func TestPaletteSuggestedGroupOnTop(t *testing.T) {
 	for _, it := range m.palette.items {
 		titles[it.title] = true
 	}
-	for _, want := range []string{"Switch model", "Resume session", "Compact session", "Help", "Quit"} {
+	for _, want := range []string{"Model", "Resume session", "Compact session", "Goal", "Help", "Quit"} {
 		if !titles[want] {
 			t.Errorf("palette missing %q", want)
 		}
@@ -42,18 +42,18 @@ func TestPaletteSuggestedGroupOnTop(t *testing.T) {
 func TestPaletteFilter(t *testing.T) {
 	m := compactCmdModel()
 	m.openPalette()
-	for _, r := range "compact" {
+	for _, r := range "new sess" {
 		tm, _ := m.paletteKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
 		m = tm.(*model)
 	}
-	if len(m.palette.items) != 1 || m.palette.items[0].title != "Compact session" {
-		t.Fatalf("filter 'compact': %+v", m.palette.items)
+	if len(m.palette.items) != 1 || m.palette.items[0].title != "New session" {
+		t.Fatalf("filter 'new sess': %+v", m.palette.items)
 	}
 	if m.palette.items[0].category != "Session" {
 		t.Fatalf("filtering drops the Suggested group, got %q", m.palette.items[0].category)
 	}
 	// backspace restores the full list
-	for i := 0; i < 7; i++ {
+	for i := 0; i < 8; i++ {
 		tm, _ := m.paletteKey(tea.KeyMsg{Type: tea.KeyBackspace})
 		m = tm.(*model)
 	}
@@ -94,9 +94,6 @@ func TestPaletteEnterRunsCommand(t *testing.T) {
 	if msg := cmd(); msg != tea.Quit() {
 		t.Fatalf("expected tea.QuitMsg, got %v", msg)
 	}
-	if m.palette != nil {
-		t.Fatal("palette should close after running a command")
-	}
 }
 
 func TestPaletteViewRendersCategories(t *testing.T) {
@@ -120,5 +117,205 @@ func TestPaletteCtrlCClosesNotQuits(t *testing.T) {
 	m = tm.(*model)
 	if m.palette != nil {
 		t.Fatal("ctrl+c should close the palette, not quit the app")
+	}
+}
+
+// Reversible rows change the setting in place with ←/→ while the palette
+// stays open — the core of the interactive palette.
+func TestPaletteArrowsStepEffortInPlace(t *testing.T) {
+	m := compactCmdModel()
+	m.openPalette()
+	var tm tea.Model
+	for _, r := range "effort" {
+		tm, _ = m.paletteKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		m = tm.(*model)
+	}
+	if m.palette.items[m.palette.idx].title != "Reasoning effort" {
+		t.Fatalf("filter 'effort' should select Reasoning effort")
+	}
+	tm, _ = m.paletteKey(tea.KeyMsg{Type: tea.KeyRight})
+	m = tm.(*model)
+	if m.palette == nil {
+		t.Fatal("→ must keep the palette open")
+	}
+	if m.agent.Effort != "low" {
+		t.Fatalf("→ should step off → low, got %q", m.agent.Effort)
+	}
+	tm, _ = m.paletteKey(tea.KeyMsg{Type: tea.KeyLeft})
+	m = tm.(*model)
+	if m.agent.Effort != "" {
+		t.Fatalf("← should step back to off, got %q", m.agent.Effort)
+	}
+}
+
+// Toggles apply in place too: enter flips thinking tokens, palette open.
+func TestPaletteToggleThinkingInPlace(t *testing.T) {
+	m := compactCmdModel()
+	m.openPalette()
+	var tm tea.Model
+	for _, r := range "thinking" {
+		tm, _ = m.paletteKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		m = tm.(*model)
+	}
+	tm, _ = m.paletteKey(tea.KeyMsg{Type: tea.KeyEnter})
+	m = tm.(*model)
+	if m.palette == nil {
+		t.Fatal("enter on a toggle must keep the palette open")
+	}
+	if !m.showThinking {
+		t.Fatal("enter should have toggled thinking tokens on")
+	}
+}
+
+// Sub-panels drill in and esc pops back one level to the root list.
+func TestPalettePanelPushPop(t *testing.T) {
+	m := compactCmdModel()
+	m.openPalette()
+	var tm tea.Model
+	for _, r := range "effort" {
+		tm, _ = m.paletteKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		m = tm.(*model)
+	}
+	tm, _ = m.paletteKey(tea.KeyMsg{Type: tea.KeyEnter})
+	m = tm.(*model)
+	pp := m.palette.top()
+	if pp == nil || pp.kind != panelEffort {
+		t.Fatal("enter should push the effort panel")
+	}
+	if pp.levels[pp.lidx] != m.agent.Effort {
+		t.Fatalf("panel should start on the current level, got %q", pp.levels[pp.lidx])
+	}
+	// filter input is paused inside a panel: typing runes does nothing
+	tm, _ = m.paletteKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	m = tm.(*model)
+	if m.palette.filter != "effort" {
+		t.Fatalf("panel should not edit the root filter, got %q", m.palette.filter)
+	}
+	tm, _ = m.paletteKey(tea.KeyMsg{Type: tea.KeyEsc})
+	m = tm.(*model)
+	if m.palette == nil || m.palette.top() != nil {
+		t.Fatal("esc should pop back to the root list, not close")
+	}
+}
+
+// The effort panel lists the model's levels and applies the highlighted one.
+func TestPaletteEffortPanelApplies(t *testing.T) {
+	m := compactCmdModel()
+	m.openPalette()
+	var tm tea.Model
+	for _, r := range "effort" {
+		tm, _ = m.paletteKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		m = tm.(*model)
+	}
+	tm, _ = m.paletteKey(tea.KeyMsg{Type: tea.KeyEnter}) // push panel
+	m = tm.(*model)
+	tm, _ = m.paletteKey(tea.KeyMsg{Type: tea.KeyDown}) // off → low
+	m = tm.(*model)
+	tm, _ = m.paletteKey(tea.KeyMsg{Type: tea.KeyDown}) // low → medium
+	m = tm.(*model)
+	tm, _ = m.paletteKey(tea.KeyMsg{Type: tea.KeyEnter})
+	m = tm.(*model)
+	if m.agent.Effort != "medium" {
+		t.Fatalf("enter should apply the highlighted level, got %q", m.agent.Effort)
+	}
+	if m.palette.top() != nil {
+		t.Fatal("enter should pop the panel after applying")
+	}
+}
+
+// The model panel previews routes live while browsing — the header follows
+// the selection before anything is committed.
+func TestPaletteModelPanelPreviewsLive(t *testing.T) {
+	m := compactCmdModel()
+	m.openPalette()
+	var tm tea.Model
+	tm, _ = m.paletteKey(tea.KeyMsg{Type: tea.KeyDown}) // Suggested: Model → Resume…
+	m = tm.(*model)
+	tm, _ = m.paletteKey(tea.KeyMsg{Type: tea.KeyUp}) // back onto Model
+	m = tm.(*model)
+	tm, _ = m.paletteKey(tea.KeyMsg{Type: tea.KeyEnter}) // push model panel
+	m = tm.(*model)
+	pp := m.palette.top()
+	if pp == nil || pp.kind != panelModel {
+		t.Fatal("enter should push the model panel")
+	}
+	if len(pp.items) != 2 {
+		t.Fatalf("expected 2 routes, got %d", len(pp.items))
+	}
+	tm, _ = m.paletteKey(tea.KeyMsg{Type: tea.KeyDown})
+	m = tm.(*model)
+	if m.modelName != "glm-5.2-fast" {
+		t.Fatalf("browsing should live-preview the switch, got %q", m.modelName)
+	}
+	if m.cfg.DefaultModel != "kimi-k3-fast" {
+		t.Fatal("preview must not persist the default before enter")
+	}
+	// esc cancels the browse but the preview stays (switch back manually)
+	tm, _ = m.paletteKey(tea.KeyMsg{Type: tea.KeyEsc})
+	m = tm.(*model)
+	if m.palette.top() != nil {
+		t.Fatal("esc should pop the model panel")
+	}
+}
+
+// The goal panel edits the goal inline; enter applies and starts working.
+func TestPaletteGoalPanelSetsGoal(t *testing.T) {
+	m := compactCmdModel()
+	// commitGoal submits the first turn; give the goroutine a program to send
+	// to (offline — messages just drain into its queue)
+	m.prog = tea.NewProgram(m, tea.WithoutRenderer())
+	defer m.prog.Kill()
+	m.openPalette()
+	var tm tea.Model
+	for _, r := range "goal" {
+		tm, _ = m.paletteKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		m = tm.(*model)
+	}
+	tm, _ = m.paletteKey(tea.KeyMsg{Type: tea.KeyEnter}) // push goal panel
+	m = tm.(*model)
+	for _, r := range "ship it" {
+		tm, _ := m.paletteKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		m = tm.(*model)
+	}
+	tm, _ = m.paletteKey(tea.KeyMsg{Type: tea.KeyEnter})
+	m = tm.(*model)
+	if m.goal != "ship it" {
+		t.Fatalf("enter should set the goal, got %q", m.goal)
+	}
+	if !m.busy {
+		t.Fatal("setting a goal should start the first turn")
+	}
+	if m.palette.top() != nil {
+		t.Fatal("enter should pop the goal panel")
+	}
+}
+
+// The compaction-model panel applies on ←/→ without closing.
+func TestPaletteCompactPanelAppliesInPlace(t *testing.T) {
+	m := compactCmdModel()
+	m.openPalette()
+	var tm tea.Model
+	for m.palette.items[m.palette.idx].title != "Compaction model" {
+		tm, _ = m.paletteKey(tea.KeyMsg{Type: tea.KeyDown})
+		m = tm.(*model)
+	}
+	tm, _ = m.paletteKey(tea.KeyMsg{Type: tea.KeyEnter}) // push compact panel
+	m = tm.(*model)
+	pp := m.palette.top()
+	if pp == nil || pp.kind != panelCompact {
+		t.Fatal("enter should push the compaction panel")
+	}
+	if pp.midx != 0 { // no override configured → "current" selected
+		t.Fatalf("should start on 'current', got %d", pp.midx)
+	}
+	tm, _ = m.paletteKey(tea.KeyMsg{Type: tea.KeyDown})
+	m = tm.(*model)
+	tm, _ = m.paletteKey(tea.KeyMsg{Type: tea.KeyRight}) // apply in place
+	m = tm.(*model)
+	if m.compactModel == "" {
+		t.Fatal("→ should apply the highlighted model")
+	}
+	if m.palette.top() == nil {
+		t.Fatal("→ must keep the panel open")
 	}
 }

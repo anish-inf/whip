@@ -57,8 +57,8 @@ func TestModelBareEnterOpensPicker(t *testing.T) {
 	}
 }
 
-// The ctrl+p palette's first suggestion is Switch model; enter opens the
-// interactive model picker.
+// The ctrl+p palette's first suggestion is Model; enter drills into its
+// interactive panel without leaving the palette.
 func TestModelPaletteEnterOpensPicker(t *testing.T) {
 	m := modelCmdModel()
 	tm, _ := m.key(tea.KeyMsg{Type: tea.KeyCtrlP})
@@ -66,13 +66,17 @@ func TestModelPaletteEnterOpensPicker(t *testing.T) {
 	if m.palette == nil {
 		t.Fatal("ctrl+p should open the command palette")
 	}
-	if len(m.palette.items) == 0 || m.palette.items[0].title != "Switch model" {
-		t.Fatalf("first suggestion should be Switch model, got %+v", m.palette.items)
+	if len(m.palette.items) == 0 || m.palette.items[0].title != "Model" {
+		t.Fatalf("first suggestion should be Model, got %+v", m.palette.items)
 	}
 	tm, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = tm.(*model)
-	if m.mpicker == nil {
-		t.Fatalf("palette Switch model + enter should open the picker; input=%q", m.input.Value())
+	pp := m.palette.top()
+	if pp == nil || pp.kind != panelModel {
+		t.Fatalf("palette Model + enter should push the model panel; input=%q", m.input.Value())
+	}
+	if len(pp.items) == 0 {
+		t.Fatal("model panel should list the configured routes")
 	}
 }
 

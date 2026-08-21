@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -10,73 +11,230 @@ import (
 // paletteItem is one row in the ctrl+p command palette. It mirrors opencode's
 // DialogSelectOption: title + description + category header + a dimmed hint
 // (the keybind or slash form — the palette teaches the shortcuts).
+//
+// Items are interactive: every row either toggles a live setting in place
+// (enter, or ←/→ for reversible ones) or opens a sub-panel inside the palette
+// where the change is explored and applied without leaving ctrl+p. Nothing
+// closes the palette just to make a change — esc backs out instead.
 type paletteItem struct {
-	title     string // display name, e.g. "Switch model"
-	desc      string // longer explanation
-	category  string // "Agent", "Session", "Display", "App"
-	hint      string // keybind or slash form, dimmed on the right
-	suggested bool   // pinned into a "Suggested" group when the filter is empty
-	run       func(m *model) (tea.Model, tea.Cmd)
+	title    string // display name, e.g. "Model"
+	category string // "Agent", "Session", "Display", "App"
+
+	// dynDesc/dynHint render live state, so the palette always shows the
+	// current value instead of a static description.
+	dynDesc func(m *model) string
+	dynHint func(m *model) string
+
+	suggested bool // pinned into a "Suggested" group when the filter is empty
+
+	// action rows: enter runs it (palette stays open)
+	run func(m *model) (tea.Model, tea.Cmd)
+
+	// sub-panel rows: enter/→ drills in (push), esc pops back
+	panel func(m *model) *ppanel
+
+	// reversible rows: ←/→ step the value backward/forward without a panel
+	stepBack func(m *model)
+	stepFwd  func(m *model)
+}
+
+// panelKind enumerates the palette's sub-panels.
+type panelKind int
+
+const (
+	panelModel panelKind = iota
+	panelEffort
+	panelGoal
+	panelCompact
+)
+
+// ppanel is a palette sub-panel: the interactive editor behind a row. Key
+// handling switches on kind; the slice fields hold whatever that kind lists
+// (models, effort levels, …).
+type ppanel struct {
+	kind  panelKind
+	title string
+
+	items []modelItem // panelModel: flattened model@provider routes
+	idx   int
+
+	levels []string // panelEffort: available levels ("" = off)
+	lidx   int
+
+	prepare string // panelGoal: text submitted when the editor closes
+
+	cands []string // panelCompact: model names from config
+	list  []string // panelCompact: "current" + cands
+	midx  int      // panelCompact: selection, 0 = current model
+
+	err string // inline error from a failed apply (bad compact model, …)
 }
 
 // palette is the ctrl+p command palette: a modal full-screen dialog with its
 // own filter line (opencode's DialogSelect). Typing fuzzy-filters, ↑/↓ moves,
-// enter runs, esc pops.
+// enter applies or drills in, ←/→ steps reversible settings, esc pops a level.
 type palette struct {
-	items    []paletteItem // filtered
-	all      []paletteItem // unfiltered
-	idx      int
-	filter   string
-	suggOnly bool // filter empty → "Suggested" group on top (opencode's suggested:true)
+	items  []paletteItem // filtered
+	all    []paletteItem // unfiltered
+	idx    int
+	filter string
+	stack  []*ppanel
 }
 
-// paletteItems builds the registry. Actions dispatch through m.command so the
-// palette, slash commands, and /help share one implementation (opencode's
-// single command registry → palette + slash + help projection).
 func (m *model) paletteItems() []paletteItem {
-	quit := func(m *model) (tea.Model, tea.Cmd) { return m, tea.Quit }
 	return []paletteItem{
-		{title: "Switch model", desc: "Pick a model and provider", category: "Agent", hint: "/model · tab", suggested: true,
-			run: func(m *model) (tea.Model, tea.Cmd) { m.openModelPicker(); return m, nil }},
-		{title: "Cycle effort", desc: "off → low → medium → high (or click ⚡)", category: "Agent", hint: "/effort",
-			run: func(m *model) (tea.Model, tea.Cmd) { return m.command("/effort") }},
-		{title: "Resume session", desc: "Browse and resume previous sessions", category: "Session", hint: "/resume", suggested: true,
-			run: func(m *model) (tea.Model, tea.Cmd) { return m.command("/resume") }},
-		{title: "New session", desc: "Reset the conversation and start fresh", category: "Session", hint: "/clear",
-			run: func(m *model) (tea.Model, tea.Cmd) { return m.command("/clear") }},
-		{title: "Compact session", desc: "Summarize old turns to free context", category: "Session", hint: "/compact",
-			run: func(m *model) (tea.Model, tea.Cmd) { return m.command("/compact") }},
-		{title: "Set goal", desc: "Keep working until the goal is met", category: "Session", hint: "/goal",
+		{title: "Model", category: "Agent", suggested: true,
+			// first suggestion: ctrl+p → enter opens the model panel directly
+			dynDesc: func(m *model) string { return m.modelName + " @ " + m.provName },
+			dynHint: func(m *model) string { return "/model · tab" },
+			panel: func(m *model) *ppanel {
+				items := buildModelItems(m.cfg)
+				if len(items) == 0 {
+					return nil
+				}
+				pp := &ppanel{kind: panelModel, title: "Model", items: items}
+				for i, it := range items { // start on the active route
+					if it.model == m.modelName && it.provider == m.provName {
+						pp.idx = i
+						break
+					}
+				}
+				return pp
+			}},
+		{title: "Reasoning effort", category: "Agent",
+			dynDesc: func(m *model) string {
+				return "thinking level for " + m.agent.Model
+			},
+			dynHint: func(m *model) string { return "/effort" },
+			panel: func(m *model) *ppanel {
+				levels := m.effortsFor()
+				pp := &ppanel{kind: panelEffort, title: "Reasoning effort", levels: levels}
+				for i, e := range levels {
+					if e == m.agent.Effort {
+						pp.lidx = i
+						break
+					}
+				}
+				return pp
+			},
+			stepBack: func(m *model) { m.setEffort(prevEffort(m.effortsFor(), m.agent.Effort)) },
+			stepFwd:  func(m *model) { m.setEffort(nextEffort(m.effortsFor(), m.agent.Effort)) }},
+		{title: "Resume session", category: "Session", suggested: true,
+			dynDesc: func(m *model) string { return "browse and resume previous sessions" },
+			dynHint: func(m *model) string { return "/resume" },
 			run: func(m *model) (tea.Model, tea.Cmd) {
-				m.input.SetValue("/goal ")
-				m.input.CursorEnd()
+				m.palette = nil
+				m.openPicker()
 				return m, nil
 			}},
-		{title: "Toggle thinking tokens", desc: "Show or hide model reasoning", category: "Display", hint: "ctrl+o",
-			run: func(m *model) (tea.Model, tea.Cmd) { return m.key(tea.KeyMsg{Type: tea.KeyCtrlO}) }},
-		{title: "Toggle mouse capture", desc: "Off = native terminal selection", category: "Display", hint: "/mouse",
-			run: func(m *model) (tea.Model, tea.Cmd) { return m.command("/mouse") }},
-		{title: "Help", desc: "Show all commands and keybindings", category: "App", hint: "/help",
-			run: func(m *model) (tea.Model, tea.Cmd) { return m.command("/help") }},
-		{title: "Quit", desc: "Exit loopy", category: "App", hint: "/quit · ctrl+c",
-			run: quit},
+		{title: "New session", category: "Session",
+			dynDesc: func(m *model) string { return "reset the conversation and start fresh" },
+			dynHint: func(m *model) string { return "/clear" },
+			run: func(m *model) (tea.Model, tea.Cmd) {
+				m.palette = nil
+				return m.command("/clear")
+			}},
+		{title: "Compact session", category: "Session", suggested: true,
+			dynDesc: func(m *model) string { return "summarize old turns to free context" },
+			dynHint: func(m *model) string { return "/compact" },
+			run:     func(m *model) (tea.Model, tea.Cmd) { return m.command("/compact") }},
+		{title: "Compaction model", category: "Session",
+			dynDesc: func(m *model) string {
+				if m.compactModel == "" {
+					return "summaries use the current model"
+				}
+				return m.compactModel
+			},
+			dynHint: func(m *model) string { return "/compact <model>" },
+			panel: func(m *model) *ppanel {
+				names := make([]string, 0, len(m.cfg.Models))
+				for name := range m.cfg.Models {
+					names = append(names, name)
+				}
+				sort.Strings(names)
+				pp := &ppanel{
+					kind:  panelCompact,
+					title: "Compaction model",
+					cands: names,
+					list:  append([]string{"current"}, names...),
+				}
+				for i, name := range pp.list {
+					if name == m.compactModel {
+						pp.midx = i
+						break
+					}
+				}
+				return pp
+			}},
+		{title: "Goal", category: "Session",
+			dynDesc: func(m *model) string {
+				if m.goal == "" {
+					return "keep working until the goal is met"
+				}
+				return truncLine(m.goal, 40)
+			},
+			dynHint: func(m *model) string { return "/goal" },
+			panel: func(m *model) *ppanel {
+				pp := &ppanel{kind: panelGoal, title: "Goal", prepare: m.goal}
+				return pp
+			}},
+		{title: "Thinking tokens", category: "Display",
+			dynDesc: func(m *model) string { return "show or hide model reasoning" },
+			dynHint: func(m *model) string { return "ctrl+o" },
+			run: func(m *model) (tea.Model, tea.Cmd) {
+				m.showThinking = !m.showThinking
+				if !m.showThinking {
+					m.flushThink()
+				}
+				return m, nil
+			},
+			stepBack: func(m *model) { m.showThinking = false; m.flushThink() },
+			stepFwd:  func(m *model) { m.showThinking = true }},
+		{title: "Mouse capture", category: "Display",
+			dynDesc: func(m *model) string { return "off = native terminal selection" },
+			dynHint: func(m *model) string { return "/mouse" },
+			run: func(m *model) (tea.Model, tea.Cmd) {
+				return m.command("/mouse")
+			},
+			stepBack: func(m *model) { m.setMouse(false) },
+			stepFwd:  func(m *model) { m.setMouse(true) }},
+		{title: "Help", category: "App",
+			dynDesc: func(m *model) string { return "show all commands and keybindings" },
+			dynHint: func(m *model) string { return "/help" },
+			run: func(m *model) (tea.Model, tea.Cmd) {
+				m.palette = nil
+				return m.command("/help")
+			}},
+		{title: "Quit", category: "App",
+			dynDesc: func(m *model) string { return "exit loopy" },
+			dynHint: func(m *model) string { return "/quit · ctrl+c" },
+			run:     func(m *model) (tea.Model, tea.Cmd) { return m, tea.Quit }},
 	}
+}
+
+// setMouse applies a mouse-capture state (the palette's reversible steppers
+// need to set an explicit value; /mouse toggles).
+func (m *model) setMouse(on bool) {
+	if m.mouseOn == on {
+		return
+	}
+	m.command("/mouse")
 }
 
 func (m *model) openPalette() {
 	all := m.paletteItems()
 	m.palette = &palette{all: all}
-	m.palette.applyFilter()
+	m.palette.applyFilter(m)
 }
 
 // paletteFilterMatch is a cheap fuzzy match: all query runes must appear in
 // order across title+category (case-insensitive). Good enough for ~10 rows
 // without pulling in fuzzysort.
-func paletteFilterMatch(query string, it paletteItem) bool {
+func paletteFilterMatch(query, hay string) bool {
 	if query == "" {
 		return true
 	}
-	hay := strings.ToLower(it.title + " " + it.category + " " + it.hint)
+	hay = strings.ToLower(hay)
 	for _, r := range strings.ToLower(query) {
 		i := strings.IndexRune(hay, r)
 		if i < 0 {
@@ -87,14 +245,23 @@ func paletteFilterMatch(query string, it paletteItem) bool {
 	return true
 }
 
+// itemHaystack is the text a filter query matches against.
+func itemHaystack(m *model, it paletteItem) string {
+	s := it.title + " " + it.category
+	if it.dynHint != nil {
+		s += " " + it.dynHint(m)
+	}
+	return s
+}
+
 // applyFilter recomputes the visible rows. With an empty filter,
 // suggested entries pin into a "Suggested" category on top (opencode), then
 // everything else grouped by category.
-func (p *palette) applyFilter() {
+func (p *palette) applyFilter(m *model) {
 	q := p.filter
 	var items []paletteItem
 	for _, it := range p.all {
-		if paletteFilterMatch(q, it) {
+		if paletteFilterMatch(q, itemHaystack(m, it)) {
 			items = append(items, it)
 		}
 	}
@@ -135,63 +302,267 @@ func (p *palette) applyFilter() {
 	}
 }
 
-// paletteKey handles input while the palette is open: esc pops, ↑/↓ move,
-// enter runs, typing edits the filter. (opencode: dialogs push a mode; esc
-// pops one level.)
+// selected returns the highlighted row (nil when the filter matched nothing).
+func (p *palette) selected() *paletteItem {
+	if len(p.items) == 0 {
+		return nil
+	}
+	return &p.items[p.idx]
+}
+
+// top returns the active sub-panel (nil = the root command list).
+func (p *palette) top() *ppanel {
+	if len(p.stack) == 0 {
+		return nil
+	}
+	return p.stack[len(p.stack)-1]
+}
+
+// move moves the root-list selection by delta, wrapping at both ends.
+func (p *palette) move(delta int) {
+	n := len(p.items)
+	if n == 0 {
+		return
+	}
+	p.idx = (p.idx + delta + n) % n
+}
+
+// paletteKey handles input while the palette is open: esc pops one level
+// (sub-panel → root list → closed), typing edits the filter or the active
+// sub-panel's editor.
 func (m *model) paletteKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	p := m.palette
+	if pp := p.top(); pp != nil {
+		return m.panelKey(msg, pp)
+	}
 	switch msg.Type {
 	case tea.KeyEsc, tea.KeyCtrlC:
 		m.palette = nil
 	case tea.KeyUp, tea.KeyCtrlP, tea.KeyShiftTab:
-		if p.idx > 0 {
-			p.idx--
-		} else {
-			p.idx = len(p.items) - 1
-		}
+		p.move(-1)
 	case tea.KeyDown, tea.KeyCtrlN, tea.KeyTab:
-		if p.idx < len(p.items)-1 {
-			p.idx++
-		} else {
-			p.idx = 0
+		p.move(1)
+	case tea.KeyLeft:
+		if it := p.selected(); it != nil && it.stepBack != nil {
+			it.stepBack(m)
+		}
+	case tea.KeyRight:
+		it := p.selected()
+		if it == nil {
+			break
+		}
+		if it.stepFwd != nil {
+			it.stepFwd(m)
+		} else if it.panel != nil {
+			m.pushPanel(it)
 		}
 	case tea.KeyEnter:
-		if len(p.items) == 0 {
+		it := p.selected()
+		if it == nil {
 			return m, nil
 		}
-		it := p.items[p.idx]
-		m.palette = nil
-		return it.run(m)
+		switch {
+		case it.panel != nil:
+			m.pushPanel(it)
+		case it.run != nil:
+			return it.run(m)
+		}
 	case tea.KeyBackspace, tea.KeyDelete:
 		if len(p.filter) > 0 {
 			p.filter = p.filter[:len(p.filter)-1]
-			p.applyFilter()
+			p.applyFilter(m)
 		}
 	case tea.KeyRunes:
 		p.filter += string(msg.Runes)
 		p.idx = 0
-		p.applyFilter()
+		p.applyFilter(m)
 	}
 	return m, nil
 }
 
+// pushPanel drills into an item's sub-panel. Items whose setting can't be
+// listed (no models configured) fail in place with a transcript note.
+func (m *model) pushPanel(it *paletteItem) {
+	pp := it.panel(m)
+	if pp == nil {
+		m.append(errStyle.Render(it.title + ": nothing to choose from (check ~/.loopy/config.json)"))
+		return
+	}
+	m.palette.stack = append(m.palette.stack, pp)
+}
+
+// panelKey routes keys inside a sub-panel: esc applies-and-pops (goal) or
+// just pops, ↑/↓ moves, enter applies.
+func (m *model) panelKey(msg tea.KeyMsg, pp *ppanel) (tea.Model, tea.Cmd) {
+	p := m.palette
+	pop := func() { p.stack = p.stack[:len(p.stack)-1] }
+
+	switch pp.kind {
+	case panelModel:
+		switch msg.Type {
+		case tea.KeyEsc, tea.KeyCtrlC:
+			pop()
+		case tea.KeyUp, tea.KeyCtrlP, tea.KeyShiftTab:
+			pp.idx = (pp.idx - 1 + len(pp.items)) % len(pp.items)
+			m.previewModel(pp.items[pp.idx])
+		case tea.KeyDown, tea.KeyCtrlN, tea.KeyTab:
+			pp.idx = (pp.idx + 1) % len(pp.items)
+			m.previewModel(pp.items[pp.idx])
+		case tea.KeyEnter:
+			it := pp.items[pp.idx]
+			m.switchModel(it.model, it.provider)
+			pop()
+		}
+
+	case panelEffort:
+		switch msg.Type {
+		case tea.KeyEsc, tea.KeyCtrlC:
+			pop()
+		case tea.KeyUp, tea.KeyCtrlP, tea.KeyShiftTab:
+			pp.lidx = (pp.lidx - 1 + len(pp.levels)) % len(pp.levels)
+		case tea.KeyDown, tea.KeyCtrlN, tea.KeyTab:
+			pp.lidx = (pp.lidx + 1) % len(pp.levels)
+		case tea.KeyLeft, tea.KeyRight, tea.KeyEnter:
+			// ←/→ and enter all apply the highlighted level: selecting is the
+			// point of the panel, so any confirm key is a commitment
+			m.setEffort(pp.levels[pp.lidx])
+			if msg.Type == tea.KeyEnter {
+				pop()
+			}
+		}
+
+	case panelCompact:
+		switch msg.Type {
+		case tea.KeyEsc, tea.KeyCtrlC:
+			pop()
+		case tea.KeyUp, tea.KeyCtrlP, tea.KeyShiftTab:
+			pp.midx = (pp.midx - 1 + len(pp.list)) % len(pp.list)
+		case tea.KeyDown, tea.KeyCtrlN, tea.KeyTab:
+			pp.midx = (pp.midx + 1) % len(pp.list)
+		case tea.KeyLeft, tea.KeyRight, tea.KeyEnter:
+			// apply immediately so a bad pick reports its error inline while
+			// the panel is still open
+			if pp.midx == 0 {
+				m.compactCommand([]string{"off"})
+				pp.err = ""
+			} else {
+				name := pp.list[pp.midx]
+				args := []string{name}
+				if mdl := m.cfg.Models[name]; len(mdl.Providers) > 0 {
+					args = append(args, mdl.Providers[0])
+				}
+				m.compactCommand(args)
+				pp.err = ""
+				if m.compactModel != name {
+					pp.err = "couldn't resolve " + name + " — kept previous"
+				}
+			}
+			if msg.Type == tea.KeyEnter && pp.err == "" {
+				pop()
+			}
+		}
+
+	case panelGoal:
+		switch msg.Type {
+		case tea.KeyEsc, tea.KeyCtrlC:
+			m.commitGoal(pp) // esc applies too — the editor is the goal
+			pop()
+		case tea.KeyEnter:
+			m.commitGoal(pp)
+			pop()
+		case tea.KeyBackspace, tea.KeyDelete:
+			if len(pp.prepare) > 0 {
+				pp.prepare = pp.prepare[:len(pp.prepare)-1]
+			}
+		case tea.KeyRunes, tea.KeySpace:
+			pp.prepare += string(msg.Runes)
+		}
+	}
+	return m, nil
+}
+
+// previewModel switches live as the model panel browses, without persisting:
+// the pick becomes the default only on enter (switchModel).
+func (m *model) previewModel(it modelItem) {
+	if it.model == m.modelName && it.provider == m.provName {
+		return
+	}
+	ag, mn, pn, err := buildAgent(m.cfg, it.model, it.provider, m.sysPrompt)
+	if err != nil {
+		return // unresolved routes stay visible but unselectable-feeling
+	}
+	ag.Effort = m.agent.Effort
+	ag.Messages = append(ag.Messages, m.agent.Messages[1:]...) // carry history
+	ag.CompactClient, ag.CompactModel = m.agent.CompactClient, m.agent.CompactModel
+	m.agent, m.modelName, m.provName = ag, mn, pn
+	if !contains(m.effortsFor(), ag.Effort) {
+		m.setEffort("") // the previewed model doesn't support the current level
+	}
+}
+
+// commitGoal applies the goal panel's text: set, clear (empty), or resume.
+// Resuming an unchanged goal continues with the check prompt; a fresh or
+// edited goal starts at round 0 (mirrors /goal resume vs /goal <text>).
+func (m *model) commitGoal(pp *ppanel) {
+	goal := strings.TrimSpace(pp.prepare)
+	if goal == m.goal {
+		if goal != "" && !m.busy {
+			m.goalRounds = 0
+			m.append(dimStyle.Render("◎ resuming goal: " + goal))
+			m.submit(goalContinuePrompt(goal))
+		}
+		return
+	}
+	m.setGoal(goal)
+	if goal == "" {
+		m.append(dimStyle.Render("(goal cleared)"))
+		return
+	}
+	m.append(dimStyle.Render("◎ goal set: " + goal))
+	if !m.busy {
+		m.submit(goal)
+	}
+}
+
+// prevEffort mirrors nextEffort in reverse for ← stepping.
+func prevEffort(levels []string, cur string) string {
+	for i, e := range levels {
+		if e == cur {
+			return levels[(i-1+len(levels))%len(levels)]
+		}
+	}
+	return levels[0]
+}
+
 // paletteView renders the modal dialog: a title bar, the filter line, and
-// category-grouped rows with dimmed hints.
+// category-grouped rows with dimmed hints. A sub-panel replaces the list.
 func (m *model) paletteView() string {
 	p := m.palette
 	var b strings.Builder
-	b.WriteString(botStyle.Render(" Commands"))
-	if p.filter != "" {
+	title := " Commands"
+	if pp := p.top(); pp != nil {
+		title = " Commands › " + pp.title
+	}
+	b.WriteString(botStyle.Render(title))
+	if p.top() == nil && p.filter != "" {
 		b.WriteString(dimStyle.Render("  — type to filter"))
 	}
 	b.WriteString("\n\n")
+
+	if pp := p.top(); pp != nil {
+		b.WriteString(m.panelView(pp))
+		return b.String()
+	}
+
 	b.WriteString(" " + youStyle.Render("❯ ") + p.filter + dimStyle.Render("█"))
 	b.WriteString("\n\n")
 
 	lastCat := ""
 	hintW := 0
 	for _, it := range p.items {
-		hintW = max(hintW, len(it.hint))
+		if it.dynHint != nil {
+			hintW = max(hintW, len(it.dynHint(m)))
+		}
 	}
 	for i, it := range p.items {
 		if it.category != lastCat {
@@ -202,15 +573,19 @@ func (m *model) paletteView() string {
 			b.WriteString("\n")
 			lastCat = it.category
 		}
-		hint := dimStyle.Render(fmt.Sprintf("%*s", hintW, it.hint))
-		line := " " + it.title
-		if it.desc != "" {
-			line += dimStyle.Render("  — " + it.desc)
+		hint := ""
+		if it.dynHint != nil {
+			hint = dimStyle.Render(fmt.Sprintf("%*s", hintW, it.dynHint(m)))
 		}
+		line := " " + it.title
+		if it.dynDesc != nil {
+			line += dimStyle.Render("  — " + it.dynDesc(m))
+		}
+		state := paletteState(m, it)
 		if i == p.idx {
-			b.WriteString(botStyle.Render("→") + line + "  " + hint)
+			b.WriteString(botStyle.Render("→") + line + state + "  " + hint)
 		} else {
-			b.WriteString(" " + line + "  " + hint)
+			b.WriteString(" " + line + state + "  " + hint)
 		}
 		b.WriteString("\n")
 	}
@@ -218,6 +593,87 @@ func (m *model) paletteView() string {
 		b.WriteString(dimStyle.Render("  (no matches)"))
 		b.WriteString("\n")
 	}
-	b.WriteString("\n" + dimStyle.Render(fmt.Sprintf("  (%d/%d) ↑/↓ select · enter run · esc close", min(p.idx+1, len(p.items)), len(p.items))))
+	b.WriteString("\n" + dimStyle.Render(fmt.Sprintf("  (%d/%d) ↑/↓ select · enter open/apply · ←/→ change · esc close",
+		min(p.idx+1, len(p.items)), len(p.items))))
+	return b.String()
+}
+
+// paletteState renders a row's live value (toggle state, effort level, …).
+func paletteState(m *model, it paletteItem) string {
+	switch it.title {
+	case "Reasoning effort":
+		return dimStyle.Render("  [" + effortLabel(m.agent.Effort) + "]")
+	case "Thinking tokens":
+		return dimStyle.Render("  [" + onOff(m.showThinking) + "]")
+	case "Mouse capture":
+		return dimStyle.Render("  [" + onOff(m.mouseOn) + "]")
+	case "Goal":
+		if m.goal != "" {
+			return dimStyle.Render("  [on]")
+		}
+	}
+	return ""
+}
+
+// panelView renders the active sub-panel.
+func (m *model) panelView(pp *ppanel) string {
+	var b strings.Builder
+	switch pp.kind {
+	case panelModel:
+		lastModel := ""
+		for i, it := range pp.items {
+			if it.model != lastModel {
+				b.WriteString(" " + it.model + "\n")
+				lastModel = it.model
+			}
+			cur := ""
+			if it.model == m.modelName && it.provider == m.provName {
+				cur = dimStyle.Render("  (current)")
+			}
+			line := fmt.Sprintf("%-12s  ", it.provider) + dimStyle.Render(it.url)
+			if i == pp.idx {
+				b.WriteString(botStyle.Render("   → "+line) + cur + "\n")
+			} else {
+				b.WriteString("     " + line + cur + "\n")
+			}
+		}
+		b.WriteString("\n" + dimStyle.Render(fmt.Sprintf("  (%d/%d) ↑/↓ preview · enter switch · esc back", pp.idx+1, len(pp.items))))
+
+	case panelEffort:
+		for i, e := range pp.levels {
+			cur := ""
+			if e == m.agent.Effort {
+				cur = dimStyle.Render("  (current)")
+			}
+			if i == pp.lidx {
+				b.WriteString(botStyle.Render(" → "+effortLabel(e)) + cur + "\n")
+			} else {
+				b.WriteString("   " + effortLabel(e) + cur + "\n")
+			}
+		}
+		b.WriteString("\n" + dimStyle.Render("  ↑/↓ select · enter/←/→ apply · esc back"))
+
+	case panelCompact:
+		for i, name := range pp.list {
+			cur := ""
+			if i == 0 && m.compactModel == "" || name == m.compactModel && name != "current" {
+				cur = dimStyle.Render("  (current)")
+			}
+			if i == pp.midx {
+				b.WriteString(botStyle.Render(" → "+name) + cur + "\n")
+			} else {
+				b.WriteString("   " + name + cur + "\n")
+			}
+		}
+		if pp.err != "" {
+			b.WriteString(errStyle.Render("  "+pp.err) + "\n")
+		}
+		b.WriteString("\n" + dimStyle.Render("  ↑/↓ select · enter/←/→ apply · esc back"))
+
+	case panelGoal:
+		b.WriteString(" " + youStyle.Render("❯ ") + pp.prepare + dimStyle.Render("█"))
+		b.WriteString("\n\n" + dimStyle.Render("  type the goal · empty clears · enter/esc apply"))
+	}
+	b.WriteString("\n")
 	return b.String()
 }
