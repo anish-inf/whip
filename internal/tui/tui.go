@@ -66,6 +66,7 @@ type model struct {
 	inMsg   bool   // "● " prefix already printed for this assistant segment
 	menu    *menu
 	picker  *picker
+	mpicker *modelPicker
 	cancel  context.CancelFunc
 	prog    *tea.Program
 
@@ -409,6 +410,9 @@ func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.picker != nil {
 		return m.pickerKey(msg)
 	}
+	if m.mpicker != nil {
+		return m.modelPickerKey(msg)
+	}
 	switch msg.Type {
 	case tea.KeyCtrlC:
 		if m.busy && m.cancel != nil {
@@ -521,6 +525,18 @@ func (m *model) histNext() {
 	} else {
 		m.input.SetValue(m.hist[m.histIdx])
 	}
+}
+
+// switchModel rebuilds the agent on a new model/provider, carrying history.
+func (m *model) switchModel(name, prov string) {
+	ag, mn, pn, err := buildAgent(m.cfg, name, prov, m.sysPrompt)
+	if err != nil {
+		m.append(errStyle.Render(err.Error()))
+		return
+	}
+	ag.Messages = append(ag.Messages, m.agent.Messages[1:]...) // carry history
+	m.agent, m.modelName, m.provName = ag, mn, pn
+	m.append(dimStyle.Render("→ " + mn + " @ " + pn))
 }
 
 // pickerKey handles keys while the /resume browser is open.
@@ -766,25 +782,14 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 			"/model <name> [provider] — switch model\n/resume [id] — resume a previous session\n/goal <text> — keep working until the goal is met (resume | clear)\n/clear — reset conversation\n/quit — exit\ntab — complete · PgUp/PgDn — scroll · ctrl+c — interrupt / quit"))
 	case "/model":
 		if len(fields) < 2 {
-			names := ""
-			for name, mdl := range m.cfg.Models {
-				names += fmt.Sprintf("  %s (%s)\n", name, strings.Join(mdl.Providers, ", "))
-			}
-			m.append(dimStyle.Render("current: " + m.modelName + " @ " + m.provName + "\navailable:\n" + strings.TrimRight(names, "\n")))
+			m.openModelPicker()
 			break
 		}
 		prov := ""
 		if len(fields) > 2 {
 			prov = fields[2]
 		}
-		ag, mn, pn, err := buildAgent(m.cfg, fields[1], prov, m.sysPrompt)
-		if err != nil {
-			m.append(errStyle.Render(err.Error()))
-			break
-		}
-		ag.Messages = append(ag.Messages, m.agent.Messages[1:]...) // carry history
-		m.agent, m.modelName, m.provName = ag, mn, pn
-		m.append(dimStyle.Render("→ " + mn + " @ " + pn))
+		m.switchModel(fields[1], prov)
 	default:
 		m.append(errStyle.Render("unknown command " + fields[0]))
 	}
@@ -813,6 +818,10 @@ func (m *model) View() string {
 	b.WriteString(dimStyle.Render(truncLine(header, m.width)) + "\n")
 	if m.picker != nil {
 		b.WriteString(m.pickerView())
+		return b.String()
+	}
+	if m.mpicker != nil {
+		b.WriteString(m.modelPickerView())
 		return b.String()
 	}
 	b.WriteString(dimStyle.Render(truncLine(" / commands · tab completes · ↑/↓ history · mouse/PgUp scroll · ctrl+c interrupt/quit", m.width)) + "\n")
