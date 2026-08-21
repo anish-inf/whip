@@ -421,21 +421,31 @@ func buildAgent(cfg *config.Config, modelName, provName, sysPrompt string) (*age
 }
 
 // blockKind classifies a transcript block so a resize can re-render it at
-// the new width. Assistant text reflows through glamour (markdown); every
-// other block — user input, tool calls/results, status lines — re-wraps
-// plainly (its styling is baked in at append time; only the wrap changes).
+// the new width. Assistant text reflows through glamour (markdown); tool
+// results hold raw output and expand/collapse; every other block — user
+// input, tool calls, status lines — re-wraps plainly (its styling is baked
+// in at append time; only the wrap changes).
 type blockKind int
 
 const (
 	blockText      blockKind = iota // already-styled line(s): re-wrap on resize
 	blockAssistant                  // raw markdown: re-render through glamour
+	blockTool                       // raw tool result: collapsed preview, expandable
 )
 
+// toolPreviewLines is how many lines of a tool result show when collapsed.
+const toolPreviewLines = 5
+
 // block is one finalized transcript entry. Text holds raw markdown for
-// blockAssistant (no "● " prefix) and styled content otherwise.
+// blockAssistant, raw tool output for blockTool, and styled content
+// otherwise.
 type block struct {
-	kind blockKind
-	text string
+	kind     blockKind
+	text     string
+	expanded bool // blockTool: show the full output (click / ctrl+e toggles)
+	// y0/y1 are the block's line range in the last rendered content (set by
+	// refreshVP); used to map a mouse click to the block under it.
+	y0, y1 int
 }
 
 // render renders the block at width (the full terminal width; assistant
@@ -449,9 +459,27 @@ func (b block) render(width int) string {
 		}
 		body := indentLines(renderMarkdown(b.text, w), 2)
 		return botStyle.Render("● ") + strings.TrimPrefix(body, "  ")
+	case blockTool:
+		lines := strings.Split(strings.TrimRight(b.text, "\n"), "\n")
+		if b.expanded || len(lines) <= toolPreviewLines {
+			return wrap(dimStyle.Render("  "+strings.Join(lines, "\n  ")), width)
+		}
+		preview := strings.Join(lines[:toolPreviewLines], "\n  ")
+		out := dimStyle.Render("  " + preview)
+		hint := fmt.Sprintf("\n  … +%d lines (ctrl+e or click to expand)", len(lines)-toolPreviewLines)
+		return wrap(out+dimStyle.Render(hint), width)
 	default:
 		return wrap(b.text, width)
 	}
+}
+
+// expand toggles a tool block and returns whether it changed.
+func (b *block) toggle() bool {
+	if b.kind != blockTool {
+		return false
+	}
+	b.expanded = !b.expanded
+	return true
 }
 
 // append adds finalized blocks to the transcript, separating blocks with a
@@ -479,20 +507,36 @@ func (m *model) appendRaw(kind blockKind, text string) {
 // ponytail: O(transcript) re-join per append; rope/ring buffer if huge sessions drag
 func (m *model) refreshVP() {
 	var b strings.Builder
-	for i, blk := range m.blocks {
+	line := 0
+	for i := range m.blocks {
 		if i > 0 {
 			b.WriteString("\n\n") // blank line between blocks
+			line += 2
 		}
-		b.WriteString(blk.render(m.width))
+		r := m.blocks[i].render(m.width)
+		m.blocks[i].y0 = line
+		m.blocks[i].y1 = line + lipgloss.Height(r) - 1
+		b.WriteString(r)
+		line = m.blocks[i].y1 + 1
 	}
 	content := b.String()
-	if n := lipgloss.Height(content); n < m.vp.Height {
-		content = strings.Repeat("\n", m.vp.Height-n) + content
+	if pad := m.contentPad(); pad > 0 {
+		content = strings.Repeat("\n", pad) + content
 	}
 	m.vp.SetContent(content)
 	if m.follow {
 		m.vp.GotoBottom()
 	}
+}
+
+// contentPad is the number of blank lines refreshVP prepends when the
+// transcript is shorter than the viewport (click-row mapping accounts for it).
+func (m *model) contentPad() int {
+	if len(m.blocks) == 0 {
+		return m.vp.Height
+	}
+	h := m.blocks[len(m.blocks)-1].y1 + 1 // content height from the last block
+	return max(m.vp.Height-h, 0)
 }
 
 func (m *model) Init() tea.Cmd {
@@ -629,6 +673,22 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if m.picker == nil && m.mpicker == nil {
+			// click on a collapsed tool result expands it (and vice versa)
+			if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft &&
+				msg.Y > 1 && m.palette == nil {
+				row := m.vp.YOffset + msg.Y - 2 // viewport starts 2 rows below the header
+				if pad := m.contentPad(); row < pad {
+					row = -1 // top padding: above the first block
+				} else {
+					row -= pad
+				}
+				for i := range m.blocks {
+					if row >= m.blocks[i].y0 && row <= m.blocks[i].y1 && m.blocks[i].toggle() {
+						m.refreshVP()
+						return m, nil
+					}
+				}
+			}
 			var cmd tea.Cmd
 			m.vp, cmd = m.vp.Update(msg)
 			m.follow = m.vp.AtBottom()
@@ -671,16 +731,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case toolEndMsg:
-		lines := strings.Split(strings.TrimRight(msg.result, "\n"), "\n")
-		preview := lines
-		if len(preview) > 5 {
-			preview = preview[:5]
-		}
-		out := dimStyle.Render("  " + strings.Join(preview, "\n  "))
-		if len(lines) > 5 {
-			out += dimStyle.Render(fmt.Sprintf("\n  … +%d lines", len(lines)-5))
-		}
-		m.append(out)
+		// store the raw result; render collapses to a preview (ctrl+e /
+		// click expands) and re-wraps on resize
+		m.appendRaw(blockTool, msg.result)
 		return m, nil
 
 	case interactiveStartMsg:
@@ -909,6 +962,17 @@ func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// image on the clipboard? save it and @-mention the file; otherwise
 		// let the textarea do its usual text paste
 		return m, pasteImageCmd
+
+	case tea.KeyCtrlE:
+		// expand/collapse the most recent tool result block
+		for i := len(m.blocks) - 1; i >= 0; i-- {
+			if m.blocks[i].kind == blockTool {
+				m.blocks[i].toggle()
+				m.refreshVP()
+				return m, nil
+			}
+		}
+		return m, nil
 
 	case tea.KeyCtrlO:
 		// toggle rendering of reasoning/thinking tokens
