@@ -59,9 +59,18 @@ func completions(val string, models, providers, skillCands, efforts []cand) (hea
 		cands = filterPrefix(providers, token)
 	case strings.HasPrefix(token, "$"): // codex-style skill invocation
 		cands = filterPrefix(skillCands, token)
-	case strings.HasPrefix(token, "@"): // @file mentions complete like paths
-		for _, c := range pathMatches(token[1:]) {
-			cands = append(cands, cand{"@" + c.Text, c.Desc})
+	case strings.HasPrefix(token, "@"):
+		// @file mentions: path-like queries (with a separator, ~, or leading
+		// dot) complete like paths; bare words fuzzy-match the recursive
+		// index so "@roadmap" finds docs/roadmap.md without the full path.
+		if q := token[1:]; isPathQuery(q) {
+			for _, c := range mentionPathMatches(q) {
+				cands = append(cands, cand{"@" + c.Text, c.Desc})
+			}
+		} else {
+			for _, f := range fuzzyFiles(q, menuRows) {
+				cands = append(cands, cand{"@" + f, ""})
+			}
 		}
 	case strings.HasPrefix(val, "/"): // other slash-command args: nothing to complete
 	default:
@@ -75,6 +84,39 @@ func filterPrefix(all []cand, prefix string) []cand {
 	var out []cand
 	for _, c := range all {
 		if strings.HasPrefix(c.Text, prefix) {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// isPathQuery reports whether an @mention query looks like a path (has a
+// separator, ~, or leading dot) and should use plain glob completion rather
+// than the recursive fuzzy index.
+func isPathQuery(q string) bool {
+	return q == "" || strings.ContainsAny(q, "/\\") || strings.HasPrefix(q, "~") || strings.HasPrefix(q, ".")
+}
+
+// mentionPathMatches globs an @mention path query against the mention root
+// (not the process cwd): absolute and ~ queries glob as-is; relative ones are
+// joined to the root and returned root-relative, with dirs keeping their
+// trailing slash.
+func mentionPathMatches(q string) []cand {
+	if filepath.IsAbs(q) || q == "~" || strings.HasPrefix(q, "~/") {
+		return pathMatches(q)
+	}
+	root, err := currentRoot()
+	if err != nil {
+		return nil
+	}
+	var out []cand
+	for _, c := range pathMatches(filepath.Join(root, q)) {
+		dir := strings.HasSuffix(c.Text, "/")
+		if rel, err := filepath.Rel(root, strings.TrimSuffix(c.Text, "/")); err == nil {
+			c.Text = filepath.ToSlash(rel)
+			if dir {
+				c.Text += "/"
+			}
 			out = append(out, c)
 		}
 	}

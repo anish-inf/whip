@@ -1,8 +1,6 @@
 package tui
 
 import (
-	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -34,7 +32,8 @@ func expandSkills(text string, sk []skills.Skill) string {
 
 var rangeRe = regexp.MustCompile(`#(\d+)(?:-(\d+))?$`)
 
-// expandMentions finds @file tokens (any path: relative, absolute, or ~, with
+// expandMentions finds @file tokens (any path: relative, absolute, or ~, a
+// bare word that uniquely fuzzy-matches a file under the cwd, each with
 // optional #start-end line ranges) and appends a pointer note. File contents
 // are never inlined — the model inspects tagged files with its own tools.
 func expandMentions(text string) string {
@@ -53,19 +52,12 @@ func expandMentions(text string) string {
 			}
 			lines += ")"
 		}
-		abs := p
-		if abs == "~" || strings.HasPrefix(abs, "~/") {
-			if home, err := os.UserHomeDir(); err == nil {
-				abs = home + abs[1:]
-			}
-		}
-		if !filepath.IsAbs(abs) {
-			if wd, err := os.Getwd(); err == nil {
-				abs = filepath.Join(wd, abs)
-			}
-		}
-		if _, err := os.Stat(abs); err != nil {
-			continue // not a real path; leave the token alone
+		// Real paths stat as-is; a bare word may uniquely fuzzy-match the
+		// recursive cwd index ("@roadmap" → docs/roadmap.md). Anything else
+		// is left alone.
+		abs, ok := resolveMentionPath(p)
+		if !ok {
+			continue
 		}
 		notes = append(notes, abs+lines)
 	}
