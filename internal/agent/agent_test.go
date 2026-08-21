@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/abe/loopy/internal/llm"
-	"github.com/abe/loopy/internal/tools"
+	"github.com/context-labs/loopy/internal/llm"
+	"github.com/context-labs/loopy/internal/tools"
 )
 
 // server that answers with a tool call on the first request, text on the second
@@ -303,6 +303,121 @@ func TestCompactDoesNotLoopOnRepeatedContextLimit(t *testing.T) {
 	}
 	if call > 3 {
 		t.Fatalf("expected ≤3 calls (fail+summary+retry-fail), got %d", call)
+	}
+}
+
+func TestEstimateTokens(t *testing.T) {
+	if got := EstimateTokens(nil); got != 0 {
+		t.Fatalf("empty: %d", got)
+	}
+	msgs := []llm.Message{
+		{Role: "system", Content: strings.Repeat("x", 400)}, // 400/4 + 4 = 104
+		{Role: "assistant", ToolCalls: []llm.ToolCall{ // 4 + 8 + (4+96+3)/4 = 37
+			func() llm.ToolCall {
+				var tc llm.ToolCall
+				tc.Function.Name = "tool"
+				tc.Function.Arguments = strings.Repeat("y", 96)
+				return tc
+			}(),
+		}},
+	}
+	if got := EstimateTokens(msgs); got != 104+37 {
+		t.Fatalf("got %d, want %d", got, 104+37)
+	}
+}
+
+func TestProactiveCompactAtNinetyPercent(t *testing.T) {
+	// the first stream request should already carry the compacted history —
+	// no context_length_exceeded round-trip needed
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req llm.Request
+		json.NewDecoder(r.Body).Decode(&req)
+		if !req.Stream {
+			w.Write([]byte(`{"choices":[{"message":{"content":"summary of prior work"}}]}`))
+			return
+		}
+		compact := len(req.Messages) == 3 && strings.Contains(req.Messages[1].Content, "Summary of the conversation")
+		w.Header().Set("Content-Type", "text/event-stream")
+		if compact {
+			fmt.Fprint(w, `data: {"choices":[{"delta":{"content":"ok"}}]}` + "\n\n")
+		} else {
+			fmt.Fprint(w, `data: {"choices":[{"delta":{"content":"not-compacted"}}]}` + "\n\n")
+		}
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer srv.Close()
+
+	ag := New(llm.New(srv.URL, "k"), "m", 100, "sys")
+	ag.ContextLimit = 1000 // 90% = 900 estimated tokens
+	// 8 user messages × 120 chars ≈ 272 estimated tokens: under the threshold
+	for i := 0; i < 8; i++ {
+		ag.Messages = append(ag.Messages, llm.Message{Role: "user", Content: strings.Repeat("x", 120)})
+	}
+	var compacted bool
+	final, err := ag.Turn(context.Background(), strings.Repeat("z", 2600), Events{
+		OnCompact: func(took, kept int) { compacted = true },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !compacted {
+		t.Fatal("expected proactive compaction above 90% of the context limit")
+	}
+	if final != "ok" {
+		t.Fatalf("first request should have used compacted history, got %q", final)
+	}
+}
+
+func TestNoProactiveCompactBelowThresholdOrWithoutLimit(t *testing.T) {
+	srv := textServer(t, func(n int, req llm.Request) string { return "done" })
+	defer srv.Close()
+
+	// below threshold: estimate well under 90% of the limit
+	ag := New(llm.New(srv.URL, "k"), "m", 100, "sys")
+	ag.ContextLimit = 100000
+	if _, err := ag.Turn(context.Background(), "hi", Events{}); err != nil {
+		t.Fatal(err)
+	}
+
+	// no advertised limit: proactive compaction disabled regardless of size
+	ag2 := New(llm.New(srv.URL, "k"), "m", 100, "sys")
+	ag2.Messages = append(ag2.Messages, llm.Message{Role: "user", Content: strings.Repeat("x", 4000)})
+	if _, err := ag2.Turn(context.Background(), "hi", Events{}); err != nil {
+		t.Fatal(err)
+	}
+	if len(ag2.Messages) != 4 { // system + big user + user + assistant: untouched
+		t.Fatalf("history should not compact without a context limit, got %d msgs", len(ag2.Messages))
+	}
+}
+
+func TestCompactUsesCompactModel(t *testing.T) {
+	var models []string
+	main := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("summary call must not hit the conversation's provider")
+	}))
+	defer main.Close()
+	sum := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req llm.Request
+		json.NewDecoder(r.Body).Decode(&req)
+		models = append(models, req.Model)
+		w.Write([]byte(`{"choices":[{"message":{"content":"sim"}}]}`))
+	}))
+	defer sum.Close()
+
+	ag := New(llm.New(main.URL, "k"), "conversation-model", 100, "sys")
+	ag.CompactClient = llm.New(sum.URL, "k")
+	ag.CompactModel = "summary-model"
+	for i := 0; i < 8; i++ {
+		ag.Messages = append(ag.Messages,
+			llm.Message{Role: "user", Content: fmt.Sprintf("q%d", i)},
+			llm.Message{Role: "assistant", Content: fmt.Sprintf("a%d", i)},
+		)
+	}
+	if err := ag.ManualCompact(context.Background(), Events{}); err != nil {
+		t.Fatal(err)
+	}
+	if len(models) != 1 || models[0] != "summary-model" {
+		t.Fatalf("summary should run on summary-model, got %v", models)
 	}
 }
 

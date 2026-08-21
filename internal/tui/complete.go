@@ -15,7 +15,7 @@ type cand struct {
 
 var commands = []cand{
 	{"/clear", "Reset the conversation"},
-	{"/compact", "Summarize old turns into a shorter context"},
+	{"/compact", "[model] [provider]|off — compact now, or pick the compaction model"},
 	{"/effort", "[level] — reasoning effort: off·low·medium·high (bare cycles)"},
 	{"/goal", "<text> — work until done; also: resume, clear"},
 	{"/help", "Show available commands"},
@@ -51,6 +51,10 @@ func completions(val string, models, providers, skillCands, efforts []cand) (hea
 		cands = filterPrefix(providers, token)
 	case len(fields) == 1 && fields[0] == "/effort":
 		cands = filterPrefix(efforts, token)
+	case len(fields) == 1 && fields[0] == "/compact":
+		cands = filterPrefix(append([]cand{{"off", "compact with the current model"}}, models...), token)
+	case len(fields) == 2 && fields[0] == "/compact":
+		cands = filterPrefix(providers, token)
 	case strings.HasPrefix(token, "$"): // codex-style skill invocation
 		cands = filterPrefix(skillCands, token)
 	case strings.HasPrefix(token, "@"): // @file mentions complete like paths

@@ -1,4 +1,4 @@
-module github.com/abe/loopy
+module github.com/context-labs/loopy
 
 go 1.27.0
 

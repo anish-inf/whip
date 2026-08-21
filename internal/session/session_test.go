@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/abe/loopy/internal/llm"
+	"github.com/context-labs/loopy/internal/llm"
 )
 
 func TestStoreRoundTrip(t *testing.T) {

@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/abe/loopy/internal/llm"
-	"github.com/abe/loopy/internal/tools/bashrun"
+	"github.com/context-labs/loopy/internal/llm"
+	"github.com/context-labs/loopy/internal/tools/bashrun"
 )
 
 // Tool is a named executable tool with a JSON schema.

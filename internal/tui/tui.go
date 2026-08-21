@@ -17,12 +17,12 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/abe/loopy/internal/agent"
-	"github.com/abe/loopy/internal/config"
-	"github.com/abe/loopy/internal/llm"
-	"github.com/abe/loopy/internal/session"
-	"github.com/abe/loopy/internal/skills"
-	"github.com/abe/loopy/internal/tools"
+	"github.com/context-labs/loopy/internal/agent"
+	"github.com/context-labs/loopy/internal/config"
+	"github.com/context-labs/loopy/internal/llm"
+	"github.com/context-labs/loopy/internal/session"
+	"github.com/context-labs/loopy/internal/skills"
+	"github.com/context-labs/loopy/internal/tools"
 )
 
 var (
@@ -106,9 +106,11 @@ type model struct {
 	goal       string // active /goal; the loop continues until GOAL_MET
 	goalRounds int    // continuation turns spent on the current goal
 
-	mouseOn  bool                      // runtime mouse-capture state (toggle with /mouse)
-	effortX  int                       // screen column where the clickable ⚡ effort control starts
-	catalogs map[string]config.Catalog // provider model lists (capabilities)
+	mouseOn      bool   // runtime mouse-capture state (toggle with /mouse)
+	compactModel string // config model name for compaction summaries; "" = current model
+	compactProv  string
+	effortX      int                       // screen column where the clickable ⚡ effort control starts
+	catalogs     map[string]config.Catalog // provider model lists (capabilities)
 
 	irunner *interactiveRunner // installed on tools.InteractiveBash at startup
 	iactive *interactive       // in-flight interactive command; nil when idle
@@ -165,7 +167,9 @@ func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string) (s
 		cfg: cfg, agent: ag, modelName: mn, provName: pn, sysPrompt: sysPrompt,
 		input: ti, spin: spinner.New(spinner.WithSpinner(spinner.Dot)), follow: true, saved: 1,
 		catalogs: config.LoadCatalogs(), mouseOn: mouseOn,
+		compactModel: cfg.CompactModel, compactProv: cfg.CompactProvider,
 	}
+	m.applyCompactModel()
 	if dir, derr := config.Dir(); derr == nil {
 		if st, serr := session.Open(dir + "/sessions.db"); serr == nil {
 			m.store = st
@@ -224,7 +228,7 @@ func (m *model) fetchCatalogs() {
 		}
 		models := make([]config.ModelInfoLite, len(infos))
 		for i, mi := range infos {
-			models[i] = config.ModelInfoLite{ID: mi.ID, ReasoningEfforts: mi.ReasoningEfforts}
+			models[i] = config.ModelInfoLite{ID: mi.ID, ContextLength: mi.ContextLength, ReasoningEfforts: mi.ReasoningEfforts}
 		}
 		cats[name] = config.Catalog{FetchedAt: time.Now(), BaseURL: prov.BaseURL, Models: models}
 		dirty = true
@@ -248,7 +252,9 @@ func (m *model) resume(id string) error {
 	} else {
 		m.agent = agent.New(m.agent.Client, m.agent.Model, m.agent.MaxTokens, m.sysPrompt)
 		m.agent.ModelName, m.agent.Provider = m.modelName, m.provName
+		m.agent.ContextLimit = m.contextLimitFor(m.provName, m.agent.Model)
 	}
+	m.applyCompactModel()
 	m.agent.Messages = append(m.agent.Messages, msgs...)
 	if contains(m.effortsFor(), effort) {
 		m.agent.Effort = effort
@@ -369,6 +375,11 @@ func buildAgent(cfg *config.Config, modelName, provName, sysPrompt string) (*age
 	}
 	ag := agent.New(llm.New(prov.BaseURL, key), apiID, mdl.MaxTokens, sysPrompt)
 	ag.ModelName, ag.Provider = modelName, provName
+	// the provider's /models list is the source of truth for the context
+	// window; the cached catalog mirrors it (fetchCatalogs refreshes it live)
+	if cat, ok := config.LoadCatalogs()[provName]; ok {
+		ag.ContextLimit = cat.ContextLength(apiID)
+	}
 	return ag, modelName, provName, nil
 }
 
@@ -975,6 +986,37 @@ func (m *model) cursorOnLastLine() bool {
 	return li.RowOffset >= li.Height-1
 }
 
+// contextLimitFor returns the advertised context window for a model id on a
+// provider, from the cached /models catalog (0 when unknown).
+func (m *model) contextLimitFor(provName, apiID string) int {
+	if cat, ok := m.catalogs[provName]; ok {
+		return cat.ContextLength(apiID)
+	}
+	return 0
+}
+
+// applyCompactModel points the agent's compaction summary call at the
+// configured compaction model/provider (nil client = compact with the
+// conversation's own model). Best-effort: a bad or unreachable entry just
+// clears the override so compaction falls back to the current model.
+func (m *model) applyCompactModel() {
+	m.agent.CompactClient, m.agent.CompactModel = nil, ""
+	if m.compactModel == "" {
+		return
+	}
+	prov, _, apiID, err := m.cfg.Resolve(m.compactModel, m.compactProv)
+	if err != nil {
+		m.append(errStyle.Render("compaction model: " + err.Error() + " — using current model"))
+		return
+	}
+	if key := prov.Key(); key != "" {
+		m.agent.CompactClient = llm.New(prov.BaseURL, key)
+		m.agent.CompactModel = apiID
+	} else {
+		m.append(errStyle.Render("compaction model: no API key — using current model"))
+	}
+}
+
 // switchModel rebuilds the agent on a new model/provider, carrying history.
 func (m *model) switchModel(name, prov string) {
 	ag, mn, pn, err := buildAgent(m.cfg, name, prov, m.sysPrompt)
@@ -984,6 +1026,7 @@ func (m *model) switchModel(name, prov string) {
 	}
 	ag.Effort = m.agent.Effort
 	ag.Messages = append(ag.Messages, m.agent.Messages[1:]...) // carry history
+	ag.CompactClient, ag.CompactModel = m.agent.CompactClient, m.agent.CompactModel
 	m.agent, m.modelName, m.provName = ag, mn, pn
 	if !contains(m.effortsFor(), ag.Effort) {
 		m.setEffort("") // the new model doesn't support the current level
@@ -1271,6 +1314,10 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 		m.saved = 1
 		m.append(dimStyle.Render("(conversation cleared)"))
 	case "/compact":
+		if len(fields) > 1 {
+			m.compactCommand(fields[1:])
+			return m, nil
+		}
 		if m.busy {
 			m.append(dimStyle.Render("(busy — /compact will land after this turn)"))
 			return m, nil
@@ -1353,7 +1400,7 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 		m.openPicker()
 	case "/help":
 		m.append(dimStyle.Render(
-			"/model <name> [provider] — switch model\n/compact — summarize old turns when context fills\n/mouse — toggle mouse capture (off = native terminal selection)\n/resume [id] — resume a previous session\n/goal <text> — keep working until the goal is met (resume | clear)\n/clear — reset conversation\n/quit — exit\ntab — complete · ctrl+o — toggle thinking tokens · ctrl+j / shift+enter — newline · ctrl+v — paste image · esc — interrupt the agent · while busy with queued messages: ↑/↓ select, del removes · PgUp/PgDn — scroll · shift-drag — select text (native) · ctrl+c — interrupt / quit"))
+			"/model <name> [provider] — switch model\n/compact [model] [provider]|off — compact now at 90% context, or pick the compaction model\n/mouse — toggle mouse capture (off = native terminal selection)\n/resume [id] — resume a previous session\n/goal <text> — keep working until the goal is met (resume | clear)\n/clear — reset conversation\n/quit — exit\ntab — complete · ctrl+o — toggle thinking tokens · ctrl+j / shift+enter — newline · ctrl+v — paste image · esc — interrupt the agent · while busy with queued messages: ↑/↓ select, del removes · PgUp/PgDn — scroll · shift-drag — select text (native) · ctrl+c — interrupt / quit"))
 	case "/model":
 		if len(fields) < 2 {
 			m.openModelPicker()
@@ -1368,6 +1415,46 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 		m.append(errStyle.Render("unknown command " + fields[0]))
 	}
 	return m, nil
+}
+
+// compactCommand handles "/compact <args…>": off clears the compaction model,
+// "<model> [provider]" selects it (persisted as the new default).
+func (m *model) compactCommand(args []string) {
+	if args[0] == "off" {
+		m.compactModel, m.compactProv = "", ""
+		m.applyCompactModel()
+		m.cfg.CompactModel, m.cfg.CompactProvider = "", ""
+		if err := m.cfg.Save(); err != nil {
+			m.append(errStyle.Render("config save failed: " + err.Error()))
+		}
+		m.append(dimStyle.Render("◎ compaction model: current model"))
+		return
+	}
+	if _, ok := m.cfg.Models[args[0]]; !ok {
+		m.append(errStyle.Render("unknown model " + args[0]))
+		return
+	}
+	m.compactModel = args[0]
+	m.compactProv = ""
+	if len(args) > 1 {
+		m.compactProv = args[1]
+	}
+	m.applyCompactModel()
+	if m.agent.CompactModel == "" { // resolve failed; don't persist a broken pick
+		m.compactModel, m.compactProv = "", ""
+		return
+	}
+	m.cfg.CompactModel, m.cfg.CompactProvider = m.compactModel, m.compactProv
+	if err := m.cfg.Save(); err != nil {
+		m.append(errStyle.Render("config save failed: " + err.Error()))
+	}
+	prov := m.compactProv
+	if prov == "" {
+		if mdl := m.cfg.Models[m.compactModel]; len(mdl.Providers) > 0 {
+			prov = mdl.Providers[0]
+		}
+	}
+	m.append(dimStyle.Render("◎ compaction model: " + m.compactModel + " @ " + prov))
 }
 
 const menuRows = 8

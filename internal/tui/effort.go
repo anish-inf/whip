@@ -1,6 +1,6 @@
 package tui
 
-import "github.com/abe/loopy/internal/config"
+import "github.com/context-labs/loopy/internal/config"
 
 // defaultEfforts are the fallback levels when the provider doesn't advertise
 // supported reasoning efforts; "" means off (parameter omitted from requests).
@@ -84,6 +84,9 @@ func effortCandsFor(levels []string) []cand {
 // fetch completes).
 func (m *model) updateCatalogs(cats map[string]config.Catalog) {
 	m.catalogs = cats
+	if n := m.contextLimitFor(m.provName, m.agent.Model); n != m.agent.ContextLimit {
+		m.agent.ContextLimit = n // /models is the source of truth
+	}
 	if !contains(m.effortsFor(), m.agent.Effort) {
 		m.setEffort("")
 		m.append(dimStyle.Render("⚡ effort reset to off: not supported by " + m.agent.Model))

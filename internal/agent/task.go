@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/abe/loopy/internal/llm"
-	"github.com/abe/loopy/internal/tools"
+	"github.com/context-labs/loopy/internal/llm"
+	"github.com/context-labs/loopy/internal/tools"
 )
 
 func subagentPrompt() string {

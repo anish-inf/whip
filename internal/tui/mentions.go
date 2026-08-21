@@ -6,7 +6,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/abe/loopy/internal/skills"
+	"github.com/context-labs/loopy/internal/skills"
 )
 
 // expandSkills appends an invocation note for $skill-name tokens (codex-style).

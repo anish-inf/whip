@@ -3,9 +3,10 @@ package tui
 import (
 	"testing"
 
-	"github.com/abe/loopy/internal/agent"
-	"github.com/abe/loopy/internal/config"
 	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/context-labs/loopy/internal/agent"
+	"github.com/context-labs/loopy/internal/config"
 )
 
 func modelCmdModel() *model {

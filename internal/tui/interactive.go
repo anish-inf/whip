@@ -22,8 +22,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/abe/loopy/internal/tools"
-	"github.com/abe/loopy/internal/tools/bashrun"
+	"github.com/context-labs/loopy/internal/tools"
+	"github.com/context-labs/loopy/internal/tools/bashrun"
 )
 
 // interactive is the UI-thread state for one in-flight interactive command.

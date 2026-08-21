@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/abe/loopy/internal/agent"
-	"github.com/abe/loopy/internal/config"
-	"github.com/abe/loopy/internal/llm"
-	"github.com/abe/loopy/internal/tui"
+	"github.com/context-labs/loopy/internal/agent"
+	"github.com/context-labs/loopy/internal/config"
+	"github.com/context-labs/loopy/internal/llm"
+	"github.com/context-labs/loopy/internal/tui"
 )
 
 var version = "dev" // set via -ldflags "-X main.version=..."

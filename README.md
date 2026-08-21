@@ -5,9 +5,19 @@ tool-use loop (bash / read / write / edit), and provider-routable models.
 
 ## Install
 
+Requires Go ≥ 1.27. Install straight from the repo in one command:
+
 ```sh
-task install   # → ~/go/bin/loopy
+go install github.com/context-labs/loopy/cmd/loopy@latest
 ```
+
+or, if you prefer curl-pipe-to-sh:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/context-labs/loopy/main/scripts/install.sh | sh
+```
+
+Both drop `loopy` into `~/go/bin`. From a cloned repo, `task install` does the same with the version stamped from git.
 
 ## Run
 

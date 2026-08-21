@@ -20,7 +20,19 @@ type Catalog struct {
 // ModelInfoLite is the subset of the provider's /models entry loopy uses.
 type ModelInfoLite struct {
 	ID               string   `json:"id"`
+	ContextLength    int      `json:"contextLength,omitempty"` // model's context window, 0 if unadvertised
 	ReasoningEfforts []string `json:"reasoningEfforts,omitempty"`
+}
+
+// ContextLength reports the advertised context window for a model id
+// (0 when the catalog has no entry for it — callers must fall back).
+func (c Catalog) ContextLength(id string) int {
+	for _, mi := range c.Models {
+		if mi.ID == id {
+			return mi.ContextLength
+		}
+	}
+	return 0
 }
 
 func catalogPath() (string, error) {

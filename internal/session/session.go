@@ -12,7 +12,7 @@ import (
 
 	_ "modernc.org/sqlite"
 
-	"github.com/abe/loopy/internal/llm"
+	"github.com/context-labs/loopy/internal/llm"
 )
 
 const schema = `

@@ -9,8 +9,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/abe/loopy/internal/llm"
-	"github.com/abe/loopy/internal/tools"
+	"github.com/context-labs/loopy/internal/llm"
+	"github.com/context-labs/loopy/internal/tools"
 )
 
 // Events receives streaming callbacks during a turn. All fields are optional.
@@ -33,6 +33,15 @@ type Agent struct {
 	Effort    string // reasoning effort: "" = parameter omitted from requests
 	Tools     []tools.Tool
 	Messages  []llm.Message
+
+	// ContextLimit is the model's context window in tokens, as advertised by
+	// the provider's GET /models (0 when unadvertised — proactive compaction
+	// is then disabled and only the reactive context-limit retry applies).
+	ContextLimit int
+	// CompactClient and CompactModel run the compaction summary; nil/"" uses
+	// the conversation's own client and model.
+	CompactClient *llm.Client
+	CompactModel  string
 
 	mu        sync.Mutex
 	pending   []string // steered user messages awaiting injection
@@ -68,13 +77,18 @@ func New(client *llm.Client, model string, maxTokens int, systemPrompt string) *
 }
 
 // Turn sends user input and loops until the model stops calling tools.
-// It returns the final assistant text. If the provider rejects the request
-// because the conversation exceeded its context window, Turn auto-compacts
-// the history (summarizing old turns) and retries once before surfacing the
-// error to the caller.
+// It returns the final assistant text. When the estimated conversation size
+// reaches 90% of the provider-advertised context limit, Turn compacts
+// proactively before the next request; if the provider still rejects the
+// request because the conversation exceeded its context window, Turn
+// auto-compacts (summarizing old turns) and retries once before surfacing
+// the error to the caller.
 func (a *Agent) Turn(ctx context.Context, input string, ev Events) (string, error) {
 	a.Messages = append(a.Messages, llm.Message{Role: "user", Content: input})
 	for {
+		if err := a.maybeCompact(ctx, ev); err != nil {
+			return "", err
+		}
 		msg, err := a.Client.Stream(ctx, llm.Request{
 			Model:           a.Model,
 			Messages:        a.Messages,
@@ -137,11 +151,56 @@ func (a *Agent) Turn(ctx context.Context, input string, ev Events) (string, erro
 // and we never leave an orphaned tool_call whose result the summary dropped.
 const compactKeepBack = 6
 
+// compactThreshold is the fraction of the provider-advertised context window
+// at which Turn compacts proactively. 90% leaves headroom for the response
+// and for the estimate's inaccuracy on non-English content.
+const compactThreshold = 0.9
+
+// maybeCompact folds old turns into a summary once the estimated token count
+// crosses compactThreshold of ContextLimit. It no-ops when the provider
+// didn't advertise a limit (ContextLimit == 0) — the reactive context-limit
+// retry in Turn still covers that case.
+func (a *Agent) maybeCompact(ctx context.Context, ev Events) error {
+	if a.ContextLimit == 0 || EstimateTokens(a.Messages) < int(compactThreshold*float64(a.ContextLimit)) {
+		return nil
+	}
+	took := len(a.Messages)
+	if err := a.compact(ctx); err != nil {
+		if err.Error() == "not enough history to compact" {
+			return nil // too little history to fold; rely on the reactive retry
+		}
+		return err
+	}
+	if ev.OnCompact != nil {
+		ev.OnCompact(took-len(a.Messages), len(a.Messages))
+	}
+	return nil
+}
+
+// EstimateTokens approximates the token count of a conversation. No real
+// tokenizer is wired in, so this uses the common ~4 chars/token heuristic for
+// message content and tool-call arguments, plus a small per-message overhead
+// for roles and tool-call framing. It intentionally overestimates slightly:
+// false positives just compact a little early, false negatives cost a
+// rejected request.
+func EstimateTokens(msgs []llm.Message) int {
+	total := 0
+	for _, m := range msgs {
+		total += 4 + (len(m.Content)+3)/4
+		for _, tc := range m.ToolCalls {
+			total += 8 + (len(tc.Function.Name)+len(tc.Function.Arguments)+3)/4
+		}
+	}
+	return total
+}
+
 // compact replaces old turns with an LLM-generated summary, keeping the
 // system prompt and the last compactKeepBack (ish) messages so recent tool
 // results and any in-flight assistant action stay intact. It runs a single
-// non-streaming completion and stores the summary as a system-role message
-// (it must carry no tool_call IDs that the kept tail would orphan).
+// non-streaming completion — on CompactClient/CompactModel when set, else
+// on the conversation's own client and model — and stores the summary as a
+// system-role message (it must carry no tool_call IDs that the kept tail
+// would orphan).
 func (a *Agent) compact(ctx context.Context) error {
 	if len(a.Messages) <= compactKeepBack+2 { // system + ≥1 user + tail: nothing to fold
 		return errors.New("not enough history to compact")
@@ -162,8 +221,15 @@ func (a *Agent) compact(ctx context.Context) error {
 	}
 	history := a.Messages[sysIdx+1 : tailStart]
 	summaryPrompt := buildSummaryPrompt(history)
-	summary, err := a.Client.Complete(ctx, llm.Request{
-		Model:     a.Model,
+	cli, mdl := a.CompactClient, a.CompactModel
+	if cli == nil {
+		cli = a.Client
+	}
+	if mdl == "" {
+		mdl = a.Model
+	}
+	summary, err := cli.Complete(ctx, llm.Request{
+		Model:     mdl,
 		MaxTokens: 1024,
 		Messages: []llm.Message{
 			sysPrompt,

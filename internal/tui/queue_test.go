@@ -5,8 +5,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/abe/loopy/internal/agent"
 	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/context-labs/loopy/internal/agent"
 )
 
 // busyQueueModel builds a model that is busy with a populated queue.

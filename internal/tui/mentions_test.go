@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/abe/loopy/internal/agent"
-	"github.com/abe/loopy/internal/llm"
-	"github.com/abe/loopy/internal/skills"
+	"github.com/context-labs/loopy/internal/agent"
+	"github.com/context-labs/loopy/internal/llm"
+	"github.com/context-labs/loopy/internal/skills"
 )
 
 func TestExpandMentions(t *testing.T) {

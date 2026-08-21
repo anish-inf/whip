@@ -7,7 +7,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/abe/loopy/internal/config"
+	"github.com/context-labs/loopy/internal/config"
 )
 
 // modelItem is one selectable model@provider route.
