@@ -392,13 +392,28 @@ func buildAgent(cfg *config.Config, modelName, provName, sysPrompt string) (*age
 	if key == "" {
 		return nil, "", "", fmt.Errorf("no API key for provider %q (set apiKey/apiKeyEnv in ~/.loopy/config.json)", provName)
 	}
-	ag := agent.New(llm.New(prov.BaseURL, key), apiID, mdl.MaxTokens, sysPrompt)
-	ag.ModelName, ag.Provider = modelName, provName
-	// the provider's /models list is the source of truth for the context
-	// window; the cached catalog mirrors it (fetchCatalogs refreshes it live)
-	if cat, ok := config.LoadCatalogs()[provName]; ok {
-		ag.ContextLimit = cat.ContextLength(apiID)
+	// Two distinct limits:
+	//   - ContextLimit: the input window (provider's context_length, else the
+	//     config's context). Drives the header % and proactive compaction.
+	//   - MaxTokens: the OUTPUT cap sent as max_tokens. Priority: config maxOut
+	//     → provider's max_completion_tokens → config context (last resort).
+	cat, hasCat := config.LoadCatalogs()[provName]
+	ctxLimit := mdl.ContextWindow()
+	if hasCat {
+		if n := cat.ContextLength(apiID); n > 0 {
+			ctxLimit = n
+		}
 	}
+	maxOut := mdl.MaxOut
+	if maxOut <= 0 && hasCat {
+		maxOut = cat.MaxCompletionTokens(apiID)
+	}
+	if maxOut <= 0 {
+		maxOut = ctxLimit // generous default; provider clamps if it's too high
+	}
+	ag := agent.New(llm.New(prov.BaseURL, key), apiID, maxOut, sysPrompt)
+	ag.ModelName, ag.Provider = modelName, provName
+	ag.ContextLimit = ctxLimit
 	return ag, modelName, provName, nil
 }
 
