@@ -1676,7 +1676,7 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 		m.openPicker()
 	case "/help":
 		m.append(dimStyle.Render(
-			"/model <name> [provider] — switch model\n/compact [model] [provider]|off — compact now at 90% context, or pick the compaction model\n/mouse — toggle mouse capture (off = native terminal selection)\n/tasks — list background subagents (task tool with background:true runs concurrently)\n/resume [id] — resume a previous session\n/goal <text> — keep working until the goal is met (resume | clear)\n/clear — reset conversation\n/quit — exit\ntab — complete · ctrl+o — toggle thinking tokens · ctrl+j / shift+enter — newline · ctrl+v — paste image · esc — interrupt the agent · while busy with queued messages: ↑/↓ select, del removes · PgUp/PgDn — scroll · shift-drag — select text (native) · ctrl+c ctrl+c — quit"))
+			"/model <name> [provider] — switch model\n/compact [model] [provider]|off — compact now at 90% context, or pick the compaction model\n/mouse — toggle mouse capture (off = native terminal selection)\n/tasks — list background subagents (task tool with background:true runs concurrently)\n/resume [id] — resume a previous session\n/goal <text> — keep working until the goal is met (resume | clear)\n/clear — reset conversation\n/quit — exit\ntab — complete · ctrl+o — toggle thinking tokens · ctrl+e — expand the last tool result · ctrl+j / shift+enter — newline · ctrl+v — paste image · esc — interrupt the agent · while busy with queued messages: ↑/↓ select, del removes · PgUp/PgDn — scroll · shift-drag — select text (native) · ctrl+c ctrl+c — quit"))
 	case "/model":
 		if len(fields) < 2 {
 			m.openModelPicker()
