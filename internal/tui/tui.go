@@ -42,6 +42,10 @@ type turnDoneMsg struct {
 	err   error
 }
 type catalogsMsg map[string]config.Catalog // background /models fetch result
+type imageMsg struct {
+	path string // clipboard image saved to disk
+	err  error
+}
 
 // menu is the open completion dropdown.
 type menu struct {
@@ -474,6 +478,18 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.updateCatalogs(msg)
 		return m, nil
 
+	case imageMsg:
+		switch {
+		case msg.err != nil:
+			m.append(errStyle.Render("image paste failed: " + msg.err.Error()))
+		case msg.path == "":
+			m.append(dimStyle.Render("(no image on clipboard)"))
+		default:
+			m.input.InsertString("@" + msg.path + " ")
+			m.refreshMenu()
+		}
+		return m, nil
+
 	case spinner.TickMsg:
 		if !m.busy {
 			return m, nil
@@ -529,6 +545,11 @@ func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case tea.KeyEsc:
 		m.menu = nil
 		return m, nil
+
+	case tea.KeyCtrlV:
+		// image on the clipboard? save it and @-mention the file; otherwise
+		// let the textarea do its usual text paste
+		return m, pasteImageCmd
 
 	case tea.KeyTab, tea.KeyDown, tea.KeyCtrlN:
 		if m.menu != nil {
