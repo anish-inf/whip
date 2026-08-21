@@ -301,8 +301,12 @@ func buildAgent(cfg *config.Config, modelName, provName, sysPrompt string) (*age
 	return ag, modelName, provName, nil
 }
 
-// append adds finalized blocks to the transcript.
+// append adds finalized blocks to the transcript, separating blocks with a
+// blank line so consecutive messages and tool calls breathe.
 func (m *model) append(blocks ...string) {
+	if len(m.blocks) > 0 && len(blocks) > 0 {
+		m.blocks = append(m.blocks, "")
+	}
 	m.blocks = append(m.blocks, blocks...)
 	m.follow = true
 	m.refreshVP()
@@ -335,12 +339,12 @@ func cwd() string {
 
 // layout gives the viewport whatever height the chrome doesn't need.
 func (m *model) layout() {
-	chrome := 5 // header + tips + top pad + input + bottom pad
+	chrome := 5 // header + tips + blanks + input + bottom pad
 	if m.busy {
-		chrome++
+		chrome += 2 // blank line above the spinner + the spinner line itself
 	}
 	if m.current != "" {
-		chrome += lipgloss.Height(m.currentView())
+		chrome += lipgloss.Height(m.currentView()) + 1 // + its blank separator
 	}
 	if m.menu != nil {
 		chrome += min(len(m.menu.cands), menuRows) + 1
@@ -959,14 +963,14 @@ func (m *model) View() string {
 	b.WriteString(dimStyle.Render(truncLine(" / commands · ctrl+p palette · tab completes · ↑/↓ history · mouse scroll · ctrl+c interrupt/quit", m.width)) + "\n\n")
 	b.WriteString(m.vp.View() + "\n")
 	if m.current != "" {
-		b.WriteString(m.currentView() + "\n")
+		b.WriteString("\n" + m.currentView() + "\n")
 	}
 	if m.busy {
 		hint := " thinking… (enter queues · ctrl+c ctrl+c interrupts)"
 		if m.interrupt1 {
 			hint = " thinking… (ctrl+c again to interrupt)"
 		}
-		b.WriteString(m.spin.View() + dimStyle.Render(hint) + "\n")
+		b.WriteString("\n" + m.spin.View() + dimStyle.Render(hint) + "\n")
 	}
 	if len(m.queue) > 0 {
 		b.WriteString(dimStyle.Render(fmt.Sprintf(" ⧗ queued (%d) — enter on empty input to steer into this turn", len(m.queue))) + "\n")
@@ -974,7 +978,7 @@ func (m *model) View() string {
 			b.WriteString(truncLine(youStyle.Render(" ❯ ")+q, m.width) + "\n")
 		}
 	}
-	b.WriteString(m.input.View())
+	b.WriteString("\n" + m.input.View())
 	if m.menu != nil {
 		b.WriteString("\n" + m.menuView())
 	}
