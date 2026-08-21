@@ -34,6 +34,8 @@ In-session: `/model <name> [provider]`, `/tasks` (background subagents), `/clear
 
 The `task` tool runs tool calls in **parallel** (per-path file-mutation locks keep edits to the same file serial) and supports `background: true` to launch a subagent that works concurrently and reports back when done.
 
+See [docs/features.md](docs/features.md) for the full feature map and [docs/concurrency.md](docs/concurrency.md) for the channel design.
+
 ## Config — `~/.loopy/config.json`
 
 Models are routed to providers: a model lists the providers that serve it, and

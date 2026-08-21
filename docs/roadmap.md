@@ -4,6 +4,10 @@ UX niceties worth adopting, learned from [pi](file:///home/abe/code/pi) and
 [opencode](file:///home/abe/code/coding-harnesses/opencode). Check things off as they land.
 Full exploration reports: [learnings/other-harnesses/opencode/](learnings/other-harnesses/opencode/).
 
+**Reference docs:** [features.md](features.md) (what's shipped, where it lives,
+its tests) and [concurrency.md](concurrency.md) (the channel patterns behind
+parallel tool calls and background subagents).
+
 ## Table of contents
 
 - [Input & editing](#input--editing)

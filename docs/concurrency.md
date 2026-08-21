@@ -1,0 +1,93 @@
+# Concurrency: where Go channels earn their keep
+
+loopy's agent runs concurrent work — parallel tool calls, background
+subagents, a streaming TUI — and the design leans on channels for the parts
+that are awkward in the reference harnesses (pi and opencode are TypeScript).
+This doc explains the two channel patterns and why they're idiomatic in Go.
+
+References that motivated them:
+
+- pi `packages/agent/src/harness/tools/file-mutation-queue.ts` — per-path
+  promise-chain serialization.
+- pi `packages/agent/src/agent-loop.ts` `executeToolCallsParallel` — `Promise.all`
+  over a tool-call batch.
+- opencode `packages/core/src/background-job.ts` — a registry of `Deferred` /
+  `Scope` / token for background subagents.
+
+## 1. Per-path file-mutation lock = a 1-capacity channel
+
+The problem: the model can emit several tool calls in one turn (e.g. write
+`a.go`, edit `a.go`, write `b.go`). The writes to `a.go` must not interleave;
+the write to `b.go` should run in parallel.
+
+pi solves it with a `Map<path, Promise>` where each new call chains onto the
+previous promise (`currentQueue.then(next)`). It's correct but subtle — the
+registration step itself needs a promise chain to avoid a check-then-set race.
+
+In Go the whole thing is a buffered channel per path
+(`internal/agent/filelocks.go`):
+
+```go
+ch := make(chan struct{}, 1) // one per canonical path
+ch <- struct{}{}             // acquire — blocks while the buffer is full
+defer func() { <-ch }()      // release — drain the buffer
+```
+
+The buffer of 1 is the lock. First acquirer fills it and proceeds; later
+acquirers block on send until the holder receives. No explicit unlock, no
+registration race, no promise plumbing — the channel *is* the mutex, and the
+compiler checks direction. Two spellings of the same file share a lock via
+`filepath.Abs` + `filepath.Clean`. `bash` (side effects not attributable to a
+path) takes a single global channel.
+
+The batch itself is fanned out with a goroutine per call and a buffered results
+channel (`runTools` in `internal/agent/agent.go`); results land back in call
+order because the chat API matches tool results to call IDs. A `sync.WaitGroup`
++ `close(outCh)` terminates the collector — the fan-out/fan-in idiom.
+
+## 2. Background subagents = one channel close, many waiters
+
+`task` with `background: true` launches a subagent that runs concurrently with
+the parent and reports back later. The registry (`internal/agent/background.go`)
+is opencode's `BackgroundJob` translated to channels.
+
+opencode tracks each job with a `Deferred<Info>` per waiter plus a closeable
+`Scope` and a token for settle-once. Go collapses the broadcast primitive to a
+single channel close:
+
+```go
+type BackgroundTask struct {
+    // ...
+    Done chan struct{} // closed once on settle; <-Done() wakes every waiter
+}
+
+func (r *taskRegistry) settle(id string, s TaskStatus, report string) {
+    // record final state, then:
+    close(t.Done) // one close; all <-Done() receivers proceed together
+}
+```
+
+Closing a channel is the one operation that wakes **all** receivers at once, so
+the tool caller, the TUI's `OnChange` redraw, and `/tasks` all observe
+completion for free — there's no per-waiter state to manage. Cancellation is
+`context.WithCancel` on the subagent's turn; the result is delivered back into
+the parent as a **steered message** (channel close → `Steer`), so the model
+sees the report on the next loop boundary without polling.
+
+### What this buys over the TS versions
+
+- **No leak bookkeeping.** The channel semaphore and the Done-close both have
+  obvious owners and exits; there are no dangling promises or un-awaited
+  deferreds.
+- **Backpressure is the buffer size.** The results channel is sized to the
+  batch; the per-path lock's buffer is 1. The capacity is the contract.
+- **Race-checked.** `go test -race ./...` covers the fan-out, the lock, the
+  broadcast, and cancel. The equivalent TS relies on convention.
+
+## Process safety (not channels, but the same "don't leak" instinct)
+
+`internal/tools/bashrun/bashrun.go` tracks every spawned child in a registry
+and `KillAll()` SIGKILLs the whole process group on exit, so an agent-started
+server never outlives loopy. The non-interactive path closes its output pipes
+on process exit so a detached grandchild (`sleep 30 &`, nohup) can't hang the
+agent waiting on pipe EOF.
