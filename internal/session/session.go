@@ -53,8 +53,15 @@ func Open(path string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	if _, err := db.Exec("PRAGMA busy_timeout=5000"); err != nil {
-		return nil, err
+	for _, pragma := range []string{
+		"PRAGMA busy_timeout=5000",
+		"PRAGMA journal_mode=WAL",   // faster commits, no read/write blocking
+		"PRAGMA synchronous=NORMAL", // safe in WAL; skips per-commit fsync
+		"PRAGMA temp_store=MEMORY",
+	} {
+		if _, err := db.Exec(pragma); err != nil {
+			return nil, err
+		}
 	}
 	if _, err := db.Exec(schema); err != nil {
 		return nil, err
@@ -135,12 +142,17 @@ func (s *Store) Load(idOrPrefix string) (Meta, []llm.Message, error) {
 	}
 	meta := metas[0]
 
+	// pre-size the slice: a long session is hundreds of rows; the COUNT is
+	// one index scan and avoids O(log n) reallocs while scanning
+	var count int
+	s.db.QueryRow(`SELECT COUNT(*) FROM messages WHERE session_id=?`, meta.ID).Scan(&count)
+
 	mrows, err := s.db.Query(`SELECT content FROM messages WHERE session_id=? ORDER BY seq`, meta.ID)
 	if err != nil {
 		return Meta{}, nil, err
 	}
 	defer mrows.Close()
-	var msgs []llm.Message
+	msgs := make([]llm.Message, 0, count)
 	for mrows.Next() {
 		var data string
 		if err := mrows.Scan(&data); err != nil {
