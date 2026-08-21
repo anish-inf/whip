@@ -5,10 +5,12 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
@@ -110,7 +112,13 @@ func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string) (s
 	ti.Placeholder = "Ask loopy anything… (/ for commands, tab completes)"
 	ti.Prompt = "┃ "
 	ti.SetHeight(1)
+	ti.MaxHeight = 12 // input grows with content up to this many lines
 	ti.ShowLineNumbers = false
+	// Newlines come from ctrl+j / shift+enter / alt+enter; plain enter submits.
+	ti.KeyMap.InsertNewline = key.NewBinding(
+		key.WithKeys("ctrl+j", "shift+enter", "alt+enter"),
+		key.WithHelp("ctrl+j", "newline"),
+	)
 	// The default adaptive styles misdetect the background over mosh/tmux;
 	// use plain ANSI colors and no cursor-line background.
 	ti.FocusedStyle.CursorLine = lipgloss.NewStyle()
@@ -337,9 +345,14 @@ func cwd() string {
 	return "?"
 }
 
-// layout gives the viewport whatever height the chrome doesn't need.
+// layout gives the viewport whatever height the chrome doesn't need,
+// growing the input box with its content so the whole prompt stays visible.
 func (m *model) layout() {
-	chrome := 5 // header + tips + blanks + input + bottom pad
+	// wrapped content height, capped by textarea.MaxHeight
+	if m.width > 0 {
+		m.input.SetHeight(max(1, min(lipgloss.Height(m.input.View()), m.input.MaxHeight)))
+	}
+	chrome := 4 + m.input.Height() // header + tips + blanks + input + bottom pad
 	if m.busy {
 		chrome += 2 // blank line above the spinner + the spinner line itself
 	}
@@ -482,6 +495,17 @@ func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.mpicker != nil {
 		return m.modelPickerKey(msg)
 	}
+	// newline keys (ctrl+j / shift+enter / alt+enter) never submit; they go
+	// straight to the textarea, which splits the line via InsertNewline
+	if msg.Type == tea.KeyCtrlJ || msg.Type == tea.KeyCtrlM ||
+		(msg.Type == tea.KeyEnter && msg.Alt) ||
+		(msg.Type == tea.KeyRunes && msg.Alt && string(msg.Runes) == "\r") ||
+		isShiftEnterSeq(msg) {
+		var cmd tea.Cmd
+		m.input, cmd = m.input.Update(tea.KeyMsg{Type: tea.KeyCtrlJ})
+		m.refreshMenu()
+		return m, cmd
+	}
 	switch msg.Type {
 	case tea.KeyCtrlC:
 		if m.busy && m.cancel != nil {
@@ -583,6 +607,23 @@ func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.input, cmd = m.input.Update(msg)
 	m.refreshMenu()
 	return m, cmd
+}
+
+// shiftEnterRe matches the common shift+enter encodings bubbletea doesn't map
+// to a named key: CSI u (\x1b[13;2u), modifyOtherKeys (\x1b[27;2;13~), and
+// kitty's shifted CR (\x1b[57441u). KeyMsg.String() renders each byte of
+// unknown sequences quoted and comma-separated (digits as words), so we match
+// the rendered form loosely.
+var shiftEnterRe = regexp.MustCompile(
+	`'\[', '1', '3', ';', '2', 'u'` + // CSI 13;2u
+		`|'\[', '2', '7', ';', '2', ';', '1', '3', '~'` + // CSI 27;2;13~
+		`|'\[', 'five', 'seven', 'four', 'four', 'one', 'u'`) // CSI 57441u
+
+// isShiftEnterSeq reports whether msg is a shift+enter sequence bubbletea
+// surfaced as an unknown/unmapped key.
+func isShiftEnterSeq(msg tea.KeyMsg) bool {
+	s := msg.String()
+	return strings.HasPrefix(s, "unknown csi sequence:") && shiftEnterRe.MatchString(s)
 }
 
 // histPrev/histNext recall submitted inputs with the arrow keys.
@@ -910,7 +951,7 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 		m.openPicker()
 	case "/help":
 		m.append(dimStyle.Render(
-			"/model <name> [provider] — switch model\n/resume [id] — resume a previous session\n/goal <text> — keep working until the goal is met (resume | clear)\n/clear — reset conversation\n/quit — exit\ntab — complete · PgUp/PgDn — scroll · ctrl+c — interrupt / quit"))
+			"/model <name> [provider] — switch model\n/resume [id] — resume a previous session\n/goal <text> — keep working until the goal is met (resume | clear)\n/clear — reset conversation\n/quit — exit\ntab — complete · ctrl+j / shift+enter — newline · ctrl+v — paste image · PgUp/PgDn — scroll · ctrl+c — interrupt / quit"))
 	case "/model":
 		if len(fields) < 2 {
 			m.openModelPicker()
@@ -960,7 +1001,7 @@ func (m *model) View() string {
 		b.WriteString(m.modelPickerView())
 		return b.String()
 	}
-	b.WriteString(dimStyle.Render(truncLine(" / commands · ctrl+p palette · tab completes · ↑/↓ history · mouse scroll · ctrl+c interrupt/quit", m.width)) + "\n\n")
+	b.WriteString(dimStyle.Render(truncLine(" / commands · ctrl+p palette · tab completes · ctrl+j/shift+enter newline · ctrl+v paste image · ↑/↓ history · ctrl+c interrupt/quit", m.width)) + "\n\n")
 	b.WriteString(m.vp.View() + "\n")
 	if m.current != "" {
 		b.WriteString("\n" + m.currentView() + "\n")
