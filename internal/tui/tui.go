@@ -30,6 +30,9 @@ var (
 	toolStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
 	dimStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
 	errStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
+	// thinkingStyle renders reasoning tokens: dim and italic so they're
+	// visually distinct from the answer.
+	thinkingStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Italic(true)
 )
 
 // messages sent from the agent goroutine
@@ -42,7 +45,8 @@ type turnDoneMsg struct {
 	err   error
 }
 type catalogsMsg map[string]config.Catalog // background /models fetch result
-type imageMsg struct {
+type thinkMsg string                       // streamed reasoning tokens
+type imageMsg struct {                     // ctrl+v clipboard image result
 	path string // clipboard image saved to disk
 	err  error
 }
@@ -72,11 +76,15 @@ type model struct {
 	busy    bool
 	current string // in-flight partial assistant line
 	inMsg   bool   // "● " prefix already printed for this assistant segment
-	menu    *menu
-	picker  *picker
-	mpicker *modelPicker
-	cancel  context.CancelFunc
-	prog    *tea.Program
+
+	showThinking bool   // ctrl+o: render reasoning tokens
+	curThink     string // in-flight partial reasoning line
+	inThink      bool   // "◌ " thinking prefix printed for this reasoning segment
+	menu         *menu
+	picker       *picker
+	mpicker      *modelPicker
+	cancel       context.CancelFunc
+	prog         *tea.Program
 
 	store     *session.Store
 	sessionID string
@@ -342,6 +350,13 @@ func (m *model) Init() tea.Cmd {
 	return textarea.Blink
 }
 
+func onOff(b bool) string {
+	if b {
+		return "on"
+	}
+	return "off"
+}
+
 func cwd() string {
 	if wd, err := os.Getwd(); err == nil {
 		return wd
@@ -362,6 +377,9 @@ func (m *model) layout() {
 	}
 	if m.current != "" {
 		chrome += lipgloss.Height(m.currentView()) + 1 // + its blank separator
+	}
+	if m.curThink != "" {
+		chrome += lipgloss.Height(m.thinkView()) + 1
 	}
 	if m.menu != nil {
 		chrome += min(len(m.menu.cands), menuRows) + 1
@@ -404,6 +422,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case textMsg:
+		m.flushThink() // reasoning always precedes the answer text
 		m.current += string(msg)
 		// Move complete lines into the transcript so the streaming area
 		// only ever re-renders the last partial line.
@@ -414,7 +433,20 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case thinkMsg:
+		if m.showThinking {
+			m.flushCurrent() // thinking renders above the answer
+			m.curThink += string(msg)
+			if i := strings.LastIndexByte(m.curThink, '\n'); i >= 0 {
+				done := m.curThink[:i]
+				m.curThink = m.curThink[i+1:]
+				m.appendThink(done)
+			}
+		}
+		return m, nil
+
 	case toolStartMsg:
+		m.flushThink()
 		m.flushCurrent()
 		args := msg.args
 		if len(args) > 120 {
@@ -437,11 +469,13 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case steeredMsg:
+		m.flushThink()
 		m.flushCurrent()
 		m.append(wrap(youStyle.Render("❯ ")+string(msg)+dimStyle.Render("  (steered)"), m.width))
 		return m, nil
 
 	case turnDoneMsg:
+		m.flushThink()
 		m.flushCurrent()
 		m.busy = false
 		m.cancel = nil
@@ -550,6 +584,15 @@ func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// image on the clipboard? save it and @-mention the file; otherwise
 		// let the textarea do its usual text paste
 		return m, pasteImageCmd
+
+	case tea.KeyCtrlO:
+		// toggle rendering of reasoning/thinking tokens
+		m.showThinking = !m.showThinking
+		if !m.showThinking {
+			m.flushThink() // drop any in-flight reasoning display
+		}
+		m.append(dimStyle.Render("◌ thinking tokens: " + onOff(m.showThinking)))
+		return m, nil
 
 	case tea.KeyTab, tea.KeyDown, tea.KeyCtrlN:
 		if m.menu != nil {
@@ -843,6 +886,36 @@ func (m *model) appendAssistant(s string) {
 	m.append(wrap(s, m.width))
 }
 
+// appendThink writes a reasoning line into the transcript, prefixing the
+// first line of each thinking segment.
+func (m *model) appendThink(s string) {
+	if !m.inThink {
+		s = "◌ " + s
+		m.inThink = true
+	}
+	m.append(thinkingStyle.Render(wrap(s, m.width)))
+}
+
+// flushThink moves any in-flight partial reasoning line into the transcript
+// and ends the current thinking segment.
+func (m *model) flushThink() {
+	cur := strings.TrimRight(m.curThink, " \n")
+	m.curThink = ""
+	if cur != "" {
+		m.appendThink(cur)
+	}
+	m.inThink = false
+}
+
+// thinkView renders the in-flight reasoning line.
+func (m *model) thinkView() string {
+	s := m.curThink
+	if !m.inThink {
+		s = "◌ " + s
+	}
+	return thinkingStyle.Render(wrap(s, m.width))
+}
+
 // flushCurrent moves any in-flight partial line into the transcript and ends
 // the current assistant segment.
 func (m *model) flushCurrent() {
@@ -862,9 +935,11 @@ func (m *model) submit(text string) (tea.Model, tea.Cmd) {
 	p := m.prog
 
 	// Coalesce streaming deltas (~25fps) so each SSE chunk doesn't cost a
-	// full Update/View cycle.
+	// full Update/View cycle. Reasoning tokens get their own buffer so
+	// thinking and answer text never interleave within one update; both drain
+	// on the same timer.
 	var mu sync.Mutex
-	var pend string
+	var pend, thinkPend string
 	var timer *time.Timer
 	flush := func() {
 		mu.Lock()
@@ -872,25 +947,38 @@ func (m *model) submit(text string) (tea.Model, tea.Cmd) {
 			timer.Stop()
 			timer = nil
 		}
-		out := pend
-		pend = ""
+		text, think := pend, thinkPend
+		pend, thinkPend = "", ""
 		mu.Unlock()
-		if out != "" {
-			p.Send(textMsg(out))
+		if think != "" {
+			p.Send(thinkMsg(think))
+		}
+		if text != "" {
+			p.Send(textMsg(text))
+		}
+	}
+	schedule := func() {
+		if timer == nil {
+			timer = time.AfterFunc(40*time.Millisecond, flush)
 		}
 	}
 	onText := func(d string) {
 		mu.Lock()
 		pend += d
-		if timer == nil {
-			timer = time.AfterFunc(40*time.Millisecond, flush)
-		}
+		schedule()
+		mu.Unlock()
+	}
+	onThink := func(d string) {
+		mu.Lock()
+		thinkPend += d
+		schedule()
 		mu.Unlock()
 	}
 
 	go func() {
 		final, err := m.agent.Turn(ctx, prepared, agent.Events{
-			OnText: onText,
+			OnText:  onText,
+			OnThink: onThink,
 			OnToolStart: func(n, a string) {
 				flush()
 				p.Send(toolStartMsg{n, a})
@@ -972,7 +1060,7 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 		m.openPicker()
 	case "/help":
 		m.append(dimStyle.Render(
-			"/model <name> [provider] — switch model\n/resume [id] — resume a previous session\n/goal <text> — keep working until the goal is met (resume | clear)\n/clear — reset conversation\n/quit — exit\ntab — complete · ctrl+j / shift+enter — newline · ctrl+v — paste image · PgUp/PgDn — scroll · ctrl+c — interrupt / quit"))
+			"/model <name> [provider] — switch model\n/resume [id] — resume a previous session\n/goal <text> — keep working until the goal is met (resume | clear)\n/clear — reset conversation\n/quit — exit\ntab — complete · ctrl+o — toggle thinking tokens · ctrl+j / shift+enter — newline · ctrl+v — paste image · PgUp/PgDn — scroll · ctrl+c — interrupt / quit"))
 	case "/model":
 		if len(fields) < 2 {
 			m.openModelPicker()
@@ -1008,8 +1096,11 @@ func (m *model) View() string {
 	if !m.follow {
 		left += fmt.Sprintf(" · ↑ %d%%", int(m.vp.ScrollPercent()*100))
 	}
-	// right-aligned clickable effort control
+	// right-aligned clickable effort control; ◌ marks thinking display
 	right := "⚡ " + effortLabel(m.agent.Effort) + " "
+	if m.showThinking {
+		right = "◌ on  " + right
+	}
 	m.effortX = max(m.width-len(right)-1, 0) // ⚡ renders 2 cells wide
 	left = truncLine(left, max(m.width-len(right)-2, 0))
 	pad := max(m.width-len(left)-len(right)-1, 1)
@@ -1022,8 +1113,11 @@ func (m *model) View() string {
 		b.WriteString(m.modelPickerView())
 		return b.String()
 	}
-	b.WriteString(dimStyle.Render(truncLine(" / commands · ctrl+p palette · tab completes · ctrl+j/shift+enter newline · ctrl+v paste image · ↑/↓ history · ctrl+c interrupt/quit", m.width)) + "\n\n")
+	b.WriteString(dimStyle.Render(truncLine(" / commands · ctrl+p palette · ctrl+o thinking · ctrl+j/shift+enter newline · ctrl+v paste image · ↑/↓ history · ctrl+c interrupt/quit", m.width)) + "\n\n")
 	b.WriteString(m.vp.View() + "\n")
+	if m.curThink != "" {
+		b.WriteString("\n" + m.thinkView() + "\n")
+	}
 	if m.current != "" {
 		b.WriteString("\n" + m.currentView() + "\n")
 	}

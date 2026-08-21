@@ -78,8 +78,11 @@ type Request struct {
 
 // Chunk delta payload from the SSE stream.
 type delta struct {
-	Content   string `json:"content"`
-	ToolCalls []struct {
+	Content string `json:"content"`
+	// ReasoningContent carries thinking tokens on reasoning models (deepseek,
+	// grok, kimi, claude all emit it; claude also nests it in thinking_blocks).
+	ReasoningContent string `json:"reasoning_content"`
+	ToolCalls        []struct {
 		Index    int    `json:"index"`
 		ID       string `json:"id"`
 		Type     string `json:"type"`
@@ -137,9 +140,10 @@ func (c *Client) Models(ctx context.Context) ([]ModelInfo, error) {
 	return list.Data, nil
 }
 
-// Stream sends the request and invokes onText for each content delta.
-// It returns the final assistant message (with any accumulated tool calls).
-func (c *Client) Stream(ctx context.Context, req Request, onText func(string)) (Message, error) {
+// Stream sends the request and invokes onText for each content delta and
+// onThink for each reasoning_content delta (both may be nil). It returns the
+// final assistant message (with any accumulated tool calls).
+func (c *Client) Stream(ctx context.Context, req Request, onText, onThink func(string)) (Message, error) {
 	req.Stream = true
 	body, err := json.Marshal(req)
 	if err != nil {
@@ -189,6 +193,11 @@ func (c *Client) Stream(ctx context.Context, req Request, onText func(string)) (
 			finish = fr
 		}
 		d := ch.Choices[0].Delta
+		if d.ReasoningContent != "" {
+			if onThink != nil {
+				onThink(d.ReasoningContent)
+			}
+		}
 		if d.Content != "" {
 			msg.Content += d.Content
 			if onText != nil {

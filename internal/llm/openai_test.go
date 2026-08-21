@@ -82,7 +82,7 @@ func TestStreamTextAndToolCalls(t *testing.T) {
 	defer srv.Close()
 
 	var streamed strings.Builder
-	msg, err := New(srv.URL, "test-key").Stream(context.Background(), Request{Model: "m"}, func(d string) { streamed.WriteString(d) })
+	msg, err := New(srv.URL, "test-key").Stream(context.Background(), Request{Model: "m"}, func(d string) { streamed.WriteString(d) }, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +106,7 @@ func TestStreamLengthDiscardsToolCalls(t *testing.T) {
 	)
 	defer srv.Close()
 
-	msg, err := New(srv.URL, "test-key").Stream(context.Background(), Request{Model: "m"}, nil)
+	msg, err := New(srv.URL, "test-key").Stream(context.Background(), Request{Model: "m"}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,9 +121,33 @@ func TestStreamLengthDiscardsToolCalls(t *testing.T) {
 func TestStreamAPIError(t *testing.T) {
 	srv := sseServer(t, `data: {"error":{"message":"boom"}}`)
 	defer srv.Close()
-	_, err := New(srv.URL, "test-key").Stream(context.Background(), Request{Model: "m"}, nil)
+	_, err := New(srv.URL, "test-key").Stream(context.Background(), Request{Model: "m"}, nil, nil)
 	if err == nil || !strings.Contains(err.Error(), "boom") {
 		t.Fatalf("expected api error, got %v", err)
+	}
+}
+
+func TestStreamReasoningRoutedToOnThink(t *testing.T) {
+	srv := sseServer(t,
+		`data: {"choices":[{"delta":{"reasoning_content":"think","role":"assistant"}}]}`,
+		`data: {"choices":[{"delta":{"reasoning_content":"ing…"}}]}`,
+		`data: {"choices":[{"delta":{"content":"4"}}]}`,
+		`data: {"choices":[{"delta":{},"finish_reason":"stop"}]}`,
+		`data: [DONE]`,
+	)
+	defer srv.Close()
+
+	var think, text strings.Builder
+	msg, err := New(srv.URL, "test-key").Stream(context.Background(), Request{Model: "m"},
+		func(d string) { text.WriteString(d) }, func(d string) { think.WriteString(d) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if think.String() != "thinking…" {
+		t.Fatalf("reasoning: %q", think.String())
+	}
+	if text.String() != "4" || msg.Content != "4" {
+		t.Fatalf("content: %q msg: %q", text.String(), msg.Content)
 	}
 }
 
@@ -132,7 +156,7 @@ func TestStreamHTTPError(t *testing.T) {
 	srv := sseServer(t)
 	defer srv.Close()
 	c.BaseURL = srv.URL
-	_, err := c.Stream(context.Background(), Request{Model: "m"}, nil)
+	_, err := c.Stream(context.Background(), Request{Model: "m"}, nil, nil)
 	if err == nil || !strings.Contains(err.Error(), "401") {
 		t.Fatalf("expected 401 error, got %v", err)
 	}
@@ -146,12 +170,12 @@ func TestNewTool(t *testing.T) {
 }
 
 func TestStreamTransportErrors(t *testing.T) {
-	if _, err := New("http://\x7f", "k").Stream(context.Background(), Request{}, nil); err == nil {
+	if _, err := New("http://\x7f", "k").Stream(context.Background(), Request{}, nil, nil); err == nil {
 		t.Fatal("expected bad-url error")
 	}
 	srv := sseServer(t)
 	srv.Close() // connection refused
-	if _, err := New(srv.URL, "test-key").Stream(context.Background(), Request{}, nil); err == nil {
+	if _, err := New(srv.URL, "test-key").Stream(context.Background(), Request{}, nil, nil); err == nil {
 		t.Fatal("expected connection error")
 	}
 }

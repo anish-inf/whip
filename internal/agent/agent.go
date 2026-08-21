@@ -13,6 +13,7 @@ import (
 // Events receives streaming callbacks during a turn. All fields are optional.
 type Events struct {
 	OnText      func(delta string)               // assistant text as it streams
+	OnThink     func(delta string)               // reasoning/thinking tokens as they stream
 	OnToolStart func(name string, args string)   // a tool call is about to run
 	OnToolEnd   func(name string, result string) // a tool call finished
 	OnSteer     func(text string)                // a steered message was injected
@@ -72,7 +73,7 @@ func (a *Agent) Turn(ctx context.Context, input string, ev Events) (string, erro
 			Tools:           tools.Defs(a.Tools),
 			MaxTokens:       a.MaxTokens,
 			ReasoningEffort: a.Effort,
-		}, ev.OnText)
+		}, ev.OnText, ev.OnThink)
 		if err != nil {
 			return "", err
 		}
