@@ -154,13 +154,13 @@ README CLI section grows `mcp import`/`mcp test` when those land.
 
 | # | Item | Tier | Status |
 |---|------|------|--------|
-| 1 | Fail-fast MCP calls | 1 | planned |
-| 2 | Did-you-mean suggestions | 1 | planned |
-| 3 | First-settle note | 1 | planned |
-| 4 | Auto-reconnect backoff | 1 | planned |
-| 5 | Server instructions in system prompt | 1 | planned |
+| 1 | Fail-fast MCP calls | 1 | ✅ shipped |
+| 2 | Did-you-mean suggestions | 1 | ✅ shipped |
+| 3 | First-settle note | 1 | ✅ shipped |
+| 4 | Auto-reconnect backoff | 1 | ✅ shipped |
+| 5 | Server instructions in system prompt | 1 | ✅ shipped |
 | 6 | `mcp import` | 2 | planned |
-| 7 | `mcp test` doctor | 2 | planned |
+| 7 | `mcp test` doctor | 2 | ✅ shipped |
 | 8 | Overlay entries | 2 | planned |
 | 9 | serve project conventions | 3 | parked |
 | 10 | codex bearer tokens | 3 | parked |

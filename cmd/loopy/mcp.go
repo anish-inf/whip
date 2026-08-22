@@ -6,6 +6,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/context-labs/loopy/internal/config"
 	"github.com/context-labs/loopy/internal/mcp"
@@ -28,6 +29,12 @@ func mcpCLI(args []string, version string) error {
 	}
 	if args[0] == "serve" {
 		return mcp.Serve(context.Background(), version)
+	}
+	if args[0] == "test" {
+		if len(args) < 2 {
+			return fmt.Errorf("usage: loopy mcp test <name>")
+		}
+		return mcpTestCLI(args[1])
 	}
 
 	cfg, err := config.Load()
@@ -122,5 +129,47 @@ func mcpCLI(args []string, version string) error {
 		fmt.Printf("removed mcp server %q\n", name)
 		return nil
 	}
-	return fmt.Errorf("unknown mcp subcommand %q (list|add|remove|serve)", args[0])
+	return fmt.Errorf("unknown mcp subcommand %q (list|add|remove|serve|test)", args[0])
+}
+
+// mcpTestCLI is the doctor: connect to one configured server, report status,
+// timing, tool names, and the stderr tail on failure. Exits non-zero when the
+// server isn't usable, so CI can validate a .mcp.json before it ships.
+func mcpTestCLI(name string) error {
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	wd, _ := os.Getwd()
+	merged, _ := mcp.LoadMerged(wd, mcp.FromConfigMap(cfg.MCPServers))
+	sc, ok := merged[name]
+	if !ok {
+		return fmt.Errorf("no mcp server named %q (try: loopy mcp list)", name)
+	}
+	fmt.Printf("testing mcp server %q (%s)…\n", name, mcpTarget(sc))
+	res := mcp.Probe(context.Background(), name, sc)
+	switch res.Status {
+	case mcp.StatusReady:
+		fmt.Printf("✓ connected in %s — %d tools\n", res.Elapsed.Round(time.Millisecond), res.Tools)
+		if len(res.ToolNames) > 0 {
+			fmt.Println("  tools:", strings.Join(res.ToolNames, ", "))
+		}
+		return nil
+	case mcp.StatusDisabled:
+		fmt.Println("○ disabled — enable it in ~/.loopy/config.json")
+		return fmt.Errorf("server %q is disabled", name)
+	default:
+		fmt.Printf("✗ failed after %s: %s\n", res.Elapsed.Round(time.Millisecond), res.Err)
+		if res.Note != "" {
+			fmt.Println("  note:", res.Note)
+		}
+		return fmt.Errorf("server %q failed", name)
+	}
+}
+
+func mcpTarget(c mcp.ServerConfig) string {
+	if c.Remote() {
+		return c.URL
+	}
+	return strings.Join(c.Command, " ")
 }

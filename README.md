@@ -90,7 +90,12 @@ existing setup:
 ```
 
 Servers connect in the background at startup and lazily on first use — a
-slow or broken server never blocks the loop. `/mcp` shows live status;
-`/mcp <name> reconnect|enable|disable` manages servers without restarting.
-CLI: `loopy mcp list|add|remove`. `loopy mcp serve` runs loopy's own tools
-(read/bash/edit/write) as an MCP server for other harnesses.
+slow or broken server never blocks the loop (calls fail fast with an
+actionable message, and dropped sessions auto-reconnect with backoff).
+`/mcp` shows live status; `/mcp <name> reconnect|enable|disable` manages
+servers without restarting. Server instructions teach the model how to use
+each server's tools automatically. CLI: `loopy mcp list|add|remove`, and
+`loopy mcp test <name>` to doctor one server (status, timing, tool names,
+stderr tail; non-zero exit — validate a `.mcp.json` in CI). `loopy mcp
+serve` runs loopy's own tools (read/bash/edit/write) as an MCP server for
+other harnesses.

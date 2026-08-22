@@ -178,6 +178,27 @@ expand from loopy's environment.
   children spawn in their own process group, and the SDK terminates them
   (stdin close → SIGTERM → SIGKILL after 3s).
 
+Polish (the "never stuck, always know why" pass):
+
+- **Fail-fast calls** — a call to a failed/disabled server returns instantly
+  with an actionable message (`/mcp <name> reconnect|enable`); a
+  still-connecting server caps the wait at a 5s grace then returns "retry in
+  a moment". No turn parks on a 30s startup timeout.
+- **Did-you-mean** — `tools.Suggester` (installed by `Agent.SetMCPTools`)
+  runs an early-exit Levenshtein over live tool names, so a stale/typo'd
+  `mcp__` call gets `did you mean mcp__docs__greet?` instead of a dead end.
+- **First-settle notes** — each server's first settle lands one transcript
+  line (`⚡ mcp: docs ready (4 tools)` / `✗ mcp: x failed: …`); later
+  transitions stay quiet.
+- **Auto-reconnect** — a dropped session retries in the background with
+  backoff (1s/2s/4s, cap 3), guarded against close/disable/dupes; manual
+  `/mcp reconnect` stays unlimited.
+- **Server instructions** — initialize-result instructions render into an
+  `<mcp_instructions>` block appended to the system prompt every turn
+  (alongside skills), tracking live sessions.
+- **`loopy mcp test <name>`** — the doctor: connect + list + timing + tool
+  names, stderr tail on failure, non-zero exit — CI-checkable `.mcp.json`.
+
 Tests: `config_test.go` (claude/codex parsing incl. a real-world codex
 config, merge precedence, discovery errors, tool-name round-trips),
 `manager_test.go` (connect/call, error-as-output, structured+media

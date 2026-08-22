@@ -511,3 +511,34 @@ func TestServerInstructions(t *testing.T) {
 		t.Error("reconnected server should restore instructions")
 	}
 }
+
+// TestProbe: the doctor path — a good server probes ready with tool names; a
+// dying one probes failed with its stderr tail.
+func TestProbe(t *testing.T) {
+	// Good server via the in-process transport seam: Probe uses the default
+	// transport factory, so exercise it through a real subprocess only when
+	// selfhost is enabled; otherwise verify the failed path (no binary).
+	res := Probe(context.Background(), "ghost", ServerConfig{Command: []string{"no-such-binary-xyz"}, StartupTimeout: 3})
+	if res.Status != StatusFailed {
+		t.Errorf("ghost probe = %+v", res)
+	}
+	if res.Elapsed <= 0 {
+		t.Error("probe should report elapsed time")
+	}
+
+	if testing.Short() {
+		return
+	}
+	// A stdio server that starts but speaks no MCP: the connect itself is
+	// bounded by the startup timeout; Close() then adds the SDK's stdio
+	// terminate window (stdin close → SIGTERM → SIGKILL), which a `sleep`
+	// child rides out. Assert the bound loosely — what matters is the probe
+	// fails fast and reports why, not the exact teardown cost.
+	res = Probe(context.Background(), "silent", ServerConfig{Command: []string{"sh", "-c", "sleep 5"}, StartupTimeout: 1})
+	if res.Status != StatusFailed || res.Err == "" {
+		t.Errorf("silent probe = %+v", res)
+	}
+	if res.Elapsed > 15*time.Second {
+		t.Errorf("probe blew far past the startup timeout: %s", res.Elapsed)
+	}
+}

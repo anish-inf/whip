@@ -597,6 +597,38 @@ func (m *Manager) InstructionsBlock() string {
 	return b.String()
 }
 
+// Probe connects a single server for `loopy mcp test`: builds a throwaway
+// manager with just that entry, starts it, waits for the first settle, and
+// returns the outcome with tool names. A doctor visit, not a residency.
+type ProbeResult struct {
+	Server
+	Elapsed   time.Duration
+	ToolNames []string // agent-facing names (mcp__name__tool), first 5 + "…"
+}
+
+func Probe(ctx context.Context, name string, cfg ServerConfig) ProbeResult {
+	start := time.Now()
+	m := NewManager(map[string]ServerConfig{name: cfg})
+	defer m.Close()
+	m.Start(ctx)
+	s := m.servers[name]
+	select {
+	case <-s.ready:
+	case <-ctx.Done():
+		return ProbeResult{Server: Server{Name: name, Status: StatusFailed, Err: ctx.Err().Error()}, Elapsed: time.Since(start)}
+	}
+	st := m.Statuses()[0]
+	res := ProbeResult{Server: st, Elapsed: time.Since(start)}
+	for _, t := range m.Tools() {
+		res.ToolNames = append(res.ToolNames, t.Def.Function.Name)
+		if len(res.ToolNames) == 5 {
+			res.ToolNames = append(res.ToolNames, "…")
+			break
+		}
+	}
+	return res
+}
+
 // Statuses returns a stable, name-sorted snapshot for /mcp.
 func (m *Manager) Statuses() []Server {
 	out := make([]Server, 0, len(m.servers))
