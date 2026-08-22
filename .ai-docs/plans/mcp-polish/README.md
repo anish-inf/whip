@@ -150,6 +150,17 @@ existing systems — the loopy way.
 `docs/roadmap.md` MCP block gains checkboxes for each (checked as they land);
 README CLI section grows `mcp import`/`mcp test` when those land.
 
+## Addendum: startup resource report (from the live-UX probe)
+
+Shipped: `docs/learnings/other-harnesses/live-ux-probe.md` found that pi's
+startup [Skill conflicts] block names broken resources with exact reasons
+while loopy silently truncated over-long skill descriptions (maxDesc=300).
+The report now prints at first paint: `skills: N loaded`, one `⚠` line per
+degraded skill (truncation) or unparseable SKILL.md, and `mcp: name ✓ (N
+tools) · ghost ✗ · off ○`. Skipped on resume. It immediately exposed ~40 of
+this repo's own golang skills with descriptions >300 chars being truncated
+in the system prompt — the feature paid for itself on first run.
+
 ## Order and status
 
 | # | Item | Tier | Status |

@@ -267,6 +267,8 @@ func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string) (s
 			return "", err
 		}
 	}
+	m.startupReport()
+
 	// Inline rendering (no alt-screen): the transcript lives in the normal
 	// terminal scrollback, so terminal scrollback owns history. Mouse capture
 	// is ON but wheel+click only (?1000, no motion ?1002): the wheel scrolls
@@ -309,6 +311,63 @@ func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string) (s
 	// group and waits for them.
 	bashrun.KillAll()
 	return m.sessionID, err
+}
+
+// startupReport prints one block naming what loopy loaded — skills (with
+// validation warnings, pi's [Skill conflicts] lesson: a silently truncated or
+// unparseable SKILL.md is a broken skill the user never learns about) and MCP
+// servers — plus degraded-mode notices. Skipped on resume (the transcript
+// already carries the past).
+func (m *model) startupReport() {
+	sk, problems := skills.ScanDetailed(skills.DefaultDirs()...)
+	var b strings.Builder
+	var warned bool
+
+	line := func(format string, args ...any) {
+		fmt.Fprintf(&b, format+"\n", args...)
+	}
+	if len(sk) > 0 {
+		line("skills: %d loaded", len(sk))
+	}
+	for _, s := range sk {
+		if s.Warning != "" {
+			line("  ⚠ %s: %s", s.Name, s.Warning)
+			warned = true
+		}
+	}
+	for _, p := range problems {
+		line("  ⚠ %s: %s", p.Path, p.Err)
+		warned = true
+	}
+	if m.mcpMgr != nil {
+		sts := m.mcpMgr.Statuses()
+		var parts []string
+		for _, st := range sts {
+			switch st.Status {
+			case mcp.StatusReady:
+				parts = append(parts, fmt.Sprintf("%s ✓ (%d tools)", st.Name, st.Tools))
+			case mcp.StatusFailed:
+				parts = append(parts, fmt.Sprintf("%s ✗", st.Name))
+				warned = true
+			case mcp.StatusDisabled:
+				parts = append(parts, fmt.Sprintf("%s ○", st.Name))
+			default:
+				parts = append(parts, st.Name+" ◌")
+			}
+		}
+		if len(parts) > 0 {
+			line("mcp: %s", strings.Join(parts, " · "))
+		}
+	}
+	if b.Len() == 0 {
+		return
+	}
+	out := strings.TrimRight(b.String(), "\n")
+	if warned {
+		m.append(errStyle.Render(out))
+	} else {
+		m.append(dimStyle.Render(out))
+	}
 }
 
 // enableClickWheelMouse turns on click+wheel mouse reporting (?1000) with SGR
