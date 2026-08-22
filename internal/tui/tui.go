@@ -48,6 +48,14 @@ type textMsg string
 type toolStartMsg struct{ name, args string }
 type toolEndMsg struct{ name, result string }
 type steeredMsg string
+
+// goalFromContextMsg carries the model-formulated goal back from the
+// /goal-from-context goroutine to the Update loop.
+type goalFromContextMsg struct {
+	goal string
+	err  error
+}
+
 type compactMsg struct {
 	took, kept int // messages removed / kept after compaction
 	err        error
@@ -1088,6 +1096,32 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.append(youStyle.Render("❯ ") + string(msg) + dimStyle.Render("  (steered)"))
 		return m, nil
 
+	case goalFromContextMsg:
+		// the formulation call finished between turns; on success set the
+		// goal and kick off the goal loop exactly like /goal <text>
+		m.flushThink()
+		m.flushCurrent()
+		switch {
+		case msg.err == context.Canceled:
+			m.busy = false
+			m.cancel = nil
+			m.append(dimStyle.Render("(interrupted)"))
+		case msg.err != nil:
+			m.busy = false
+			m.cancel = nil
+			m.append(errStyle.Render("goal-from-context failed: " + msg.err.Error()))
+		case strings.TrimSpace(msg.goal) == "":
+			m.busy = false
+			m.cancel = nil
+			m.append(errStyle.Render("goal-from-context: model returned an empty goal"))
+		default:
+			goal := strings.TrimSpace(msg.goal)
+			m.setGoal(goal)
+			m.append(dimStyle.Render("◎ goal set: " + goal))
+			return m.submit(goal)
+		}
+		return m, nil
+
 	case compactMsg:
 		// compaction lands between turns: append an inline note and rewrite
 		// the session record so the stored history matches the memory
@@ -1984,6 +2018,13 @@ func (m *model) submitTurn(text string, authored bool) (tea.Model, tea.Cmd) {
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancel = cancel
 	p := m.prog
+	// send is nil-safe: headless tests drive Update directly, so turn
+	// callbacks drop their messages instead of panicking on a nil program
+	send := func(msg tea.Msg) {
+		if p != nil {
+			p.Send(msg)
+		}
+	}
 
 	// Coalesce streaming deltas (~25fps) so each SSE chunk doesn't cost a
 	// full Update/View cycle. Reasoning tokens get their own buffer so
@@ -2002,10 +2043,10 @@ func (m *model) submitTurn(text string, authored bool) (tea.Model, tea.Cmd) {
 		pend, thinkPend = "", ""
 		mu.Unlock()
 		if think != "" {
-			p.Send(thinkMsg(think))
+			send(thinkMsg(think))
 		}
 		if text != "" {
-			p.Send(textMsg(text))
+			send(textMsg(text))
 		}
 	}
 	schedule := func() {
@@ -2036,18 +2077,18 @@ func (m *model) submitTurn(text string, authored bool) (tea.Model, tea.Cmd) {
 			OnThink: onThink,
 			OnToolStart: func(n, a string) {
 				flush()
-				p.Send(toolStartMsg{n, a})
+				send(toolStartMsg{n, a})
 			},
-			OnToolEnd: func(n, r string) { p.Send(toolEndMsg{n, r}) },
+			OnToolEnd: func(n, r string) { send(toolEndMsg{n, r}) },
 			OnSteer: func(s string) {
 				flush()
-				p.Send(steeredMsg(s))
+				send(steeredMsg(s))
 			},
-			OnCompact: func(took, kept int) { p.Send(compactMsg{took: took, kept: kept}) },
-			OnUsage:   func(u llm.Usage) { p.Send(usageMsg(u)) },
+			OnCompact: func(took, kept int) { send(compactMsg{took: took, kept: kept}) },
+			OnUsage:   func(u llm.Usage) { send(usageMsg(u)) },
 		})
 		flush()
-		p.Send(turnDoneMsg{final: final, err: err})
+		send(turnDoneMsg{final: final, err: err})
 	}()
 	m.append(youStyle.Render("❯ ") + text)
 	if authored {
@@ -2066,6 +2107,10 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 	case "/quit", "/exit", "/q":
 		return m, tea.Quit
 	case "/clear":
+		if m.busy {
+			m.append(dimStyle.Render("(busy — /clear after this turn)"))
+			return m, nil
+		}
 		m.agent.Messages = m.agent.Messages[:1] // keep system prompt
 		m.blocks = nil
 		m.msgBlock = nil
@@ -2159,6 +2204,66 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 			m.setEffort(nextEffort(levels, m.agent.Effort))
 		}
 		m.append(dimStyle.Render("⚡ effort: " + effortLabel(m.agent.Effort)))
+	case "/goal-from-context":
+		if m.busy {
+			m.append(dimStyle.Render("(busy — /goal-from-context after this turn)"))
+			return m, nil
+		}
+		tail, err := agent.GoalFromContextMessages(m.agent.Messages)
+		if err != nil {
+			m.append(errStyle.Render(err.Error()))
+			return m, nil
+		}
+		// one non-streaming call on the CURRENT model (the compact-model
+		// override is deliberately ignored) distills the tail into a goal
+		m.busy = true
+		m.append(dimStyle.Render("◎ formulating goal from the last two messages…"))
+		p := m.prog
+		// ag may drift from m.agent if the user /model-switches mid-formulation:
+		// usage lands on the old agent, the goal submits on the new one. The
+		// call itself is safe (Complete touches no Agent state, AddUsage is
+		// mutex-protected) and the window is seconds — not worth a guard.
+		ag := m.agent
+		ctx, cancel := context.WithCancel(context.Background())
+		m.cancel = cancel
+		prompt := agent.BuildGoalFromContextPrompt(tail)
+		formulate := func() (string, error) {
+			goal, usage, err := ag.Client.Complete(ctx, llm.Request{
+				Model:     ag.Model,
+				MaxTokens: 256,
+				Messages:  []llm.Message{{Role: "user", Content: prompt}},
+			})
+			ag.AddUsage(usage) // the formulation call is session spend too
+			return goal, err
+		}
+		if p == nil {
+			// headless (tests): run inline on the caller's goroutine — with
+			// no program to pump messages the Update handler can't run, so
+			// apply the same notes/goal here; the goal loop itself never
+			// starts without a running program
+			goal, err := formulate()
+			m.busy = false
+			m.cancel = nil
+			switch {
+			case err != nil && err != context.Canceled:
+				m.append(errStyle.Render("goal-from-context failed: " + err.Error()))
+			case err == nil && strings.TrimSpace(goal) == "":
+				m.append(errStyle.Render("goal-from-context: model returned an empty goal"))
+			case err == nil:
+				m.setGoal(strings.TrimSpace(goal))
+				m.append(dimStyle.Render("◎ goal set: " + m.goal))
+			}
+			return m, nil
+		}
+		go func() {
+			goal, err := formulate()
+			// the msg handler owns busy/cancel: on success it submits (busy
+			// belongs to the new turn), on failure it clears them directly —
+			// a turnDoneMsg{} here would either cancel-proof the fresh turn
+			// (success) or re-engage a paused goal's loop (failure)
+			p.Send(goalFromContextMsg{goal: goal, err: err})
+		}()
+		return m, m.spin.Tick
 	case "/goal":
 		switch {
 		case len(fields) == 1:
@@ -2201,6 +2306,10 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 		m.renameCommand(strings.TrimSpace(strings.TrimPrefix(text, "/rename")))
 		return m, nil
 	case "/resume":
+		if m.busy {
+			m.append(dimStyle.Render("(busy — /resume after this turn)"))
+			return m, nil
+		}
 		if len(fields) > 1 {
 			if err := m.resume(fields[1]); err != nil {
 				m.append(errStyle.Render(err.Error()))
@@ -2210,7 +2319,7 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 		m.openPicker()
 	case "/help":
 		m.append(dimStyle.Render(
-			"/model <name> [provider] — switch model\n/compact [model] [provider]|off — compact now at 90% context, or pick the compaction model\n/mouse — toggle mouse capture (on = wheel scroll + clicks, drag to copy)\n/theme [light|dark|auto] — color scheme (bare toggles)\n/tasks [id] — background subagents: focus the dock, or open one task's live view (ctrl+t toggles dock focus)\n/resume [id] — resume a previous session\n/fork [name] — copy this conversation into a new session (pick a point in the rewind picker with f)\n/rename [title] — retitle this session\n/goal <text> — keep working until the goal is met (resume | clear | rounds <n>|default [--global])\n/clear — reset conversation\n/quit — exit\ntab — complete · ctrl+t — focus the background-tasks dock (↑/↓ select, enter opens, esc backs out) · ctrl+o — toggle thinking tokens · ctrl+e — expand the last tool result · ctrl+j / shift+enter — newline · ctrl+v — paste image · esc — interrupt the agent · esc esc (idle) — rewind the conversation (↑/↓ browse, enter rewinds, f forks) · while busy with queued messages: ↑/↓ select, del removes · PgUp/PgDn — scroll · wheel — scroll · drag — select/copy text · ctrl+c ctrl+c — quit"))
+			"/model <name> [provider] — switch model\n/compact [model] [provider]|off — compact now at 90% context, or pick the compaction model\n/mouse — toggle mouse capture (on = wheel scroll + clicks, drag to copy)\n/theme [light|dark|auto] — color scheme (bare toggles)\n/tasks [id] — background subagents: focus the dock, or open one task's live view (ctrl+t toggles dock focus)\n/resume [id] — resume a previous session\n/fork [name] — copy this conversation into a new session (pick a point in the rewind picker with f)\n/rename [title] — retitle this session\n/goal <text> — keep working until the goal is met (resume | clear | rounds <n>|default [--global])\n/goal-from-context — formulate a goal from the last two messages and work until it's met\n/clear — reset conversation\n/quit — exit\ntab — complete · ctrl+t — focus the background-tasks dock (↑/↓ select, enter opens, esc backs out) · ctrl+o — toggle thinking tokens · ctrl+e — expand the last tool result · ctrl+j / shift+enter — newline · ctrl+v — paste image · esc — interrupt the agent · esc esc (idle) — rewind the conversation (↑/↓ browse, enter rewinds, f forks) · while busy with queued messages: ↑/↓ select, del removes · PgUp/PgDn — scroll · wheel — scroll · drag — select/copy text · ctrl+c ctrl+c — quit"))
 	case "/model":
 		if len(fields) < 2 {
 			m.openModelPicker()

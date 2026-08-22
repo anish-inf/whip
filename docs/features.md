@@ -133,6 +133,14 @@ errors for the compaction retry, `Stream` returns the message + usage, and
 - Queueing (enter while busy), steering (empty enter), history recall (↑/↓),
   `@file` mentions, `$skill` invocation, `/goal` loop, `/resume` session
   picker, `/effort` reasoning levels — see the roadmap for the full list.
+- **`/goal-from-context`** distills the last two conversation messages into a
+  goal statement with one non-streaming call on the current model (the
+  compact-model override is deliberately ignored), then sets it exactly like
+  `/goal <text>` and starts the goal loop. Prompt building is pure
+  (`agent.BuildGoalFromContextPrompt` over the window from
+  `agent.GoalFromContextMessages`); the TUI command mirrors `/compact`'s
+  goroutine + `goalFromContextMsg` pattern, refusing while busy and running
+  inline when headless. Tests: `goal_test.go` (`TestGoalFromContext*`).
 
 ## Conversation time travel
 

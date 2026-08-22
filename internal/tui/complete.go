@@ -19,6 +19,7 @@ var commands = []cand{
 	{"/effort", "[level] — reasoning effort: off·low·medium·high (bare cycles)"},
 	{"/fork", "[name] — copy the conversation into a new named session"},
 	{"/goal", "<text> — work until done; also: resume, clear, rounds <n>|default [--global]"},
+	{"/goal-from-context", "Formulate a goal from the last two messages and work until it's done"},
 	{"/help", "Show available commands"},
 	{"/model", "<model> [provider] — switch model"},
 	{"/mouse", "Toggle mouse capture (off = native terminal selection)"},
@@ -32,7 +33,7 @@ var commands = []cand{
 // execNow lists commands the menu runs immediately on enter (they act
 // sensibly with no arguments); others insert themselves for arguments.
 var execNow = map[string]bool{
-	"/clear": true, "/compact": true, "/effort": true, "/goal": true, "/help": true,
+	"/clear": true, "/compact": true, "/effort": true, "/goal": true, "/goal-from-context": true, "/help": true,
 	"/model": true, "/mouse": true, "/quit": true, "/resume": true, "/tasks": true,
 }
 
