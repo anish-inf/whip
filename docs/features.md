@@ -134,6 +134,48 @@ errors for the compaction retry, `Stream` returns the message + usage, and
   `@file` mentions, `$skill` invocation, `/goal` loop, `/resume` session
   picker, `/effort` reasoning levels — see the roadmap for the full list.
 
+## Conversation time travel
+
+`internal/tui/rewind.go` — **double-esc while idle** opens the rewind picker:
+the conversation's authored user messages, newest first, with the transcript
+**live-scrolling** to the selected message as you browse (opencode's
+`dialog-timeline.tsx` `onMove`, and `msgBlock` maps conversation index →
+transcript block so the jump is direct). enter rewinds to just before the
+selected message: `Agent.Messages` is truncated, the clipped tail becomes an
+in-memory **redo stack** (`m.future`, oldest first), the DB rows are deleted
+(`Store.DeleteFrom`), the transcript is rebuilt via `seedTranscript`, and the
+rewound message's text lands back in the input for editing (opencode's undo:
+"the input restore is what makes it feel good"). Cuts sit at user-message
+indices, so a tool_call is never orphaned from its results.
+
+**Forward travel:** reopening the picker while rewound lists the clipped
+messages dimmed, marked `(rewound)`; enter on one pulls the tail back in and
+re-saves it. Submitting new input while rewound discards the redo stack.
+Compaction also drops it (a stale redo would resurrect summarized history).
+esc cancels and restores the scroll position. The redo stack is in-memory
+only by design: quitting while rewound leaves the DB at the rewound point.
+
+`internal/tui/fork.go` — **`/fork [name]`** copies the conversation into a
+**new** session (one `INSERT…SELECT` in `Store.Fork`; the original is
+untouched and stays under `/resume`) and switches to it. Bare `/fork` opens an
+inline name prompt prefilled with `<title> (fork #N)` (`Store.ForkTitle`
+increments past existing forks and unwraps nested suffixes, opencode's
+`getForkedTitle`). **`f` in the rewind picker** forks from the selected
+message instead — one picker, two destinations. Forking while rewound pulls
+the redo stack up to the picked point into the copy. **`/rename [title]`**
+retitles the current session (`Store.SetTitle`); bare opens the same inline
+prompt prefilled with the current title. Both prompts stash and restore any
+in-progress draft. All three refuse to run mid-turn. Palette entries:
+"Rewind conversation", "Fork session", "Rename session" under Session.
+
+Tests: `rewind_test.go` — double-esc opens/cancels, busy esc still
+interrupts, truncation + input restore + DB rows deleted, forward travel,
+partial-rewind DB prefix, tool-call-pair safety, stale esc-arm across modal
+dismiss, draft preservation, resume-after-rewind. `fork_test.go` (session) —
+prefix/full copy, fork-title numbering, rename, DeleteFrom. `fork_test.go`
+(tui) — fork with arg, bare prompt suggestion + cancel, fork from the picker,
+fork while rewound into the redo stack, rename both paths.
+
 ## Process safety
 
 `internal/tools/bashrun/bashrun.go` — every command the agent runs is tracked

@@ -36,7 +36,7 @@ func BenchmarkSeedTranscript(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		m := compactCmdModel()
 		m.Update(mkWinSize(120, 40))
-		m.seedTranscript(msgs)
+		m.seedTranscript(msgs, 1)
 	}
 }
 
@@ -46,7 +46,7 @@ func BenchmarkSeedTranscript(b *testing.B) {
 func BenchmarkAppendStream(b *testing.B) {
 	m := compactCmdModel()
 	m.Update(mkWinSize(120, 40))
-	m.seedTranscript(benchTranscript(200))
+	m.seedTranscript(benchTranscript(200), 1)
 	b.ResetTimer()
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {

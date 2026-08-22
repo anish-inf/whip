@@ -88,9 +88,12 @@ type model struct {
 	spin   spinner.Model
 	vp     viewport.Model
 	blocks []block // finalized transcript (raw; rendered at the current width)
-	follow bool    // auto-scroll to bottom on new content
-	width  int
-	height int
+	// msgBlock[i] is the block index rendering agent.Messages[i] (-1: none) —
+	// rewind live-scroll uses it to jump to a message's transcript position.
+	msgBlock []int
+	follow   bool // auto-scroll to bottom on new content
+	width    int
+	height   int
 
 	busy    bool
 	current string // in-flight partial assistant line
@@ -135,6 +138,12 @@ type model struct {
 	taskSel    int       // selected row in the dock (index into newest-first tasks)
 	taskVP     *taskView // open per-task detail view; nil when on the main thread
 	dockRows   int       // rendered dock height; layout() maintains it for click math
+
+	rew    *rewindState  // open rewind picker (double-esc while idle)
+	esc1   bool          // first idle esc pressed; second opens the rewind picker
+	future []llm.Message // clipped tail kept for forward travel after a rewind
+
+	namePrompt *namePrompt // inline text prompt (fork naming, /rename)
 }
 
 // picker is the /resume session browser. metas is newest-first; the list is
@@ -387,32 +396,44 @@ func (m *model) resume(id string) error {
 	}
 	m.histIdx = len(m.hist)
 	m.blocks = nil
+	m.msgBlock = nil
+	m.future = nil // a different session's tail isn't this session's redo
 	m.goal = meta.Goal
 	m.goalRounds = 0
 	m.append(dimStyle.Render(fmt.Sprintf("resumed %s · %s · %s @ %s", meta.ID, meta.Title, m.modelName, m.provName)))
 	if m.goal != "" {
 		m.append(dimStyle.Render("◎ goal restored — /goal resume to keep working on it"))
 	}
-	m.seedTranscript(msgs)
+	m.seedTranscript(msgs, 1)
 	return nil
 }
 
 // seedTranscript re-renders stored messages into the viewport. Blocks are
 // appended in one batch with a single refreshVP at the end: a resumed
-// session costs one render pass, not one per message.
-func (m *model) seedTranscript(msgs []llm.Message) {
-	for _, msg := range msgs {
+// session costs one render pass, not one per message. base is the
+// conversation index of msgs[0] (1 for full transcripts — the system prompt
+// is never rendered); msgBlock is extended so rewind can map messages to
+// their blocks.
+func (m *model) seedTranscript(msgs []llm.Message, base int) {
+	for i, msg := range msgs {
+		bi := -1
 		switch msg.Role {
 		case "user":
+			bi = len(m.blocks)
 			m.blocks = append(m.blocks, block{kind: blockText, text: youStyle.Render("❯ ") + msg.Content})
 		case "assistant":
 			if strings.TrimSpace(msg.Content) != "" {
+				bi = len(m.blocks)
 				m.blocks = append(m.blocks, block{kind: blockAssistant, text: strings.TrimRight(msg.Content, "\n")})
 			}
 			for _, tc := range msg.ToolCalls {
 				m.blocks = append(m.blocks, block{kind: blockText, text: toolStyle.Render("⚒ "+tc.Function.Name+" ") + dimStyle.Render(tc.Function.Arguments)})
 			}
 		}
+		for len(m.msgBlock) <= base+i {
+			m.msgBlock = append(m.msgBlock, -1)
+		}
+		m.msgBlock[base+i] = bi
 	}
 	m.follow = true
 	m.refreshVP()
@@ -1077,6 +1098,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.append(errStyle.Render("compact failed: " + msg.err.Error()))
 		default:
 			m.append(dimStyle.Render(fmt.Sprintf("◎ compacted — summarized %d msgs, %d kept", msg.took, msg.kept)))
+			m.future = nil     // compaction rewrote history; stale redo entries would resurrect it
+			m.msgBlock = nil   // indices no longer match; rebuilt as blocks stream in
 			m.persistRewrite() // reset the stored history to the compacted form
 		}
 		return m, nil
@@ -1127,6 +1150,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case quitArmMsg:
 		m.quit1 = false // the arm window closed; next ctrl+c starts fresh
+		return m, nil
+
+	case escArmMsg:
+		m.esc1 = false // the double-esc window closed
 		return m, nil
 
 	case taskUpdateMsg:
@@ -1199,6 +1226,9 @@ func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.palette != nil {
 		return m.paletteKey(msg)
 	}
+	if m.rew != nil {
+		return m.rewindKey(msg)
+	}
 	if m.picker != nil {
 		return m.pickerKey(msg)
 	}
@@ -1265,21 +1295,35 @@ func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.cancel()
 			return m, nil
 		}
-		if m.menu != nil {
+		// idle: a second esc within a second opens the rewind picker —
+		// scroll the history, jump back (or forward again after a rewind).
+		// Dismissing UI takes priority and only arms the window.
+		dismissed := true
+		switch {
+		case m.namePrompt != nil: // cancel the inline fork/rename prompt
+			m.closeNamePrompt()
+		case m.menu != nil:
 			if m.menu.cyc { // tab cycling previewed candidates: revert the input
 				m.input.SetValue(m.menu.base)
 			}
 			m.menu = nil
-			return m, nil
-		}
-		if m.queueSel >= 0 { // leave queue navigation
+		case m.queueSel >= 0: // leave queue navigation
 			m.queueSel = -1
-			return m, nil
-		}
-		if m.tasksFocus { // leave dock navigation, back to the main thread
+		case m.tasksFocus: // leave dock navigation, back to the main thread
 			m.tasksFocus = false
-			return m, nil
+		default:
+			dismissed = false
 		}
+		if !dismissed {
+			if m.esc1 {
+				m.esc1 = false
+				m.openRewind()
+				return m, nil
+			}
+			m.esc1 = true
+			return m, tea.Tick(time.Second, func(time.Time) tea.Msg { return escArmMsg{} })
+		}
+		m.esc1 = false // a dismissal consumed the press; no stale arm carries over
 		return m, nil
 
 	case tea.KeyCtrlV:
@@ -1407,6 +1451,13 @@ func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case tea.KeyEnter:
+		if m.namePrompt != nil { // inline prompt (fork naming, /rename) commits
+			onOK := m.namePrompt.onOK
+			value := strings.TrimSpace(m.input.Value())
+			m.closeNamePrompt() // restores the draft before onOK appends blocks
+			onOK(value)
+			return m, nil
+		}
 		if m.menu != nil {
 			c := m.menu.cands[m.menu.idx]
 			// a bare command previewed by tab cycling runs immediately, same
@@ -1928,6 +1979,8 @@ func (m *model) submitGoal(text string) (tea.Model, tea.Cmd) {
 func (m *model) submitTurn(text string, authored bool) (tea.Model, tea.Cmd) {
 	m.busy = true
 	prepared := m.prepareTurn(text)
+	userMsgIdx := len(m.agent.Messages) // where Turn will append this message
+	m.discardFuture()                   // new activity while rewound kills the redo stack
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancel = cancel
 	p := m.prog
@@ -1997,6 +2050,13 @@ func (m *model) submitTurn(text string, authored bool) (tea.Model, tea.Cmd) {
 		p.Send(turnDoneMsg{final: final, err: err})
 	}()
 	m.append(youStyle.Render("❯ ") + text)
+	if authored {
+		// map the message index to its block for rewind live-scroll
+		for len(m.msgBlock) <= userMsgIdx {
+			m.msgBlock = append(m.msgBlock, -1)
+		}
+		m.msgBlock[userMsgIdx] = len(m.blocks) - 1
+	}
 	return m, m.spin.Tick
 }
 
@@ -2008,6 +2068,8 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 	case "/clear":
 		m.agent.Messages = m.agent.Messages[:1] // keep system prompt
 		m.blocks = nil
+		m.msgBlock = nil
+		m.future = nil   // no redo across a cleared conversation
 		m.setGoal("")    // clear before detaching so the old session's goal is dropped too
 		m.sessionID = "" // next turn starts a fresh session
 		m.saved = 1
@@ -2124,6 +2186,20 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 			m.append(dimStyle.Render("◎ goal set: " + goal))
 			return m.submit(goal)
 		}
+	case "/fork":
+		if m.busy {
+			m.append(dimStyle.Render("(busy — /fork after this turn)"))
+			return m, nil
+		}
+		m.forkCommand(strings.TrimSpace(strings.TrimPrefix(text, "/fork")))
+		return m, nil
+	case "/rename":
+		if m.busy {
+			m.append(dimStyle.Render("(busy — /rename after this turn)"))
+			return m, nil
+		}
+		m.renameCommand(strings.TrimSpace(strings.TrimPrefix(text, "/rename")))
+		return m, nil
 	case "/resume":
 		if len(fields) > 1 {
 			if err := m.resume(fields[1]); err != nil {
@@ -2134,7 +2210,7 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 		m.openPicker()
 	case "/help":
 		m.append(dimStyle.Render(
-			"/model <name> [provider] — switch model\n/compact [model] [provider]|off — compact now at 90% context, or pick the compaction model\n/mouse — toggle mouse capture (on = wheel scroll + clicks, drag to copy)\n/theme [light|dark|auto] — color scheme (bare toggles)\n/tasks [id] — background subagents: focus the dock, or open one task's live view (ctrl+t toggles dock focus)\n/resume [id] — resume a previous session\n/goal <text> — keep working until the goal is met (resume | clear | rounds <n>|default [--global])\n/clear — reset conversation\n/quit — exit\ntab — complete · ctrl+t — focus the background-tasks dock (↑/↓ select, enter opens, esc backs out) · ctrl+o — toggle thinking tokens · ctrl+e — expand the last tool result · ctrl+j / shift+enter — newline · ctrl+v — paste image · esc — interrupt the agent · while busy with queued messages: ↑/↓ select, del removes · PgUp/PgDn — scroll · wheel — scroll · drag — select/copy text · ctrl+c ctrl+c — quit"))
+			"/model <name> [provider] — switch model\n/compact [model] [provider]|off — compact now at 90% context, or pick the compaction model\n/mouse — toggle mouse capture (on = wheel scroll + clicks, drag to copy)\n/theme [light|dark|auto] — color scheme (bare toggles)\n/tasks [id] — background subagents: focus the dock, or open one task's live view (ctrl+t toggles dock focus)\n/resume [id] — resume a previous session\n/fork [name] — copy this conversation into a new session (pick a point in the rewind picker with f)\n/rename [title] — retitle this session\n/goal <text> — keep working until the goal is met (resume | clear | rounds <n>|default [--global])\n/clear — reset conversation\n/quit — exit\ntab — complete · ctrl+t — focus the background-tasks dock (↑/↓ select, enter opens, esc backs out) · ctrl+o — toggle thinking tokens · ctrl+e — expand the last tool result · ctrl+j / shift+enter — newline · ctrl+v — paste image · esc — interrupt the agent · esc esc (idle) — rewind the conversation (↑/↓ browse, enter rewinds, f forks) · while busy with queued messages: ↑/↓ select, del removes · PgUp/PgDn — scroll · wheel — scroll · drag — select/copy text · ctrl+c ctrl+c — quit"))
 	case "/model":
 		if len(fields) < 2 {
 			m.openModelPicker()
@@ -2294,12 +2370,21 @@ func (m *model) View() string {
 	if dock := m.tasksDock(); dock != "" {
 		b.WriteString(dock + "\n")
 	}
+	if m.rew != nil {
+		b.WriteString(m.rewindView() + "\n\n")
+	}
 	if m.iactive == nil {
+		if m.namePrompt != nil {
+			b.WriteString(m.namePrompt.label + " ")
+		}
 		b.WriteString(m.input.View())
 	}
 	if m.quit1 {
 		// first idle ctrl+c armed the quit; make the second press discoverable
 		b.WriteString("\n" + errStyle.Render("press ctrl+c again to quit"))
+	}
+	if m.esc1 && m.rew == nil && m.namePrompt == nil {
+		b.WriteString("\n" + dimStyle.Render("esc again: rewind the conversation"))
 	}
 	if m.menu != nil {
 		b.WriteString("\n" + m.menuView())

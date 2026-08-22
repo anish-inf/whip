@@ -46,7 +46,7 @@ func TestResumedToolCallNotTruncated(t *testing.T) {
 	tc.Function.Name = "bash"
 	tc.Function.Arguments = args
 	msg.ToolCalls = []llm.ToolCall{tc}
-	m.seedTranscript([]llm.Message{msg})
+	m.seedTranscript([]llm.Message{msg}, 1)
 
 	var found bool
 	for _, b := range m.blocks {

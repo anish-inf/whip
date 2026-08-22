@@ -1,0 +1,272 @@
+package tui
+
+import (
+	"path/filepath"
+	"strings"
+	"testing"
+
+	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/context-labs/loopy/internal/agent"
+	"github.com/context-labs/loopy/internal/llm"
+	"github.com/context-labs/loopy/internal/session"
+)
+
+// rewindModel builds an idle model with an authored conversation and a real
+// (temp-dir) session store. msgs excludes the system prompt; the session is
+// created and fully persisted.
+func rewindModel(t *testing.T, msgs ...llm.Message) *model {
+	t.Helper()
+	st, err := session.Open(filepath.Join(t.TempDir(), "s.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	m := &model{
+		input:    newInput(),
+		agent:    &agent.Agent{},
+		store:    st,
+		queueSel: -1,
+	}
+	m.width = 80
+	m.input.SetWidth(m.width - 2)
+	m.agent.Messages = append([]llm.Message{{Role: "system", Content: "sys"}}, msgs...)
+	m.vp.SetContent("x")
+	// persisted as if turns had run
+	if err := st.Save(m.sessionIDC(t), 1, m.agent.Messages, "m", "p"); err != nil {
+		t.Fatal(err)
+	}
+	m.saved = len(m.agent.Messages)
+	m.rebuildTranscript()
+	return m
+}
+
+func (m *model) sessionIDC(t *testing.T) string {
+	t.Helper()
+	id, err := m.store.Create("/tmp", "m", "p")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.sessionID = id
+	return id
+}
+
+func esc(m *model) tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyEsc} }
+
+func TestDoubleEscOpensRewind(t *testing.T) {
+	m := rewindModel(t,
+		llm.Message{Role: "user", Content: "q1", Authored: true},
+		llm.Message{Role: "assistant", Content: "a1"},
+	)
+	press(t, m, esc(m)) // first: arms
+	if m.rew != nil {
+		t.Fatal("single esc must not open the picker")
+	}
+	if !m.esc1 {
+		t.Fatal("first idle esc should arm")
+	}
+	press(t, m, esc(m)) // second: opens
+	if m.rew == nil {
+		t.Fatal("double esc should open the rewind picker")
+	}
+	if len(m.rew.entries) != 1 || m.rew.entries[0].text != "q1" {
+		t.Fatalf("entries: %+v", m.rew.entries)
+	}
+}
+
+func TestBusyEscStillInterrupts(t *testing.T) {
+	m := rewindModel(t, llm.Message{Role: "user", Content: "q1", Authored: true})
+	m.busy = true
+	called := false
+	m.cancel = func() { called = true }
+	press(t, m, esc(m))
+	if !called || m.rew != nil {
+		t.Fatal("busy esc must interrupt, never open rewind")
+	}
+}
+
+func TestRewindTruncatesAndRestoresInput(t *testing.T) {
+	m := rewindModel(t,
+		llm.Message{Role: "user", Content: "q1", Authored: true},
+		llm.Message{Role: "assistant", Content: "a1"},
+		llm.Message{Role: "user", Content: "q2", Authored: true},
+		llm.Message{Role: "assistant", Content: "a2"},
+	)
+	press(t, m, esc(m))
+	press(t, m, esc(m))
+	press(t, m, tea.KeyMsg{Type: tea.KeyUp}) // newest-first: 0→"q2", 1→"q1"
+	press(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+
+	// rewound to just before q1: only the system prompt survives
+	if len(m.agent.Messages) != 1 {
+		t.Fatalf("messages after rewind: %+v", m.agent.Messages)
+	}
+	if m.input.Value() != "q1" {
+		t.Fatalf("input should restore the rewound message, got %q", m.input.Value())
+	}
+	if len(m.future) != 4 { // q1..a2 clipped
+		t.Fatalf("redo stack: %+v", m.future)
+	}
+	if m.saved != 1 {
+		t.Fatalf("saved=%d", m.saved)
+	}
+	// DB rows at/after the cut are gone
+	_, stored, err := m.store.Load(m.sessionID)
+	if err != nil || len(stored) != 0 {
+		t.Fatalf("stored after rewind: %v %+v", err, stored)
+	}
+	// transcript rebuilt: no message blocks remain
+	var texts []string
+	for _, b := range m.blocks {
+		texts = append(texts, b.text)
+	}
+	joined := strings.Join(texts, "\n")
+	if strings.Contains(joined, "q1") || strings.Contains(joined, "q2") {
+		t.Fatalf("blocks: %q", joined)
+	}
+}
+
+func TestRewindForwardTravel(t *testing.T) {
+	m := rewindModel(t,
+		llm.Message{Role: "user", Content: "q1", Authored: true},
+		llm.Message{Role: "assistant", Content: "a1"},
+		llm.Message{Role: "user", Content: "q2", Authored: true},
+		llm.Message{Role: "assistant", Content: "a2"},
+	)
+	press(t, m, esc(m))
+	press(t, m, esc(m))
+	press(t, m, tea.KeyMsg{Type: tea.KeyUp}) // select q1, rewind to just before it
+	press(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	m.input.Reset()
+	if len(m.agent.Messages) != 1 || len(m.future) != 4 {
+		t.Fatalf("after rewind: msgs=%d future=%d", len(m.agent.Messages), len(m.future))
+	}
+
+	// reopen: both clipped user messages appear as dimmed future entries
+	press(t, m, esc(m))
+	press(t, m, esc(m))
+	if len(m.rew.entries) != 2 || !m.rew.entries[0].future || !m.rew.entries[1].future {
+		t.Fatalf("entries: %+v", m.rew.entries)
+	}
+	// sel 0 is q2 (the newest future entry): enter goes forward to just before it
+	press(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+
+	// forward to just before q2: q1/a1 restored, q2/a2 still clipped
+	if len(m.agent.Messages) != 3 || len(m.future) != 2 || m.future[0].Content != "q2" {
+		t.Fatalf("forward: msgs=%d future=%+v", len(m.agent.Messages), m.future)
+	}
+	// the restored rows are persisted again
+	if _, stored, _ := m.store.Load(m.sessionID); len(stored) != 2 {
+		t.Fatalf("stored after forward: %+v", stored)
+	}
+	// forward travel does not clobber the input
+	if m.input.Value() != "" {
+		t.Fatalf("input: %q", m.input.Value())
+	}
+}
+
+func TestRewindNeverCutsToolCallPairs(t *testing.T) {
+	// entries sit at user messages; tool results always travel with their
+	// assistant message, so no cut can orphan a tool result from its call
+	m := rewindModel(t,
+		llm.Message{Role: "user", Content: "q1", Authored: true},
+		llm.Message{Role: "assistant", ToolCalls: []llm.ToolCall{{ID: "c1"}}},
+		llm.Message{Role: "tool", ToolCallID: "c1", Content: "out"},
+		llm.Message{Role: "assistant", Content: "a1"},
+		llm.Message{Role: "user", Content: "q2", Authored: true},
+	)
+	press(t, m, esc(m))
+	press(t, m, esc(m))
+	press(t, m, tea.KeyMsg{Type: tea.KeyUp}) // q1
+	press(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	if len(m.agent.Messages) != 1 { // only the system prompt survives
+		t.Fatalf("messages: %+v", m.agent.Messages)
+	}
+	if _, stored, _ := m.store.Load(m.sessionID); len(stored) != 0 {
+		t.Fatalf("stored: %+v", stored)
+	}
+}
+
+func TestRewindCancelLeavesConversation(t *testing.T) {
+	m := rewindModel(t,
+		llm.Message{Role: "user", Content: "q1", Authored: true},
+		llm.Message{Role: "assistant", Content: "a1"},
+	)
+	before := len(m.agent.Messages)
+	press(t, m, esc(m))
+	press(t, m, esc(m))
+	press(t, m, tea.KeyMsg{Type: tea.KeyUp})
+	press(t, m, esc(m)) // cancel
+	if m.rew != nil || len(m.agent.Messages) != before || len(m.future) != 0 {
+		t.Fatal("cancel must not touch the conversation")
+	}
+}
+
+func TestPartialRewindKeepsPrefixInDB(t *testing.T) {
+	// rewind to a middle cut: the retained prefix must survive in the DB
+	// exactly (seq == conversation index; a cut at 3 keeps seq 1 and 2)
+	m := rewindModel(t,
+		llm.Message{Role: "user", Content: "q1", Authored: true},
+		llm.Message{Role: "assistant", Content: "a1"},
+		llm.Message{Role: "user", Content: "q2", Authored: true},
+		llm.Message{Role: "assistant", Content: "a2"},
+		llm.Message{Role: "user", Content: "q3", Authored: true},
+	)
+	press(t, m, esc(m))
+	press(t, m, esc(m))
+	press(t, m, tea.KeyMsg{Type: tea.KeyUp}) // select q2 (0=q3, 1=q2)
+	press(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+
+	if len(m.agent.Messages) != 3 { // sys, q1, a1
+		t.Fatalf("messages: %+v", m.agent.Messages)
+	}
+	_, stored, err := m.store.Load(m.sessionID)
+	if err != nil || len(stored) != 2 || stored[0].Content != "q1" || stored[1].Content != "a1" {
+		t.Fatalf("stored prefix: %v %+v", err, stored)
+	}
+}
+
+func TestEscArmDoesNotLeakAcrossModalDismiss(t *testing.T) {
+	m := forkModel(t)
+	press(t, m, esc(m))  // arm
+	m.command("/rename") // opens the name prompt
+	press(t, m, esc(m))  // dismisses the prompt — must not count toward rewind
+	if m.esc1 {
+		t.Fatal("modal dismissal must clear the esc arm")
+	}
+	press(t, m, esc(m)) // one more: arms again, picker must NOT open
+	if m.rew != nil {
+		t.Fatal("picker opened from a stale arm")
+	}
+}
+
+func TestNamePromptPreservesDraft(t *testing.T) {
+	m := forkModel(t)
+	m.input.SetValue("my half-typed thought")
+	m.command("/rename") // prompt takes over the input box
+	if m.input.Value() == "my half-typed thought" {
+		t.Fatal("prompt should replace the input")
+	}
+	press(t, m, esc(m)) // cancel: the draft comes back
+	if m.input.Value() != "my half-typed thought" {
+		t.Fatalf("draft lost: %q", m.input.Value())
+	}
+}
+
+func TestResumeAfterRewindMatches(t *testing.T) {
+	m := rewindModel(t,
+		llm.Message{Role: "user", Content: "q1", Authored: true},
+		llm.Message{Role: "assistant", Content: "a1"},
+		llm.Message{Role: "user", Content: "q2", Authored: true},
+	)
+	press(t, m, esc(m))
+	press(t, m, esc(m))
+	press(t, m, tea.KeyMsg{Type: tea.KeyUp})
+	press(t, m, tea.KeyMsg{Type: tea.KeyEnter}) // rewind to before q1
+
+	// a fresh load of the session sees exactly the rewound history (nothing)
+	_, stored, err := m.store.Load(m.sessionID)
+	if err != nil || len(stored) != 0 {
+		t.Fatalf("resumed history: %v %+v", err, stored)
+	}
+}
