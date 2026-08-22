@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -261,6 +262,52 @@ func TestManagerCallRespectsCancel(t *testing.T) {
 	_, err := s.call(ctx, "greet", nil)
 	if err == nil || time.Since(start) > time.Second {
 		t.Errorf("call should respect ctx cancel while connecting, err=%v after %s", err, time.Since(start))
+	}
+}
+
+// TestManagerCallFailFast: a tool call to a failed or disabled server returns
+// immediately with an actionable message; a still-connecting server gets only
+// the short grace, not the full startup timeout.
+func TestManagerCallFailFast(t *testing.T) {
+	m := NewManager(map[string]ServerConfig{
+		"dead":   {Command: []string{"nope-not-a-binary"}, StartupTimeout: 2},
+		"off":    {Command: []string{"true"}, Enabled: boolp(false)},
+		"wedged": {Command: []string{"wedged"}, StartupTimeout: 30}, // connect hangs
+	})
+	m.connectTransport = func(cfg ServerConfig, stderr *ringBuffer) (sdkmcp.Transport, error) {
+		if cfg.Command[0] == "wedged" {
+			return &hangTransport{}, nil
+		}
+		return nil, fmt.Errorf("spawn failed: no such binary")
+	}
+	t.Cleanup(m.Close)
+	m.Start(context.Background())
+
+	// Failed server: instant, names the error and the reconnect command.
+	<-m.servers["dead"].ready
+	start := time.Now()
+	_, err := m.servers["dead"].call(context.Background(), "x", nil)
+	if err == nil || !strings.Contains(err.Error(), "unavailable") || !strings.Contains(err.Error(), "/mcp dead reconnect") {
+		t.Errorf("failed-server call err = %v", err)
+	}
+	if time.Since(start) > 100*time.Millisecond {
+		t.Errorf("failed-server call blocked %s", time.Since(start))
+	}
+
+	// Disabled server: instant, names the enable command.
+	_, err = m.servers["off"].call(context.Background(), "x", nil)
+	if err == nil || !strings.Contains(err.Error(), "disabled") || !strings.Contains(err.Error(), "/mcp off enable") {
+		t.Errorf("disabled-server call err = %v", err)
+	}
+
+	// Connecting server: capped at connectGrace, then "still connecting".
+	start = time.Now()
+	_, err = m.servers["wedged"].call(context.Background(), "x", nil)
+	if err == nil || !strings.Contains(err.Error(), "still connecting") {
+		t.Errorf("connecting-server call err = %v", err)
+	}
+	if d := time.Since(start); d < connectGrace-500*time.Millisecond || d > connectGrace+2*time.Second {
+		t.Errorf("connecting-server grace = %s, want ~%s", d, connectGrace)
 	}
 }
 

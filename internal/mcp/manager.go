@@ -324,20 +324,46 @@ func (s *server) bridge(d *sdkmcp.Tool) tools.Tool {
 // the model via tools.Execute — never loop-aborting (opencode throws and
 // converts to an output-error tool part; loopy's "Error: …" convention is
 // the same shape).
+// connectGrace caps how long a tool call waits for a still-connecting server
+// before reporting back. A call should never park the turn for the full
+// startup timeout — the model can retry, and the server may still land.
+const connectGrace = 5 * time.Second
+
 func (s *server) call(ctx context.Context, tool string, args json.RawMessage) (string, error) {
-	select {
-	case <-s.ready:
-	case <-ctx.Done():
-		return "", ctx.Err()
-	}
+	// Fail fast: a server whose first connect already settled (ready/failed/
+	// disabled) never waits on the channel at all.
 	s.mu.Lock()
-	sess, status, errMsg := s.sess, s.status, s.err
+	settled, sess, status, errMsg := s.settled, s.sess, s.status, s.err
 	s.mu.Unlock()
-	if sess == nil {
-		if status == StatusFailed && errMsg != "" {
-			return "", fmt.Errorf("mcp server %q unavailable: %s", s.name, errMsg)
+	if !settled {
+		// Still connecting: wait out the grace period, not the full timeout.
+		grace, cancel := context.WithTimeout(ctx, connectGrace)
+		select {
+		case <-s.ready:
+		case <-grace.Done():
+			cancel()
+			if ctx.Err() != nil {
+				return "", ctx.Err()
+			}
+			return "", fmt.Errorf("mcp server %q is still connecting — retry in a moment (/mcp shows status)", s.name)
 		}
-		return "", fmt.Errorf("mcp server %q is %s", s.name, status)
+		cancel()
+		s.mu.Lock()
+		sess, status, errMsg = s.sess, s.status, s.err
+		s.mu.Unlock()
+	}
+	if sess == nil {
+		switch status {
+		case StatusFailed:
+			if errMsg != "" {
+				return "", fmt.Errorf("mcp server %q unavailable: %s (/mcp %s reconnect)", s.name, errMsg, s.name)
+			}
+			return "", fmt.Errorf("mcp server %q unavailable (/mcp %s reconnect)", s.name, s.name)
+		case StatusDisabled:
+			return "", fmt.Errorf("mcp server %q is disabled (/mcp %s enable)", s.name, s.name)
+		default:
+			return "", fmt.Errorf("mcp server %q is %s", s.name, status)
+		}
 	}
 	// Serialize calls per server.
 	select {

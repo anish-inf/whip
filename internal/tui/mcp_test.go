@@ -3,7 +3,9 @@ package tui
 import (
 	"context"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -128,3 +130,59 @@ func agHasTool(a *agent.Agent, name string) bool {
 // Guard: the SDK import stays used even as the TUI seam evolves.
 var _ = sdkmcp.Tool{}
 var _ = context.Background
+
+// TestMCPFirstSettleNote: each server's first settle lands one transcript
+// line; later transitions stay quiet (no flapping noise).
+func TestMCPFirstSettleNote(t *testing.T) {
+	disabled := false
+	m := mcpModel(t, map[string]mcp.ServerConfig{
+		"dead": {Command: []string{"nope-not-a-binary-xyz"}, StartupTimeout: 2},
+		"off":  {Command: []string{"true"}, Enabled: &disabled},
+	})
+	// OnChange fires from manager connect goroutines; guard the model the
+	// same way the real TUI serializes updates on the bubbletea loop. Update
+	// is a pointer method — no struct copy, so no shared-slice races.
+	var mu sync.Mutex
+	m.mcpMgr.SetOnChange(func() {
+		mu.Lock()
+		defer mu.Unlock()
+		m.Update(mcpStatusMsg{})
+	})
+	m.mcpMgr.Start(context.Background())
+	// Wait for both servers to settle.
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		done := 0
+		for _, s := range m.mcpMgr.Statuses() {
+			if s.Status != mcp.StatusConnecting {
+				done++
+			}
+		}
+		if done == 2 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	mu.Lock()
+	text := ""
+	for _, b := range m.blocks {
+		text += b.text + "\n"
+	}
+	mu.Unlock()
+	if !strings.Contains(text, "mcp: dead failed") || !strings.Contains(text, "/mcp dead reconnect") {
+		t.Errorf("missing failure note:\n%s", text)
+	}
+	if !strings.Contains(text, "mcp: off disabled") {
+		t.Errorf("missing disabled note:\n%s", text)
+	}
+	// Fire another settle — no new lines.
+	mu.Lock()
+	before := len(m.blocks)
+	mu.Unlock()
+	m.mcpMgr.FireOnChangeForTest()
+	mu.Lock()
+	if len(m.blocks) != before {
+		t.Error("second settle must not re-announce")
+	}
+	mu.Unlock()
+}

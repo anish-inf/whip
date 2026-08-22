@@ -124,10 +124,28 @@ func New(client *llm.Client, model string, maxTokens int, systemPrompt string) *
 // SetMCPTools swaps in the current MCP tool set (called by the MCP manager's
 // OnChange whenever a server settles). MCP tools live separately from
 // a.Tools so a settle mid-turn never mutates the slice a Turn is reading.
+// A Suggester is installed on first use so a stale/typo'd mcp__ call gets a
+// "did you mean?" nudge instead of a dead end.
 func (a *Agent) SetMCPTools(ts []tools.Tool) {
 	a.toolsMu.Lock()
 	a.mcpTools = ts
 	a.toolsMu.Unlock()
+	if tools.Suggester == nil {
+		tools.Suggester = func(name string) []string { return a.suggest(name) }
+	}
+}
+
+// suggest lists candidate names for tools.Suggester: built-ins + live MCP
+// tools, filtered by the mcp package's edit-distance logic.
+func (a *Agent) suggest(name string) []string {
+	a.toolsMu.Lock()
+	all := append(append([]tools.Tool(nil), a.Tools...), a.mcpTools...)
+	a.toolsMu.Unlock()
+	names := make([]string, len(all))
+	for i, t := range all {
+		names[i] = t.Def.Function.Name
+	}
+	return tools.SuggestTool(name, names)
 }
 
 // AllTools returns built-ins + the current MCP set (exported for tests).

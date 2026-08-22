@@ -130,6 +130,7 @@ type model struct {
 	effortX      int                       // screen column where the clickable ⚡ effort control starts
 	catalogs     map[string]config.Catalog // provider model lists (capabilities)
 	mcpMgr       *mcp.Manager              // MCP server connections; nil when none configured
+	mcpSeen      map[string]bool           // servers whose first settle was announced
 
 	irunner *interactiveRunner // installed on tools.InteractiveBash at startup
 	iactive *interactive       // in-flight interactive command; nil when idle
@@ -1178,8 +1179,29 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case mcpStatusMsg:
-		// an MCP server changed state; nothing to redraw persistently, but
-		// the header/dock may show counts later — repaint is cheap.
+		// An MCP server changed state. Announce each server's FIRST settle in
+		// the transcript (one line, once per session per server) so arrivals
+		// and failures are visible without typing /mcp — later transitions
+		// (auto-reconnect, toggles) stay quiet to avoid flapping noise.
+		if m.mcpMgr != nil {
+			if m.mcpSeen == nil {
+				m.mcpSeen = map[string]bool{}
+			}
+			for _, srv := range m.mcpMgr.Statuses() {
+				if m.mcpSeen[srv.Name] || srv.Status == mcp.StatusConnecting {
+					continue
+				}
+				m.mcpSeen[srv.Name] = true
+				switch srv.Status {
+				case mcp.StatusReady:
+					m.append(dimStyle.Render(fmt.Sprintf("⚡ mcp: %s ready (%d tools)", srv.Name, srv.Tools)))
+				case mcp.StatusFailed:
+					m.append(errStyle.Render(fmt.Sprintf("✗ mcp: %s failed: %s (/mcp %s reconnect)", srv.Name, srv.Err, srv.Name)))
+				case mcp.StatusDisabled:
+					m.append(dimStyle.Render(fmt.Sprintf("○ mcp: %s disabled", srv.Name)))
+				}
+			}
+		}
 		return m, nil
 
 	case taskEventMsg:
