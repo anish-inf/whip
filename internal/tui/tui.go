@@ -1892,10 +1892,16 @@ func (m *model) skillCands() []cand {
 }
 
 // prepareTurn refreshes the system prompt's skills block (so new skills load
-// without a restart) and expands $skill / @file tokens in the input.
+// without a restart) and MCP server instructions (so late-arriving servers
+// teach the model how to use their tools), then expands $skill / @file
+// tokens in the input.
 func (m *model) prepareTurn(text string) string {
 	sk := skills.Scan(skills.DefaultDirs()...)
-	m.agent.Messages[0].Content = m.sysPrompt + skills.PromptBlock(sk)
+	sys := m.sysPrompt + skills.PromptBlock(sk)
+	if m.mcpMgr != nil {
+		sys += m.mcpMgr.InstructionsBlock()
+	}
+	m.agent.Messages[0].Content = sys
 	return expandMentions(expandSkills(text, sk))
 }
 

@@ -65,6 +65,7 @@ type server struct {
 	err    string
 	note   string
 	defs   []*sdkmcp.Tool
+	instr  string // server instructions from initialize (opencode injects these)
 	sess   *sdkmcp.ClientSession
 	gen    int // increments per connect; a stale session's watcher no-ops
 	stderr *ringBuffer
@@ -268,8 +269,13 @@ func (s *server) connect(ctx context.Context, m *Manager) {
 					sess.Close() // manager is shutting down; don't store
 					return
 				}
+				var instr string
+				if ir := sess.InitializeResult(); ir != nil {
+					instr = strings.TrimSpace(ir.Instructions)
+				}
 				s.muLock()
 				s.defs = listed.Tools
+				s.instr = instr
 				s.sess = sess
 				s.gen++
 				s.autoTries = 0
@@ -291,6 +297,7 @@ func (s *server) connect(ctx context.Context, m *Manager) {
 					if !stale {
 						s.sess = nil
 						s.defs = nil
+						s.instr = ""
 					}
 					s.muUnlock()
 					if !stale && !closing {
@@ -550,6 +557,45 @@ func (m *Manager) Enable(name string) bool {
 }
 
 func boolp(b bool) *bool { return &b }
+
+// Instructions returns the name → instructions map for ready servers,
+// name-sorted for a stable prompt. Servers that publish instructions are
+// telling the model how to use their tools — injecting them (opencode does,
+// session/system.ts) improves usage quality, not just availability.
+func (m *Manager) Instructions() []struct{ Name, Text string } {
+	type entry struct{ Name, Text string }
+	var out []entry
+	for _, s := range m.servers {
+		s.muLock()
+		ready, instr := s.sess != nil, s.instr
+		s.muUnlock()
+		if ready && instr != "" {
+			out = append(out, entry{s.name, instr})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	ret := make([]struct{ Name, Text string }, len(out))
+	for i, e := range out {
+		ret[i] = struct{ Name, Text string }{e.Name, e.Text}
+	}
+	return ret
+}
+
+// InstructionsBlock renders the <mcp_instructions> system-prompt section
+// ("" when no ready server publishes instructions).
+func (m *Manager) InstructionsBlock() string {
+	instr := m.Instructions()
+	if len(instr) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("\n<mcp_instructions>\n")
+	for _, e := range instr {
+		fmt.Fprintf(&b, "<server name=%q>\n%s\n</server>\n", e.Name, e.Text)
+	}
+	b.WriteString("</mcp_instructions>")
+	return b.String()
+}
 
 // Statuses returns a stable, name-sorted snapshot for /mcp.
 func (m *Manager) Statuses() []Server {

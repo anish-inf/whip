@@ -437,3 +437,77 @@ func TestFlattenTruncates(t *testing.T) {
 		t.Errorf("truncation missing, len=%d", len(out))
 	}
 }
+
+// TestServerInstructions: a server that publishes instructions shows up in
+// the system-prompt block; servers without instructions don't; sorted by name.
+func TestServerInstructions(t *testing.T) {
+	// ServerOptions.Instructions flows into the initialize result.
+	srvWithInstr := sdkmcp.NewServer(&sdkmcp.Implementation{Name: "docs"}, &sdkmcp.ServerOptions{Instructions: "Call ping to check liveness. Always pass a name."})
+	sdkmcp.AddTool(srvWithInstr, &sdkmcp.Tool{Name: "ping", InputSchema: map[string]any{"type": "object"}},
+		func(ctx context.Context, req *sdkmcp.CallToolRequest, in struct{}) (*sdkmcp.CallToolResult, any, error) {
+			return &sdkmcp.CallToolResult{Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: "pong"}}}, nil, nil
+		})
+
+	m := NewManager(map[string]ServerConfig{"docs": testCfg("docs"), "plain": testCfg("plain")})
+	m.connectTransport = func(cfg ServerConfig, stderr *ringBuffer) (sdkmcp.Transport, error) {
+		if cfg.Command[0] == "docs" {
+			ct, st := sdkmcp.NewInMemoryTransports()
+			ss, err := srvWithInstr.Connect(context.Background(), st, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { ss.Close() })
+			return ct, nil
+		}
+		return serveTestServer(t, cfg.Command[0]), nil
+	}
+	t.Cleanup(m.Close)
+	m.Start(context.Background())
+	waitReady(t, m)
+
+	block := m.InstructionsBlock()
+	if !strings.Contains(block, `<server name="docs">`) || !strings.Contains(block, "Call ping to check liveness") {
+		t.Errorf("block missing docs instructions:\n%s", block)
+	}
+	if strings.Contains(block, `"plain"`) {
+		t.Errorf("server without instructions must not appear:\n%s", block)
+	}
+
+	// After the docs session drops, its instructions leave the block.
+	s := m.servers["docs"]
+	s.muLock()
+	sess := s.sess
+	s.muUnlock()
+	sess.Close()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		s.muLock()
+		gone := s.sess == nil
+		s.muUnlock()
+		if gone {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	// Auto-reconnect may restore them; either way the block must track the
+	// live session, never a stale one. Wait for a terminal state.
+	deadline = time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		s.muLock()
+		terminal := s.status == StatusReady || (s.status == StatusFailed && s.autoTries >= autoReconnectMax)
+		s.muUnlock()
+		if terminal {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	s.muLock()
+	st, instr := s.status, s.instr
+	s.muUnlock()
+	if st == StatusFailed && instr != "" {
+		t.Error("failed server must not keep instructions")
+	}
+	if st == StatusReady && instr == "" {
+		t.Error("reconnected server should restore instructions")
+	}
+}
