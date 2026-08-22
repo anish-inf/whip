@@ -84,10 +84,17 @@ parallel tool calls and background subagents).
 
 ## MCP
 
+Improvement plan with per-item checkboxes: [`.ai-docs/plans/mcp-polish/`](../.ai-docs/plans/mcp-polish/README.md).
+
 - [x] MCP client: stdio + streamable HTTP servers; config merges claude-style `.mcp.json` and codex-style `~/.codex/config.toml [mcp_servers]` under loopy's own `"mcp"` block (opencode's status model `mcp/index.ts:83-106`, name sanitization + tool bridging `mcp/catalog.ts:47-90,117-119` — with the sanitize-collision fixed via hashed server keys; claude-code's `mcp__server__tool` naming kept). Lazy-with-kickoff connects (close-to-broadcast `ready` chan), per-server call serialization, 30s startup / 60s call timeouts, errors as tool output, `/mcp` status + reconnect/enable/disable, `loopy mcp add|list|remove|serve`
 - [ ] MCP resources/prompts (opencode: synthetic `read_mcp_resource` tools + prompts-as-slash-commands)
 - [ ] MCP OAuth for remote servers (opencode `oauth-provider.ts` — buffer creds in memory, commit on success; ~800 lines, a `needs_auth` status covers most of the value first)
 - [ ] `ToolListChanged` notification → live re-list (opencode `mcp/index.ts:462-471`; needs the standalone SSE stream on remote transports)
+- [ ] Fail-fast MCP calls (connecting server can't park a turn) + did-you-mean on unknown mcp__ tools + first-settle transcript note — the "never stuck, always know why" pass
+- [ ] Auto-reconnect with backoff on dropped sessions (gen-guard makes it safe; manual `/mcp reconnect` stays as override)
+- [ ] MCP server instructions injected into the system prompt (opencode `session/system.ts:119-135`)
+- [ ] `loopy mcp test <name>` (the doctor: connect + list + timing + stderr tail, non-zero exit on failure — CI-checkable `.mcp.json`) and `loopy mcp import [--dry-run]` (materialize claude/codex imports into loopy's config)
+- [ ] Overlay config entries (`"overlay": true` patches `enabled` over imports instead of copying definitions)
 
 ## Safety & permissions
 
