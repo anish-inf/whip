@@ -110,9 +110,9 @@ func (s *server) kickAutoReconnect(m *Manager) {
 	m.onChangeMu.Lock()
 	closing := m.closed
 	m.onChangeMu.Unlock()
-	s.muLock()
+	s.mu.Lock()
 	tries := s.autoTries
-	s.muUnlock()
+	s.mu.Unlock()
 	if closing || s.cfg.Disabled() || tries >= autoReconnectMax {
 		return
 	}
@@ -121,15 +121,15 @@ func (s *server) kickAutoReconnect(m *Manager) {
 		m.onChangeMu.Lock()
 		closing := m.closed
 		m.onChangeMu.Unlock()
-		s.muLock()
+		s.mu.Lock()
 		gave := s.status == StatusReady || s.autoTries != tries // someone else recovered/retried
-		s.muUnlock()
+		s.mu.Unlock()
 		if closing || gave || s.cfg.Disabled() {
 			return
 		}
-		s.muLock()
+		s.mu.Lock()
 		s.autoTries++
-		s.muUnlock()
+		s.mu.Unlock()
 		select {
 		case s.reconnect <- struct{}{}:
 		default:
@@ -232,9 +232,9 @@ func (s *server) run(ctx context.Context, m *Manager) {
 			s.setState(m, StatusDisabled, "")
 			continue
 		}
-		s.muLock()
+		s.mu.Lock()
 		ready := s.status == StatusReady
-		s.muUnlock()
+		s.mu.Unlock()
 		if ready {
 			continue
 		}
@@ -245,9 +245,9 @@ func (s *server) run(ctx context.Context, m *Manager) {
 func (s *server) connect(ctx context.Context, m *Manager) {
 	// Birth-settled servers (disabled/invalid) never run a lifecycle
 	// goroutine, so connect is only reachable for servers allowed to try.
-	s.muLock()
+	s.mu.Lock()
 	s.status = StatusConnecting
-	s.muUnlock()
+	s.mu.Unlock()
 	m.fireOnChange()
 	timeout := s.cfg.StartupTimeoutDuration()
 	ctx, cancel := context.WithTimeout(ctx, timeout)
@@ -273,14 +273,14 @@ func (s *server) connect(ctx context.Context, m *Manager) {
 				if ir := sess.InitializeResult(); ir != nil {
 					instr = strings.TrimSpace(ir.Instructions)
 				}
-				s.muLock()
+				s.mu.Lock()
 				s.defs = listed.Tools
 				s.instr = instr
 				s.sess = sess
 				s.gen++
 				s.autoTries = 0
 				gen := s.gen
-				s.muUnlock()
+				s.mu.Unlock()
 				s.setState(m, StatusReady, "")
 				// Watch for a dropped session: mark failed so tool calls stop
 				// being routed (opencode's client.onclose → status failed,
@@ -292,14 +292,14 @@ func (s *server) connect(ctx context.Context, m *Manager) {
 					m.onChangeMu.Lock()
 					closing := m.closed
 					m.onChangeMu.Unlock()
-					s.muLock()
+					s.mu.Lock()
 					stale := s.gen != gen
 					if !stale {
 						s.sess = nil
 						s.defs = nil
 						s.instr = ""
 					}
-					s.muUnlock()
+					s.mu.Unlock()
 					if !stale && !closing {
 						s.setState(m, StatusFailed, "connection closed")
 						s.kickAutoReconnect(m)
@@ -324,22 +324,19 @@ func (s *server) connect(ctx context.Context, m *Manager) {
 
 // setState transitions status and wakes every waiter on the first settle.
 func (s *server) setState(m *Manager, st Status, errMsg string) {
-	s.muLock()
+	s.mu.Lock()
 	firstSettle := !s.settled
 	if st != StatusConnecting {
 		s.settled = true
 	}
 	s.status, s.err = st, errMsg
-	s.muUnlock()
+	s.mu.Unlock()
 	if firstSettle && st != StatusConnecting {
 		close(s.ready)
 	}
 	logf("server %s -> %s %s", s.name, st, errMsg)
 	m.fireOnChange()
 }
-
-func (s *server) muLock()   { s.mu.Lock() }
-func (s *server) muUnlock() { s.mu.Unlock() }
 
 // Tools returns the current agent-facing tool set: one tools.Tool per listed
 // MCP tool on every ready server. Cheap to call per turn.
@@ -534,11 +531,11 @@ func (m *Manager) Disable(name string) bool {
 		return false
 	}
 	s.cfg.Enabled = boolp(false)
-	s.muLock()
+	s.mu.Lock()
 	old := s.sess
 	s.sess, s.defs = nil, nil
 	s.gen++
-	s.muUnlock()
+	s.mu.Unlock()
 	if old != nil {
 		old.Close()
 	}
@@ -558,40 +555,30 @@ func (m *Manager) Enable(name string) bool {
 
 func boolp(b bool) *bool { return &b }
 
-// Instructions returns the name → instructions map for ready servers,
-// name-sorted for a stable prompt. Servers that publish instructions are
-// telling the model how to use their tools — injecting them (opencode does,
-// session/system.ts) improves usage quality, not just availability.
-func (m *Manager) Instructions() []struct{ Name, Text string } {
-	type entry struct{ Name, Text string }
-	var out []entry
+// InstructionsBlock renders the <mcp_instructions> system-prompt section:
+// ready servers' initialize instructions, name-sorted ("" when none publish
+// any). Servers that publish instructions are telling the model how to use
+// their tools — injecting them (opencode does, session/system.ts) improves
+// usage quality, not just availability.
+func (m *Manager) InstructionsBlock() string {
+	type entry struct{ name, text string }
+	var instr []entry
 	for _, s := range m.servers {
-		s.muLock()
-		ready, instr := s.sess != nil, s.instr
-		s.muUnlock()
-		if ready && instr != "" {
-			out = append(out, entry{s.name, instr})
+		s.mu.Lock()
+		ready, text := s.sess != nil, s.instr
+		s.mu.Unlock()
+		if ready && text != "" {
+			instr = append(instr, entry{s.name, text})
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
-	ret := make([]struct{ Name, Text string }, len(out))
-	for i, e := range out {
-		ret[i] = struct{ Name, Text string }{e.Name, e.Text}
-	}
-	return ret
-}
-
-// InstructionsBlock renders the <mcp_instructions> system-prompt section
-// ("" when no ready server publishes instructions).
-func (m *Manager) InstructionsBlock() string {
-	instr := m.Instructions()
 	if len(instr) == 0 {
 		return ""
 	}
+	sort.Slice(instr, func(i, j int) bool { return instr[i].name < instr[j].name })
 	var b strings.Builder
 	b.WriteString("\n<mcp_instructions>\n")
 	for _, e := range instr {
-		fmt.Fprintf(&b, "<server name=%q>\n%s\n</server>\n", e.Name, e.Text)
+		fmt.Fprintf(&b, "<server name=%q>\n%s\n</server>\n", e.name, e.text)
 	}
 	b.WriteString("</mcp_instructions>")
 	return b.String()

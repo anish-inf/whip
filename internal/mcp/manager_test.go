@@ -324,21 +324,21 @@ func TestManagerAutoReconnect(t *testing.T) {
 	}
 	// Drop the session; the watcher should fail then auto-reconnect.
 	s := m.servers["docs"]
-	s.muLock()
+	s.mu.Lock()
 	sess := s.sess
-	s.muUnlock()
+	s.mu.Unlock()
 	sess.Close()
 	// Wait for a fresh live session: ready status AND a stored session AND
 	// the reconnect happened (gen advanced past the dropped one).
-	s.muLock()
+	s.mu.Lock()
 	droppedGen := s.gen
-	s.muUnlock()
+	s.mu.Unlock()
 	deadline := time.Now().Add(5 * time.Second)
 	recovered := false
 	for time.Now().Before(deadline) {
-		s.muLock()
+		s.mu.Lock()
 		recovered = s.status == StatusReady && s.sess != nil && s.gen > droppedGen
-		s.muUnlock()
+		s.mu.Unlock()
 		if recovered {
 			break
 		}
@@ -372,16 +372,16 @@ func TestManagerAutoReconnectGivesUp(t *testing.T) {
 	waitReady(t, m)
 
 	s := m.servers["flaky"]
-	s.muLock()
+	s.mu.Lock()
 	sess := s.sess
-	s.muUnlock()
+	s.mu.Unlock()
 	sess.Close() // triggers auto-reconnect attempts, all failing
 
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		s.muLock()
+		s.mu.Lock()
 		tries := s.autoTries
-		s.muUnlock()
+		s.mu.Unlock()
 		if tries >= autoReconnectMax {
 			break
 		}
@@ -475,15 +475,15 @@ func TestServerInstructions(t *testing.T) {
 
 	// After the docs session drops, its instructions leave the block.
 	s := m.servers["docs"]
-	s.muLock()
+	s.mu.Lock()
 	sess := s.sess
-	s.muUnlock()
+	s.mu.Unlock()
 	sess.Close()
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
-		s.muLock()
+		s.mu.Lock()
 		gone := s.sess == nil
-		s.muUnlock()
+		s.mu.Unlock()
 		if gone {
 			break
 		}
@@ -493,17 +493,17 @@ func TestServerInstructions(t *testing.T) {
 	// live session, never a stale one. Wait for a terminal state.
 	deadline = time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
-		s.muLock()
+		s.mu.Lock()
 		terminal := s.status == StatusReady || (s.status == StatusFailed && s.autoTries >= autoReconnectMax)
-		s.muUnlock()
+		s.mu.Unlock()
 		if terminal {
 			break
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	s.muLock()
+	s.mu.Lock()
 	st, instr := s.status, s.instr
-	s.muUnlock()
+	s.mu.Unlock()
 	if st == StatusFailed && instr != "" {
 		t.Error("failed server must not keep instructions")
 	}

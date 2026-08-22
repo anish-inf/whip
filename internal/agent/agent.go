@@ -148,13 +148,8 @@ func (a *Agent) suggest(name string) []string {
 	return tools.SuggestTool(name, names)
 }
 
-// AllTools returns built-ins + the current MCP set (exported for tests).
+// AllTools returns built-ins + the current MCP set.
 func (a *Agent) AllTools() []tools.Tool {
-	return a.allTools()
-}
-
-// allTools returns built-ins + the current MCP set.
-func (a *Agent) allTools() []tools.Tool {
 	a.toolsMu.Lock()
 	defer a.toolsMu.Unlock()
 	return append(append([]tools.Tool(nil), a.Tools...), a.mcpTools...)
@@ -188,7 +183,7 @@ func (a *Agent) turn(ctx context.Context, input string, authored bool, ev Events
 		msg, usage, err := a.Client.Stream(ctx, llm.Request{
 			Model:           a.Model,
 			Messages:        a.Messages,
-			Tools:           tools.Defs(a.allTools()),
+			Tools:           tools.Defs(a.AllTools()),
 			MaxTokens:       a.MaxTokens,
 			ReasoningEffort: a.Effort,
 		}, ev.OnText, ev.OnThink)
@@ -285,7 +280,7 @@ func (a *Agent) runTools(ctx context.Context, calls []llm.ToolCall, ev Events) [
 			if ev.OnToolStart != nil {
 				ev.OnToolStart(name, args)
 			}
-			out := tools.Execute(ctx, a.allTools(), name, json.RawMessage(args))
+			out := tools.Execute(ctx, a.AllTools(), name, json.RawMessage(args))
 			if ev.OnToolEnd != nil {
 				ev.OnToolEnd(name, out)
 			}
