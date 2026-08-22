@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -82,7 +83,57 @@ type server struct {
 	// Capacity 1; coalesces repeats while a connect is in flight.
 	reconnect chan struct{}
 
+	autoTries int // auto-reconnect attempts since the last successful connect
+
 	mu sync.Mutex // guards status/err/defs/sess
+}
+
+// autoReconnect caps the background reconnect attempts after an unexpected
+// session drop (backoff doubles per try). Manual /mcp reconnect is unlimited.
+const autoReconnectMax = 3
+
+// autoReconnectDelay is the backoff between auto-reconnect attempts. Kept
+// small for tests via a fast-path env read; tests use
+// LOOPY_TEST_MCP_BACKOFF_MS instead of racing a package var.
+func autoReconnectDelay(try int) time.Duration {
+	if ms, err := strconv.Atoi(os.Getenv("LOOPY_TEST_MCP_BACKOFF_MS")); err == nil && ms >= 0 {
+		return time.Duration(ms) * time.Millisecond
+	}
+	return time.Duration(1<<try) * time.Second // 1s, 2s, 4s
+}
+
+// kickAutoReconnect schedules a background reconnect after an unexpected
+// drop, unless the manager is closing, the server is disabled, or we've
+// already retried autoReconnectMax times in a row.
+func (s *server) kickAutoReconnect(m *Manager) {
+	m.onChangeMu.Lock()
+	closing := m.closed
+	m.onChangeMu.Unlock()
+	s.muLock()
+	tries := s.autoTries
+	s.muUnlock()
+	if closing || s.cfg.Disabled() || tries >= autoReconnectMax {
+		return
+	}
+	go func() {
+		time.Sleep(autoReconnectDelay(tries))
+		m.onChangeMu.Lock()
+		closing := m.closed
+		m.onChangeMu.Unlock()
+		s.muLock()
+		gave := s.status == StatusReady || s.autoTries != tries // someone else recovered/retried
+		s.muUnlock()
+		if closing || gave || s.cfg.Disabled() {
+			return
+		}
+		s.muLock()
+		s.autoTries++
+		s.muUnlock()
+		select {
+		case s.reconnect <- struct{}{}:
+		default:
+		}
+	}()
 }
 
 // Manager owns every MCP server connection. All methods are safe for
@@ -221,6 +272,7 @@ func (s *server) connect(ctx context.Context, m *Manager) {
 				s.defs = listed.Tools
 				s.sess = sess
 				s.gen++
+				s.autoTries = 0
 				gen := s.gen
 				s.muUnlock()
 				s.setState(m, StatusReady, "")
@@ -243,6 +295,7 @@ func (s *server) connect(ctx context.Context, m *Manager) {
 					s.muUnlock()
 					if !stale && !closing {
 						s.setState(m, StatusFailed, "connection closed")
+						s.kickAutoReconnect(m)
 					}
 				}()
 				return

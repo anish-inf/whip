@@ -311,6 +311,93 @@ func TestManagerCallFailFast(t *testing.T) {
 	}
 }
 
+// TestManagerAutoReconnect: an unexpected session drop triggers a background
+// reconnect (no manual /mcp reconnect), with bounded retries on failure.
+func TestManagerAutoReconnect(t *testing.T) {
+	t.Setenv("LOOPY_TEST_MCP_BACKOFF_MS", "20")
+
+	m := newTestManager(t, map[string]ServerConfig{"docs": testCfg("docs")})
+	m.Start(context.Background())
+	waitReady(t, m)
+	if st := m.Statuses(); st[0].Status != StatusReady {
+		t.Fatal("expected ready")
+	}
+	// Drop the session; the watcher should fail then auto-reconnect.
+	s := m.servers["docs"]
+	s.muLock()
+	sess := s.sess
+	s.muUnlock()
+	sess.Close()
+	// Wait for a fresh live session: ready status AND a stored session AND
+	// the reconnect happened (gen advanced past the dropped one).
+	s.muLock()
+	droppedGen := s.gen
+	s.muUnlock()
+	deadline := time.Now().Add(5 * time.Second)
+	recovered := false
+	for time.Now().Before(deadline) {
+		s.muLock()
+		recovered = s.status == StatusReady && s.sess != nil && s.gen > droppedGen
+		s.muUnlock()
+		if recovered {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !recovered {
+		t.Fatalf("auto-reconnect did not recover: %+v", m.Statuses()[0])
+	}
+	out := tools.Execute(context.Background(), m.Tools(), "mcp__docs__greet", json.RawMessage(`{"name":"auto"}`))
+	if out != "hi auto" {
+		t.Errorf("call after auto-reconnect = %q", out)
+	}
+}
+
+// TestManagerAutoReconnectGivesUp: a server that keeps failing exhausts
+// autoReconnectMax tries and stays failed (no flapping forever).
+func TestManagerAutoReconnectGivesUp(t *testing.T) {
+	t.Setenv("LOOPY_TEST_MCP_BACKOFF_MS", "10")
+
+	var connects atomic.Int64
+	m := NewManager(map[string]ServerConfig{"flaky": testCfg("flaky")})
+	m.connectTransport = func(cfg ServerConfig, stderr *ringBuffer) (sdkmcp.Transport, error) {
+		connects.Add(1)
+		if connects.Load() == 1 {
+			return serveTestServer(t, "flaky"), nil // first connect succeeds
+		}
+		return nil, fmt.Errorf("server keeps dying") // every reconnect fails
+	}
+	t.Cleanup(m.Close)
+	m.Start(context.Background())
+	waitReady(t, m)
+
+	s := m.servers["flaky"]
+	s.muLock()
+	sess := s.sess
+	s.muUnlock()
+	sess.Close() // triggers auto-reconnect attempts, all failing
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		s.muLock()
+		tries := s.autoTries
+		s.muUnlock()
+		if tries >= autoReconnectMax {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	// Let any in-flight last attempt settle, then assert: failed, capped.
+	time.Sleep(200 * time.Millisecond)
+	st := m.Statuses()[0]
+	if st.Status != StatusFailed {
+		t.Errorf("flaky should end failed, got %v", st.Status)
+	}
+	if got := connects.Load(); got > int64(autoReconnectMax)+1 {
+		t.Errorf("connect attempts = %d, want <= initial + %d retries", got, autoReconnectMax)
+	}
+}
+
 // hangTransport never finishes Connect (a wedged server process).
 type hangTransport struct{}
 
