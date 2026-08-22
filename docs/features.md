@@ -133,6 +133,34 @@ errors for the compaction retry, `Stream` returns the message + usage, and
 - Queueing (enter while busy), steering (empty enter), history recall (↑/↓),
   `@file` mentions, `$skill` invocation, `/goal` loop, `/resume` session
   picker, `/effort` reasoning levels — see the roadmap for the full list.
+- **Settings commands run mid-turn.** `/theme`, `/mouse`, `/effort`, `/tasks`,
+  `/help`, `/cd`, `/pwd`, and the non-submitting `/goal` forms (bare, `clear`,
+  `rounds`) execute immediately while busy instead of queueing — queued text
+  is sent to the model verbatim after the turn, which is nonsense for a
+  settings change. The `busyCmd` allow-list gates this; everything else
+  (`/model`, `/goal <text>`, plain messages) still queues. These commands only
+  touch TUI-local state or fields read at the *next* request, and their
+  confirmation notes append as transcript blocks safely behind the streaming
+  one. Tests: `queue_test.go` (`TestBusyCmdAllowList`, `TestEnterWhileBusy*`).
+- **`!` shell escape, `/cd`, `/pwd`** — `shell.go`. An input starting with
+  `!` runs locally via the same `bashrun` runner as the agent's bash tool
+  (120s cap, `tools.TruncateTail`, `(exit …)` markers) — no model turn, no
+  busy state, runs immediately even mid-turn, and queued `!` lines execute
+  when the queue drains instead of being submitted to the model. The command
+  runs on a goroutine and lands via `shellDoneMsg` (the UI never blocks), the
+  output lands in the transcript as a collapsed tool block **and** in the
+  conversation so the model sees it at the next request: idle via
+  `Agent.AppendUser` (non-authored `$ <cmd>` user message), mid-turn via
+  `Agent.Steer` (mutex-guarded, injected at the next loop boundary with the
+  usual `(steered)` echo) — the turn goroutine owns `Agent.Messages` while
+  busy. Esc stays bound to the turn; a running escape isn't cancellable (the
+  120s cap bounds it). `/cd [dir]` changes loopy's process cwd (an in-flight
+  command keeps its already-resolved cwd, POSIX; the next spawns, relative
+  tool paths, and the `@` index follow); bare prints it, `~` expands. `/pwd`
+  prints it. Port of opencode's `session.shell` minus the shell-mode chrome —
+  see the `ponytail` note in `shell.go`.
+  Tests: `shell_test.go` (output/message routing idle+busy, queue-drain,
+  truncation, echo rules, cd/pwd incl. `~` and bad dirs).
 - **`/goal-from-context`** distills the last two conversation messages into a
   goal statement with one non-streaming call on the current model (the
   compact-model override is deliberately ignored), then sets it exactly like

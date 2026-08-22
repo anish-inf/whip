@@ -1096,6 +1096,13 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.append(youStyle.Render("❯ ") + string(msg) + dimStyle.Render("  (steered)"))
 		return m, nil
 
+	case shellDoneMsg:
+		// a `!` escape finished; its output lands behind any in-flight text
+		m.flushThink()
+		m.flushCurrent()
+		m.applyShellDone(msg)
+		return m, nil
+
 	case goalFromContextMsg:
 		// the formulation call finished between turns; on success set the
 		// goal and kick off the goal loop exactly like /goal <text>
@@ -1150,11 +1157,16 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.append(dimStyle.Render("(interrupted)"))
 		}
 		m.persist()
-		// codex-style follow-up: send queued messages one turn at a time
-		if len(m.queue) > 0 && msg.err == nil {
+		// codex-style follow-up: send queued messages one turn at a time;
+		// `!` shell escapes execute locally instead of starting a turn
+		for len(m.queue) > 0 && msg.err == nil {
 			next := m.queue[0]
 			m.queue = m.queue[1:]
 			m.queueSel = -1
+			if strings.HasPrefix(next, "!") {
+				m.runShellQueued(next)
+				continue
+			}
 			return m.submit(next)
 		}
 		// goal loop: keep working until the model explicitly declares GOAL_MET
@@ -1526,6 +1538,20 @@ func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		text := strings.TrimSpace(m.input.Value())
 		if m.busy {
 			switch {
+			// settings commands don't touch the turn — run them now instead of
+			// queueing them as messages for the model
+			case text != "" && busyCmd(text):
+				m.hist = append(m.hist, text)
+				m.histIdx = len(m.hist)
+				m.input.Reset()
+				m.menu = nil
+				return m.command(text)
+			case strings.HasPrefix(text, "!"): // shell escape runs now, not queued
+				m.hist = append(m.hist, text)
+				m.histIdx = len(m.hist)
+				m.input.Reset()
+				m.menu = nil
+				m.runShell(text)
 			case text != "": // codex-style: queue it (multiple allowed)
 				m.queue = append(m.queue, text)
 				m.hist = append(m.hist, text)
@@ -1552,6 +1578,10 @@ func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.draft = ""
 		if strings.HasPrefix(text, "/") {
 			return m.command(text)
+		}
+		if strings.HasPrefix(text, "!") {
+			m.runShell(text)
+			return m, nil
 		}
 		return m.submit(text)
 	}
@@ -2101,6 +2131,25 @@ func (m *model) submitTurn(text string, authored bool) (tea.Model, tea.Cmd) {
 	return m, m.spin.Tick
 }
 
+// busyCmd reports whether a slash command is safe to run while a turn is in
+// flight. These adjust settings or views only — they never touch
+// Agent.Messages, busy, or the session — so they run immediately instead of
+// being queued as messages (queued text is submitted to the model verbatim
+// after the turn ends).
+func busyCmd(text string) bool {
+	fields := strings.Fields(text)
+	if len(fields) == 0 {
+		return false
+	}
+	switch fields[0] {
+	case "/help", "/theme", "/mouse", "/effort", "/tasks", "/cd", "/pwd":
+		return true
+	case "/goal": // status, clear, and rounds are settings; resume/<text> submit turns
+		return len(fields) == 1 || fields[1] == "clear" || fields[1] == "rounds"
+	}
+	return false
+}
+
 func (m *model) command(text string) (tea.Model, tea.Cmd) {
 	fields := strings.Fields(text)
 	switch fields[0] {
@@ -2143,6 +2192,12 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 			}
 		}()
 		return m, m.spin.Tick
+	case "/cd":
+		m.cdCommand(strings.TrimSpace(strings.TrimPrefix(text, "/cd")))
+		return m, nil
+	case "/pwd":
+		m.append(dimStyle.Render(cwd()))
+		return m, nil
 	case "/tasks":
 		if len(fields) > 1 { // /tasks <id>: jump straight into the detail view
 			m.openTask(fields[1])
@@ -2319,7 +2374,7 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 		m.openPicker()
 	case "/help":
 		m.append(dimStyle.Render(
-			"/model <name> [provider] — switch model\n/compact [model] [provider]|off — compact now at 90% context, or pick the compaction model\n/mouse — toggle mouse capture (on = wheel scroll + clicks, drag to copy)\n/theme [light|dark|auto] — color scheme (bare toggles)\n/tasks [id] — background subagents: focus the dock, or open one task's live view (ctrl+t toggles dock focus)\n/resume [id] — resume a previous session\n/fork [name] — copy this conversation into a new session (pick a point in the rewind picker with f)\n/rename [title] — retitle this session\n/goal <text> — keep working until the goal is met (resume | clear | rounds <n>|default [--global])\n/goal-from-context — formulate a goal from the last two messages and work until it's met\n/clear — reset conversation\n/quit — exit\ntab — complete · ctrl+t — focus the background-tasks dock (↑/↓ select, enter opens, esc backs out) · ctrl+o — toggle thinking tokens · ctrl+e — expand the last tool result · ctrl+j / shift+enter — newline · ctrl+v — paste image · esc — interrupt the agent · esc esc (idle) — rewind the conversation (↑/↓ browse, enter rewinds, f forks) · while busy with queued messages: ↑/↓ select, del removes · PgUp/PgDn — scroll · wheel — scroll · drag — select/copy text · ctrl+c ctrl+c — quit"))
+			"/model <name> [provider] — switch model\n/compact [model] [provider]|off — compact now at 90% context, or pick the compaction model\n/mouse — toggle mouse capture (on = wheel scroll + clicks, drag to copy)\n/theme [light|dark|auto] — color scheme (bare toggles)\n/tasks [id] — background subagents: focus the dock, or open one task's live view (ctrl+t toggles dock focus)\n/resume [id] — resume a previous session\n/fork [name] — copy this conversation into a new session (pick a point in the rewind picker with f)\n/rename [title] — retitle this session\n/goal <text> — keep working until the goal is met (resume | clear | rounds <n>|default [--global])\n/goal-from-context — formulate a goal from the last two messages and work until it's met\n/clear — reset conversation\n/cd [dir] — change working directory (bare prints it)\n/pwd — print working directory\n!<cmd> — run a shell command locally; output lands in the transcript and the conversation\n/quit — exit\ntab — complete · ctrl+t — focus the background-tasks dock (↑/↓ select, enter opens, esc backs out) · ctrl+o — toggle thinking tokens · ctrl+e — expand the last tool result · ctrl+j / shift+enter — newline · ctrl+v — paste image · esc — interrupt the agent · esc esc (idle) — rewind the conversation (↑/↓ browse, enter rewinds, f forks) · while busy with queued messages: ↑/↓ select, del removes · PgUp/PgDn — scroll · wheel — scroll · drag — select/copy text · ctrl+c ctrl+c — quit"))
 	case "/model":
 		if len(fields) < 2 {
 			m.openModelPicker()
@@ -2452,7 +2507,7 @@ func (m *model) View() string {
 		b.WriteString("\n" + m.interactiveView() + "\n")
 	}
 	if m.busy {
-		hint := " thinking… (enter queues · esc interrupts · ctrl+c ctrl+c interrupts)"
+		hint := " thinking… (enter queues · /theme /mouse /effort run now · esc interrupts · ctrl+c ctrl+c interrupts)"
 		if m.iactive != nil {
 			hint = " bash (interactive) — type to respond · ctrl+c ctrl+c to cancel"
 		} else if m.interrupt1 {

@@ -76,7 +76,10 @@ func truncate(s string) string {
 	return s[:maxOutput] + fmt.Sprintf("\n... [truncated %d bytes]", len(s)-maxOutput)
 }
 
-func truncateTail(s string) string {
+// TruncateTail caps tool output at maxOutput bytes, keeping the tail (the end
+// is usually where the error is). Exported for the TUI's `!` shell escape,
+// which formats output exactly like the bash tool.
+func TruncateTail(s string) string {
 	if len(s) <= maxOutput {
 		return s
 	}
@@ -108,7 +111,7 @@ func bashTool() Tool {
 			if a.Interactive && InteractiveBash != nil {
 				keys := make(chan []byte, 16)
 				out := InteractiveBash.Run(ctx, a.Command, dur, keys)
-				return truncateTail(out), nil
+				return TruncateTail(out), nil
 			}
 
 			res := bashrun.Run(ctx, bashrun.Options{
@@ -116,7 +119,7 @@ func bashTool() Tool {
 				Timeout: dur,
 			})
 
-			s := truncateTail(res.Output)
+			s := TruncateTail(res.Output)
 			if res.TimedOut {
 				return s + "\n(command timed out)", nil
 			}

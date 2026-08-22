@@ -64,6 +64,17 @@ func (a *Agent) Steer(text string) {
 	a.mu.Unlock()
 }
 
+// AppendUser adds a non-authored user message to the conversation outside a
+// turn — the `!` shell escape shares its output with the model this way. It
+// must only be called while no turn is running (the TUI routes mid-turn
+// output through Steer instead); the mutex exists so a raced caller trips
+// -race on the same word rather than silently tearing the slice.
+func (a *Agent) AppendUser(content string) {
+	a.mu.Lock()
+	a.Messages = append(a.Messages, llm.Message{Role: "user", Content: content})
+	a.mu.Unlock()
+}
+
 func (a *Agent) drainPending() []string {
 	a.mu.Lock()
 	defer a.mu.Unlock()

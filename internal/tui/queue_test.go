@@ -8,6 +8,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/context-labs/loopy/internal/agent"
+	"github.com/context-labs/loopy/internal/config"
 )
 
 // busyQueueModel builds a model that is busy with a populated queue.
@@ -113,6 +114,90 @@ func TestQueueSelResetsOnSteer(t *testing.T) {
 	m = press(t, m, tea.KeyMsg{Type: tea.KeyEnter})
 	if len(m.queue) != 0 || m.queueSel != -1 {
 		t.Fatalf("steer should clear queue and selection: %v sel=%d", m.queue, m.queueSel)
+	}
+}
+
+// TestBusyCmdAllowList pins which commands run mid-turn (and which /goal
+// forms do) — anything else must queue as a message.
+func TestBusyCmdAllowList(t *testing.T) {
+	runs := []string{
+		"/help", "/theme", "/theme dark", "/mouse", "/effort", "/effort high",
+		"/tasks", "/tasks abc123", "/goal", "/goal clear", "/goal rounds 5",
+		"/cd", "/cd /tmp", "/pwd",
+	}
+	for _, c := range runs {
+		if !busyCmd(c) {
+			t.Errorf("%q should run mid-turn", c)
+		}
+	}
+	queues := []string{
+		"/goal resume", "/goal ship the release", "/model", "/model x",
+		"/compact", "/clear", "/fork", "/rename", "/resume", "/quit",
+		"/bogus", "hello",
+	}
+	for _, c := range queues {
+		if busyCmd(c) {
+			t.Errorf("%q should queue, not run mid-turn", c)
+		}
+	}
+}
+
+func TestEnterWhileBusyRunsSettingsCommand(t *testing.T) {
+	t.Setenv("HOME", t.TempDir()) // keep cfg.Save() away from the real config
+	m := busyQueueModel()
+	m.cfg = &config.Config{}
+	m.input.SetValue("/effort high")
+	m = press(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+
+	if len(m.queue) != 0 {
+		t.Fatalf("/effort should run now, not queue: %v", m.queue)
+	}
+	if m.agent.Effort != "high" {
+		t.Fatalf("effort should have changed to high, got %q", m.agent.Effort)
+	}
+	if len(m.blocks) == 0 {
+		t.Fatal("the confirmation note should land in the transcript")
+	}
+	if m.hist[len(m.hist)-1] != "/effort high" {
+		t.Fatalf("the command should be in history: %v", m.hist)
+	}
+}
+
+func TestEnterWhileBusyQueuesOtherCommands(t *testing.T) {
+	m := busyQueueModel()
+	m.input.SetValue("/model gpt-5")
+	m = press(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	if len(m.queue) != 1 || m.queue[0] != "/model gpt-5" {
+		t.Fatalf("/model should still queue while busy: %v", m.queue)
+	}
+}
+
+func TestEnterWhileBusyQueuesGoalSubmits(t *testing.T) {
+	m := busyQueueModel()
+	m.input.SetValue("/goal ship it")
+	m = press(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	if len(m.queue) != 1 || m.queue[0] != "/goal ship it" {
+		t.Fatalf("/goal <text> submits a turn and must queue: %v", m.queue)
+	}
+
+	m = busyQueueModel()
+	m.input.SetValue("/goal resume")
+	m = press(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	if len(m.queue) != 1 || m.queue[0] != "/goal resume" {
+		t.Fatalf("/goal resume submits a turn and must queue: %v", m.queue)
+	}
+}
+
+func TestEnterWhileBusyRunsGoalSettings(t *testing.T) {
+	m := busyQueueModel()
+	m.goal = "old goal"
+	m.input.SetValue("/goal clear")
+	m = press(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	if m.goal != "" {
+		t.Fatalf("/goal clear should run now, goal=%q", m.goal)
+	}
+	if len(m.queue) != 0 {
+		t.Fatalf("/goal clear should not queue: %v", m.queue)
 	}
 }
 

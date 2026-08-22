@@ -26,7 +26,7 @@ parallel tool calls and background subagents).
 - [x] Explicit interruption: double ctrl+c while busy (cf. opencode's triple-escape with 5s reset — `packages/tui/src/routes/session/index.tsx:1388`)
 - [ ] Queue management: edit/remove queued messages before they send (opencode `<leader>q`, `runtime.queue.ts`)
 - [ ] Multiline input (grow textarea; opencode binds newline to `shift+enter,ctrl+enter,alt+enter,ctrl+j` because terminals disagree — `keybind.ts:161`)
-- [ ] `!` prefix shell mode: only triggers at cursor offset 0, backspace-at-0 exits, output lands in transcript as a tool result the model can see (opencode `prompt/index.tsx:815`)
+- [x] `!` prefix shell escape: output lands in transcript (tool-style block) and in the conversation as a non-authored `$ <cmd>` user message the model sees next turn (opencode `prompt/index.tsx:815`, `:1059`). Shipped as a submit-time prefix, not a mode — remaining delta: mode chrome (border/placeholder swap, cursor-at-0-only trigger, backspace-at-0 exits), and a real tool-role result instead of a user message
 - [x] `@` file mentions, pointer-style: tag any file, any path (relative/absolute/`~`), `@file#10-40` line ranges, tab-completion — a pointer note is appended to the user message, contents never inlined; the model probes with its own tools (Abe's design; alternative documented in [learnings/other-harnesses/opencode/at-mentions.md](learnings/other-harnesses/opencode/at-mentions.md))
 - [ ] `@` mention fuzzy picker + frecency ranking (opencode `prompt/frecency.tsx`, `prompt/autocomplete.tsx`)
 - [ ] External editor for long prompts: `$VISUAL || $EDITOR`, suspend renderer → edit temp .md → resume (opencode `editor.ts:26-53`; pi setting `externalEditor`)

@@ -14,6 +14,7 @@ type cand struct {
 }
 
 var commands = []cand{
+	{"/cd", "[dir] — change working directory (bare prints it)"},
 	{"/clear", "Reset the conversation"},
 	{"/compact", "[model] [provider]|off — compact now, or pick the compaction model"},
 	{"/effort", "[level] — reasoning effort: off·low·medium·high (bare cycles)"},
@@ -23,6 +24,7 @@ var commands = []cand{
 	{"/help", "Show available commands"},
 	{"/model", "<model> [provider] — switch model"},
 	{"/mouse", "Toggle mouse capture (off = native terminal selection)"},
+	{"/pwd", "Print working directory"},
 	{"/rename", "[title] — retitle this session"},
 	{"/theme", "[light|dark|auto] — color scheme (bare toggles)"},
 	{"/quit", "Exit loopy"},
@@ -34,7 +36,7 @@ var commands = []cand{
 // sensibly with no arguments); others insert themselves for arguments.
 var execNow = map[string]bool{
 	"/clear": true, "/compact": true, "/effort": true, "/goal": true, "/goal-from-context": true, "/help": true,
-	"/model": true, "/mouse": true, "/quit": true, "/resume": true, "/tasks": true,
+	"/model": true, "/mouse": true, "/pwd": true, "/quit": true, "/resume": true, "/tasks": true,
 }
 
 // completions splits val into an untouched head and candidates for its last
