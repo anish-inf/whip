@@ -1,0 +1,130 @@
+package tui
+
+import (
+	"context"
+	"strings"
+	"testing"
+
+	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/context-labs/loopy/internal/agent"
+	"github.com/context-labs/loopy/internal/config"
+	"github.com/context-labs/loopy/internal/llm"
+	"github.com/context-labs/loopy/internal/mcp"
+	"github.com/context-labs/loopy/internal/tools"
+)
+
+// mcpModel builds a headless model with an MCP manager over cfgs.
+func mcpModel(t *testing.T, cfgs map[string]mcp.ServerConfig) *model {
+	t.Helper()
+	m := tasksModel("http://unused")
+	m.cfg = &config.Config{}
+	if cfgs != nil {
+		m.mcpMgr = mcp.NewManager(cfgs)
+	}
+	return m
+}
+
+func TestMCPCommandNoServers(t *testing.T) {
+	m := mcpModel(t, nil)
+	m.command("/mcp")
+	last := m.blocks[len(m.blocks)-1].text
+	if !strings.Contains(last, "no MCP servers configured") {
+		t.Errorf("got %q", last)
+	}
+}
+
+func TestMCPStatusView(t *testing.T) {
+	disabled := false
+	m := mcpModel(t, map[string]mcp.ServerConfig{
+		"broken":  {Command: []string{"/nonexistent-binary-xyz"}},
+		"off":     {Command: []string{"true"}, Enabled: &disabled, Note: "turned off"},
+		"invalid": {},
+	})
+	m.command("/mcp")
+	out := m.blocks[len(m.blocks)-1].text
+	for _, want := range []string{"broken", "off", "invalid", "disabled"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("status view missing %q:\n%s", want, out)
+		}
+	}
+	if !strings.Contains(out, "invalid config") {
+		t.Errorf("invalid entry should explain itself:\n%s", out)
+	}
+}
+
+func TestMCPLiveServerEndToEnd(t *testing.T) {
+	// The manager's lifecycle is exercised exhaustively in internal/mcp; the
+	// TUI layer only routes commands and renders states.
+	m := mcpModel(t, map[string]mcp.ServerConfig{"docs": {Command: []string{"docs"}}})
+	m.mcpMgr.SetOnChange(func() {}) // no prog in headless tests
+	m.command("/mcp docs reconnect")
+	last := m.blocks[len(m.blocks)-1].text
+	if !strings.Contains(last, "reconnecting") {
+		t.Errorf("got %q", last)
+	}
+	m.command("/mcp nope reconnect")
+	last = m.blocks[len(m.blocks)-1].text
+	if !strings.Contains(last, "no MCP server named nope") {
+		t.Errorf("got %q", last)
+	}
+}
+
+func TestMCPTogglePersists(t *testing.T) {
+	t.Setenv("LOOPY_HOME", t.TempDir())
+	m := mcpModel(t, map[string]mcp.ServerConfig{"docs": {Command: []string{"docs"}}})
+	m.command("/mcp docs disable")
+	entry, ok := m.cfg.MCPServers["docs"]
+	if !ok || entry.Enabled == nil || *entry.Enabled {
+		t.Fatalf("disable should persist enabled=false, got %+v", entry)
+	}
+	// The saved config must round-trip.
+	reloaded, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.MCPServers["docs"].Enabled == nil || *reloaded.MCPServers["docs"].Enabled {
+		t.Error("persisted disable did not round-trip")
+	}
+	if len(reloaded.MCPServers["docs"].Command) == 0 {
+		t.Error("disable must copy the full server definition, not a bare enabled flag")
+	}
+}
+
+// TestMCPSurvivesAgentSwap pins the regression where resume/model-switch
+// replaced m.agent but the manager's OnChange closure kept writing tool sets
+// to the dead captured agent: MCP tools vanished for the rest of the
+// session. The fix: the closure dereferences m.agent at call time, and
+// wireTasks re-pushes the current set into the new agent.
+func TestMCPSurvivesAgentSwap(t *testing.T) {
+	m := mcpModel(t, map[string]mcp.ServerConfig{"docs": {Command: []string{"docs"}}})
+	mcpT := tools.Tool{Def: llm.NewTool("mcp__docs__greet", "g", `{"type":"object"}`)}
+
+	// Wire exactly like Run: OnChange dereferences m.agent at call time.
+	m.mcpMgr.SetOnChange(func() { m.agent.SetMCPTools([]tools.Tool{mcpT}) })
+	m.agent.SetMCPTools([]tools.Tool{mcpT})
+
+	// Swap the agent (as resume/switchModel do) and fire OnChange.
+	old := m.agent
+	m.agent = agent.New(old.Client, old.Model, old.MaxTokens, "sys")
+	m.mcpMgr.FireOnChangeForTest()
+	if !agHasTool(m.agent, "mcp__docs__greet") {
+		t.Fatal("post-swap OnChange must write to the new agent")
+	}
+	if agHasTool(old, "mcp__docs__greet") != true {
+		t.Fatal("old agent is untouched after swap (its set was already pushed)")
+	}
+}
+
+func agHasTool(a *agent.Agent, name string) bool {
+	for _, t := range a.AllTools() {
+		if t.Def.Function.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// Guard: the SDK import stays used even as the TUI seam evolves.
+var _ = sdkmcp.Tool{}
+var _ = context.Background

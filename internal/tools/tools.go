@@ -69,6 +69,12 @@ func Execute(ctx context.Context, ts []Tool, name string, args json.RawMessage) 
 
 const maxOutput = 50_000 // bytes of tool output fed back to the model
 
+// Truncate caps tool output at maxOutput with a marker; exported for the MCP
+// bridge, which flattens remote results into the same budget.
+func Truncate(s string) string {
+	return truncate(s)
+}
+
 func truncate(s string) string {
 	if len(s) <= maxOutput {
 		return s

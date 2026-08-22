@@ -68,3 +68,29 @@ still parses (it always meant the context window) but is superseded by `context`
 Any OpenAI-compatible endpoint works as a provider. Key resolution:
 `apiKeyEnv` env var → `apiKey` literal → for api.inference.net, the key stored
 in `~/.inf/config.json` by the `inf` CLI.
+
+## MCP
+
+loopy connects to MCP servers and their tools appear in the agent as
+`mcp__<server>__<tool>`. Three config styles all work — loopy reads your
+existing setup:
+
+- **claude-style**: a `.mcp.json` in the project root (`{"mcpServers": {...}}`)
+- **codex-style**: `[mcp_servers.*]` tables in `~/.codex/config.toml`
+- **loopy-native**: an `"mcp"` block in `~/.loopy/config.json` (wins on
+  name conflicts):
+
+```json
+{
+  "mcp": {
+    "docs": { "command": ["npx", "-y", "@docs/mcp"], "env": { "API_KEY": "$DOCS_KEY" } },
+    "web":  { "url": "https://mcp.example.com/mcp", "headers": { "Authorization": "Bearer $TOKEN" } }
+  }
+}
+```
+
+Servers connect in the background at startup and lazily on first use — a
+slow or broken server never blocks the loop. `/mcp` shows live status;
+`/mcp <name> reconnect|enable|disable` manages servers without restarting.
+CLI: `loopy mcp list|add|remove`. `loopy mcp serve` runs loopy's own tools
+(read/bash/edit/write) as an MCP server for other harnesses.

@@ -96,6 +96,24 @@ type Config struct {
 	GoalMaxRounds   int                 `json:"goalMaxRounds,omitempty"`   // global goal-loop round cap; 0 = DefaultGoalMaxRounds; projects.json may override per folder
 	Providers       map[string]Provider `json:"providers"`
 	Models          map[string]Model    `json:"models"`
+	// MCPServers is loopy's own MCP server block (loopy-native shape; see
+	// internal/mcp.ServerConfig for the normalized semantics). On load it is
+	// merged over imported claude/codex configs: loopy always wins per name.
+	MCPServers map[string]MCPServer `json:"mcp,omitempty"`
+}
+
+// MCPServer is the config-file form of an MCP server entry. It mirrors
+// mcp.ServerConfig without importing that package (config is a leaf).
+type MCPServer struct {
+	Command        []string          `json:"command,omitempty"`
+	Env            map[string]string `json:"env,omitempty"`
+	Cwd            string            `json:"cwd,omitempty"`
+	URL            string            `json:"url,omitempty"`
+	Headers        map[string]string `json:"headers,omitempty"`
+	Enabled        *bool             `json:"enabled,omitempty"`
+	Note           string            `json:"note,omitempty"`
+	StartupTimeout int               `json:"startupTimeout,omitempty"`
+	ToolTimeout    int               `json:"toolTimeout,omitempty"`
 }
 
 // Dir returns the loopy home directory (~/.loopy), creating it if needed.
@@ -151,18 +169,25 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("parse %s: %w", p, err)
 	}
 	// Recover from a clobbered/empty config: no providers and no models is
-	// never a usable state, so prefer the backup, else regenerate defaults.
+	// never a usable state, so prefer the backup, else regenerate defaults —
+	// BUT preserve any MCP server entries: an mcp-only config is valid (the
+	// user may configure servers before providers), and regenerating defaults
+	// would silently wipe them.
 	if len(cfg.Providers) == 0 && len(cfg.Models) == 0 {
 		logf("config.load", "CLOBBERED/EMPTY config detected (%d bytes on disk), attempting recovery", len(data))
 		if bak, err := os.ReadFile(p + ".bak"); err == nil {
 			var restored Config
 			if parseJSONC(bak, &restored) == nil && (len(restored.Providers) > 0 || len(restored.Models) > 0) {
 				logf("config.load", "restored from .bak (%s)", restored.fingerprint())
+				if len(restored.MCPServers) == 0 && len(cfg.MCPServers) > 0 {
+					restored.MCPServers = cfg.MCPServers // keep the user's servers
+				}
 				return &restored, restored.Save()
 			}
 		}
 		def := Default()
-		logf("config.load", "no usable .bak; regenerated defaults (%s)", def.fingerprint())
+		def.MCPServers = cfg.MCPServers // mcp-only configs are valid; keep them
+		logf("config.load", "no usable .bak; regenerated defaults (%s), keeping %d mcp entries", def.fingerprint(), len(cfg.MCPServers))
 		return def, def.Save()
 	}
 	logf("config.load", "ok (%s)", cfg.fingerprint())

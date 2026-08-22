@@ -1,0 +1,576 @@
+package mcp
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"os"
+	"os/exec"
+	"sort"
+	"strings"
+	"sync"
+	"syscall"
+	"time"
+
+	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/context-labs/loopy/internal/config"
+	"github.com/context-labs/loopy/internal/llm"
+	"github.com/context-labs/loopy/internal/tools"
+)
+
+// Status is a server's lifecycle state, mirroring opencode's discriminated
+// status union (mcp/index.ts): a server is always in exactly one state, and
+// the TUI renders it directly.
+type Status int
+
+const (
+	StatusDisabled   Status = iota // enabled: false, or an unsupported import
+	StatusConnecting               // connect kicked off, not yet settled
+	StatusReady                    // connected, tools listed
+	StatusFailed                   // connect/list failed, or the session dropped
+)
+
+func (s Status) String() string {
+	switch s {
+	case StatusDisabled:
+		return "disabled"
+	case StatusConnecting:
+		return "connecting"
+	case StatusReady:
+		return "ready"
+	case StatusFailed:
+		return "failed"
+	}
+	return "unknown"
+}
+
+// Server is the /mcp status view of one configured server.
+type Server struct {
+	Name   string // configured name
+	Status Status
+	Note   string // import notes (e.g. claude sse transport)
+	Err    string // failure detail when Status == StatusFailed
+	Tools  int    // tools contributed when ready
+}
+
+// server holds one server's live state.
+type server struct {
+	name string
+	cfg  ServerConfig
+
+	status Status
+	err    string
+	note   string
+	defs   []*sdkmcp.Tool
+	sess   *sdkmcp.ClientSession
+	gen    int // increments per connect; a stale session's watcher no-ops
+	stderr *ringBuffer
+
+	// ready closes exactly once when the FIRST connect attempt settles
+	// (ready or failed): the close-to-broadcast pattern from agent's
+	// BackgroundTask — every waiter (tool calls, /mcp) wakes together with no
+	// per-waiter state. Reconnects are a new attempt, not a new channel:
+	// callers hold the manager, not the channel.
+	ready   chan struct{}
+	settled bool
+	// calling is a 1-capacity semaphore serializing calls per server (many
+	// servers are single-request-at-a-time over stdio).
+	calling chan struct{}
+	// reconnect requests a fresh connect attempt (used by /mcp reconnect).
+	// Capacity 1; coalesces repeats while a connect is in flight.
+	reconnect chan struct{}
+
+	mu sync.Mutex // guards status/err/defs/sess
+}
+
+// Manager owns every MCP server connection. All methods are safe for
+// concurrent use; tool calls for different servers proceed in parallel.
+type Manager struct {
+	servers  map[string]*server // keyed by configured name
+	onChange func()             // optional redraw hook, like taskRegistry.OnChange
+
+	// connectTransport builds the transport for a server config. A var so
+	// tests can substitute in-process transports without spawning processes.
+	connectTransport func(cfg ServerConfig, stderr *ringBuffer) (sdkmcp.Transport, error)
+
+	onChangeMu sync.Mutex // guards onChange (SetOnChange may race connect goroutines)
+	closed     bool       // set by Close; connect() won't store new sessions after it
+}
+
+// NewManager builds a manager from merged server configs. Config errors
+// become failed servers immediately; disabled entries never spawn.
+func NewManager(cfgs map[string]ServerConfig) *Manager {
+	m := &Manager{
+		servers:          map[string]*server{},
+		connectTransport: defaultTransport,
+	}
+	for name, cfg := range cfgs {
+		s := &server{
+			name:      name,
+			cfg:       cfg,
+			note:      cfg.Note,
+			ready:     make(chan struct{}),
+			calling:   make(chan struct{}, 1),
+			reconnect: make(chan struct{}, 1),
+		}
+		if !cfg.Remote() {
+			s.stderr = newRingBuffer(4096)
+		}
+		s.status = StatusConnecting
+		if cfg.Disabled() {
+			s.status = StatusDisabled
+		} else if msg := cfg.Valid(); msg != "" {
+			s.status = StatusFailed
+			s.err = "invalid config: " + msg
+		}
+		if s.status != StatusConnecting {
+			s.settled = true
+			close(s.ready) // settled at birth; nothing will ever connect
+		}
+		m.servers[name] = s
+	}
+	return m
+}
+
+// SetOnChange installs a callback fired whenever a server's status changes
+// (the TUI uses it to redraw). Safe to call any time; the callback runs from
+// connect goroutines, so keep it cheap and non-blocking.
+func (m *Manager) SetOnChange(fn func()) {
+	m.onChangeMu.Lock()
+	m.onChange = fn
+	m.onChangeMu.Unlock()
+}
+
+// FireOnChangeForTest invokes the installed callback (tests only).
+func (m *Manager) FireOnChangeForTest() { m.fireOnChange() }
+
+func (m *Manager) fireOnChange() {
+	m.onChangeMu.Lock()
+	fn := m.onChange
+	m.onChangeMu.Unlock()
+	if fn != nil {
+		fn()
+	}
+}
+
+// Start kicks concurrent connects for every connecting server. Each server
+// owns its lifecycle goroutine, which also services later reconnect requests.
+// ctx cancellation aborts initial connects (e.g. shutdown during startup).
+func (m *Manager) Start(ctx context.Context) {
+	for _, s := range m.servers {
+		if s.status != StatusConnecting {
+			continue
+		}
+		go s.run(ctx, m)
+	}
+}
+
+// run is the per-server lifecycle goroutine: one connect attempt, then it
+// services reconnect requests until the process exits (Close kills sessions;
+// the goroutine parks on reconnect thereafter — it has no work but also no
+// cost, and loopy exits rather than idles servers). A reconnect queued while
+// a connect was in flight is dropped when that connect just succeeded — the
+// user asked for a fresh connection and already has one.
+func (s *server) run(ctx context.Context, m *Manager) {
+	s.connect(ctx, m)
+	for range s.reconnect {
+		if s.cfg.Disabled() {
+			s.setState(m, StatusDisabled, "")
+			continue
+		}
+		s.muLock()
+		ready := s.status == StatusReady
+		s.muUnlock()
+		if ready {
+			continue
+		}
+		s.connect(context.Background(), m) // reconnect outlives any single turn
+	}
+}
+
+func (s *server) connect(ctx context.Context, m *Manager) {
+	// Birth-settled servers (disabled/invalid) never run a lifecycle
+	// goroutine, so connect is only reachable for servers allowed to try.
+	s.muLock()
+	s.status = StatusConnecting
+	s.muUnlock()
+	m.fireOnChange()
+	timeout := s.cfg.StartupTimeoutDuration()
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	transport, err := m.connectTransport(s.cfg, s.stderr)
+	if err == nil {
+		client := sdkmcp.NewClient(&sdkmcp.Implementation{Name: "loopy", Title: "loopy"}, nil)
+		var sess *sdkmcp.ClientSession
+		sess, err = client.Connect(ctx, transport, nil)
+		if err == nil {
+			var listed *sdkmcp.ListToolsResult
+			listed, err = sess.ListTools(ctx, nil)
+			if err == nil {
+				m.onChangeMu.Lock()
+				closed := m.closed
+				m.onChangeMu.Unlock()
+				if closed {
+					sess.Close() // manager is shutting down; don't store
+					return
+				}
+				s.muLock()
+				s.defs = listed.Tools
+				s.sess = sess
+				s.gen++
+				gen := s.gen
+				s.muUnlock()
+				s.setState(m, StatusReady, "")
+				// Watch for a dropped session: mark failed so tool calls stop
+				// being routed (opencode's client.onclose → status failed,
+				// guarded by a client-identity check, index.ts:443). The gen
+				// counter is the same check: a watcher from an older connect
+				// must not tear down the newer session.
+				go func() {
+					_ = sess.Wait()
+					m.onChangeMu.Lock()
+					closing := m.closed
+					m.onChangeMu.Unlock()
+					s.muLock()
+					stale := s.gen != gen
+					if !stale {
+						s.sess = nil
+						s.defs = nil
+					}
+					s.muUnlock()
+					if !stale && !closing {
+						s.setState(m, StatusFailed, "connection closed")
+					}
+				}()
+				return
+			}
+			sess.Close()
+		}
+	}
+	msg := err.Error()
+	if ctx.Err() == context.DeadlineExceeded {
+		msg = fmt.Sprintf("timed out after %s", timeout)
+	}
+	if s.stderr != nil {
+		if tail := strings.TrimSpace(s.stderr.String()); tail != "" {
+			msg += " — stderr: " + tail
+		}
+	}
+	s.setState(m, StatusFailed, msg)
+}
+
+// setState transitions status and wakes every waiter on the first settle.
+func (s *server) setState(m *Manager, st Status, errMsg string) {
+	s.muLock()
+	firstSettle := !s.settled
+	if st != StatusConnecting {
+		s.settled = true
+	}
+	s.status, s.err = st, errMsg
+	s.muUnlock()
+	if firstSettle && st != StatusConnecting {
+		close(s.ready)
+	}
+	logf("server %s -> %s %s", s.name, st, errMsg)
+	m.fireOnChange()
+}
+
+func (s *server) muLock()   { s.mu.Lock() }
+func (s *server) muUnlock() { s.mu.Unlock() }
+
+// Tools returns the current agent-facing tool set: one tools.Tool per listed
+// MCP tool on every ready server. Cheap to call per turn.
+func (m *Manager) Tools() []tools.Tool {
+	var out []tools.Tool
+	for _, s := range m.servers {
+		s.mu.Lock()
+		defs, sess := s.defs, s.sess
+		s.mu.Unlock()
+		if sess == nil {
+			continue
+		}
+		for _, d := range defs {
+			out = append(out, s.bridge(d))
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Def.Function.Name < out[j].Def.Function.Name })
+	return out
+}
+
+// bridge converts one listed MCP tool into the agent-loop tools.Tool. The
+// name follows claude-code's mcp__server__tool convention; the schema passes
+// through verbatim with the object-typed shape providers require (opencode
+// forces type:object + properties, catalog.ts convertTool).
+func (s *server) bridge(d *sdkmcp.Tool) tools.Tool {
+	name := ToolName(s.name, d.Name)
+	schema := normalizeSchema(d.InputSchema)
+	desc := d.Description
+	if d.Title != "" && desc == "" {
+		desc = d.Title
+	}
+	return tools.Tool{
+		Def: llm.NewTool(name, fmt.Sprintf("[MCP %s] %s", s.name, desc), schema),
+		Run: func(ctx context.Context, args json.RawMessage) (string, error) {
+			return s.call(ctx, d.Name, args)
+		},
+	}
+}
+
+// call runs one tool call against the session, serialized per server and
+// bounded by the configured tool timeout. Errors become error strings for
+// the model via tools.Execute — never loop-aborting (opencode throws and
+// converts to an output-error tool part; loopy's "Error: …" convention is
+// the same shape).
+func (s *server) call(ctx context.Context, tool string, args json.RawMessage) (string, error) {
+	select {
+	case <-s.ready:
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
+	s.mu.Lock()
+	sess, status, errMsg := s.sess, s.status, s.err
+	s.mu.Unlock()
+	if sess == nil {
+		if status == StatusFailed && errMsg != "" {
+			return "", fmt.Errorf("mcp server %q unavailable: %s", s.name, errMsg)
+		}
+		return "", fmt.Errorf("mcp server %q is %s", s.name, status)
+	}
+	// Serialize calls per server.
+	select {
+	case s.calling <- struct{}{}:
+		defer func() { <-s.calling }()
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
+	ctx, cancel := context.WithTimeout(ctx, s.cfg.ToolTimeoutDuration())
+	defer cancel()
+	var argMap map[string]any
+	if len(args) > 0 {
+		if err := json.Unmarshal(args, &argMap); err != nil {
+			return "", fmt.Errorf("invalid tool arguments: %w", err)
+		}
+	}
+	res, err := sess.CallTool(ctx, &sdkmcp.CallToolParams{Name: tool, Arguments: argMap})
+	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return "", fmt.Errorf("mcp tool %s timed out after %s", tool, s.cfg.ToolTimeoutDuration())
+		}
+		return "", err
+	}
+	return flattenResult(res), nil
+}
+
+// flattenResult renders a CallToolResult as model-facing text (pure).
+// Text content is concatenated; binary/resource parts become placeholders
+// (ponytail: feed images to vision models); structured content is appended
+// as JSON when no text exists (opencode catalog.ts does the same). IsError
+// prefixes "Error: " so the model sees failure, per the MCP spec's own
+// guidance that tool errors belong in content.
+func flattenResult(res *sdkmcp.CallToolResult) string {
+	var b strings.Builder
+	for _, c := range res.Content {
+		switch c := c.(type) {
+		case *sdkmcp.TextContent:
+			if b.Len() > 0 {
+				b.WriteString("\n")
+			}
+			b.WriteString(c.Text)
+		case *sdkmcp.ImageContent:
+			fmt.Fprintf(&b, "\n[image content omitted: %s, %d bytes]", c.MIMEType, len(c.Data))
+		case *sdkmcp.AudioContent:
+			fmt.Fprintf(&b, "\n[audio content omitted: %s, %d bytes]", c.MIMEType, len(c.Data))
+		case *sdkmcp.EmbeddedResource:
+			if c.Resource != nil && c.Resource.Text != "" {
+				fmt.Fprintf(&b, "\n[resource %s]\n%s", c.Resource.URI, c.Resource.Text)
+			} else if c.Resource != nil {
+				fmt.Fprintf(&b, "\n[binary resource omitted: %s, %d bytes]", c.Resource.URI, len(c.Resource.Blob))
+			}
+		case *sdkmcp.ResourceLink:
+			fmt.Fprintf(&b, "\n[resource link: %s (%s)]", c.URI, c.Name)
+		}
+	}
+	out := b.String()
+	if out == "" && res.StructuredContent != nil {
+		if data, err := json.MarshalIndent(res.StructuredContent, "", "  "); err == nil {
+			out = string(data)
+		}
+	}
+	if out == "" {
+		out = "(no output)"
+	}
+	if res.IsError {
+		out = "Error: " + out
+	}
+	return tools.Truncate(out)
+}
+
+// normalizeSchema passes the server's input schema through as a JSON string,
+// coercing it into the object shape providers require (opencode forces
+// type:object + properties:{} + additionalProperties:false).
+func normalizeSchema(schema any) string {
+	m, ok := schema.(map[string]any)
+	if !ok || m == nil {
+		return `{"type":"object","properties":{}}`
+	}
+	m["type"] = "object"
+	if _, ok := m["properties"]; !ok {
+		m["properties"] = map[string]any{}
+	}
+	data, err := json.Marshal(m)
+	if err != nil {
+		return `{"type":"object","properties":{}}`
+	}
+	return string(data)
+}
+
+// Config returns a server's normalized config (the live definition, including
+// imported claude/codex entries) — the TUI persists this when toggling
+// enabled so loopy's own config stays self-contained. ok is false for
+// unknown names.
+func (m *Manager) Config(name string) (ServerConfig, bool) {
+	s, ok := m.servers[name]
+	if !ok {
+		return ServerConfig{}, false
+	}
+	return s.cfg, true
+}
+
+// Disable tears down a server's live session without touching config (the
+// caller persists enabled:false). Reconnect on a disabled server is refused
+// by run().
+func (m *Manager) Disable(name string) bool {
+	s, ok := m.servers[name]
+	if !ok {
+		return false
+	}
+	s.cfg.Enabled = boolp(false)
+	s.muLock()
+	old := s.sess
+	s.sess, s.defs = nil, nil
+	s.gen++
+	s.muUnlock()
+	if old != nil {
+		old.Close()
+	}
+	s.setState(m, StatusDisabled, "")
+	return true
+}
+
+// Enable clears a persisted disable and reconnects.
+func (m *Manager) Enable(name string) bool {
+	s, ok := m.servers[name]
+	if !ok {
+		return false
+	}
+	s.cfg.Enabled = nil
+	return m.Reconnect(name)
+}
+
+func boolp(b bool) *bool { return &b }
+
+// Statuses returns a stable, name-sorted snapshot for /mcp.
+func (m *Manager) Statuses() []Server {
+	out := make([]Server, 0, len(m.servers))
+	for _, s := range m.servers {
+		s.mu.Lock()
+		out = append(out, Server{Name: s.name, Status: s.status, Note: s.note, Err: s.err, Tools: len(s.defs)})
+		s.mu.Unlock()
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
+// Reconnect requests a fresh connect for a server (drops a live session
+// first). Returns false for unknown names.
+func (m *Manager) Reconnect(name string) bool {
+	s, ok := m.servers[name]
+	if !ok {
+		return false
+	}
+	s.mu.Lock()
+	old := s.sess
+	s.sess, s.defs = nil, nil
+	s.mu.Unlock()
+	if old != nil {
+		old.Close()
+	}
+	select {
+	case s.reconnect <- struct{}{}:
+	default: // a reconnect is already queued
+	}
+	return true
+}
+
+// Close shuts every session down. Stdio transports terminate their child
+// process on Close (the SDK sends SIGTERM after stdin closes, then SIGKILL);
+// children get their own process group at spawn (defaultTransport) so loopy's
+// exit path can also group-kill strays via the bashrun registry pattern.
+func (m *Manager) Close() {
+	for _, s := range m.servers {
+		s.mu.Lock()
+		sess := s.sess
+		s.sess, s.defs = nil, nil
+		s.mu.Unlock()
+		if sess != nil {
+			sess.Close()
+		}
+	}
+}
+
+// defaultTransport builds the SDK transport for a config: CommandTransport
+// (stdio, own process group, merged env, captured stderr) or
+// StreamableClientTransport (remote, header-injecting client).
+func defaultTransport(cfg ServerConfig, stderr *ringBuffer) (sdkmcp.Transport, error) {
+	if cfg.Remote() {
+		return &sdkmcp.StreamableClientTransport{
+			Endpoint:   cfg.URL,
+			HTTPClient: &http.Client{Transport: headerTransport(cfg.Headers)},
+			// ponytail: the standalone SSE stream would deliver server-initiated
+			// notifications (tool list changes); request-response is enough for v1
+			DisableStandaloneSSE: true,
+		}, nil
+	}
+	cmd := exec.Command(cfg.Command[0], cfg.Command[1:]...)
+	// Inherit loopy's environment and layer the server's vars on top (opencode
+	// does the same — users expect $PATH etc. to work).
+	cmd.Env = append(os.Environ(), envPairs(cfg.Env)...)
+	if cfg.Cwd != "" {
+		cmd.Dir = cfg.Cwd
+	}
+	if stderr != nil {
+		cmd.Stderr = stderr
+	}
+	// Own process group: detached grandchildren of the server die with it.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	return &sdkmcp.CommandTransport{Command: cmd, TerminateDuration: 3 * time.Second}, nil
+}
+
+func envPairs(env map[string]string) []string {
+	pairs := make([]string, 0, len(env))
+	for k, v := range env {
+		pairs = append(pairs, k+"="+v)
+	}
+	return pairs
+}
+
+// headerTransport injects static headers (e.g. Authorization) into every
+// request of a remote server's HTTP client.
+type headerTransport map[string]string
+
+func (h headerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	for k, v := range h {
+		req.Header.Set(k, v)
+	}
+	return http.DefaultTransport.RoundTrip(req)
+}
+
+// logf mirrors config.LogEvent for MCP lifecycle events (connect failures,
+// status transitions) so "why didn't my server come up?" is answerable from
+// ~/.loopy/loopy.log.
+func logf(format string, args ...any) {
+	config.LogEvent("mcp", fmt.Sprintf(format, args...))
+}

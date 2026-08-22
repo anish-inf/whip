@@ -21,6 +21,7 @@ import (
 	"github.com/context-labs/loopy/internal/agent"
 	"github.com/context-labs/loopy/internal/config"
 	"github.com/context-labs/loopy/internal/llm"
+	"github.com/context-labs/loopy/internal/mcp"
 	"github.com/context-labs/loopy/internal/session"
 	"github.com/context-labs/loopy/internal/skills"
 	"github.com/context-labs/loopy/internal/tools"
@@ -60,6 +61,7 @@ type catalogsMsg map[string]config.Catalog // background /models fetch result
 type usageMsg llm.Usage                    // one request's token usage
 type quitArmMsg struct{}                   // the idle ctrl+c arm window expired
 type taskUpdateMsg struct{}                // a background subagent started/settled — redraw
+type mcpStatusMsg struct{}                 // an MCP server changed state — redraw
 type thinkMsg string                       // streamed reasoning tokens
 type imageMsg struct {                     // ctrl+v clipboard image result
 	path string // clipboard image saved to disk
@@ -127,6 +129,7 @@ type model struct {
 	compactProv  string
 	effortX      int                       // screen column where the clickable ⚡ effort control starts
 	catalogs     map[string]config.Catalog // provider model lists (capabilities)
+	mcpMgr       *mcp.Manager              // MCP server connections; nil when none configured
 
 	irunner *interactiveRunner // installed on tools.InteractiveBash at startup
 	iactive *interactive       // in-flight interactive command; nil when idle
@@ -208,6 +211,34 @@ func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string) (s
 	}
 	m.applyCompactModel()
 	m.wireTasks() // redraw the UI when background subagents start/settle
+
+	// MCP: merge loopy's own config with imported claude (.mcp.json) and codex
+	// (~/.codex/config.toml) servers, then kick concurrent connects in the
+	// background. Tool calls block on that server's first settle only, so a
+	// slow/hung server never delays startup. Discovery problems (a broken
+	// .mcp.json) land as a transcript note, not a startup failure.
+	if wd, wdErr := os.Getwd(); wdErr == nil {
+		merged, mcpErrs := mcp.LoadMerged(wd, mcp.FromConfigMap(cfg.MCPServers))
+		if len(merged) > 0 || len(mcpErrs) > 0 {
+			m.mcpMgr = mcp.NewManager(merged)
+			// MCP connects settle in the background; push each new tool set
+			// into the CURRENT agent (mutex-guarded on the agent side) so
+			// servers that connect after turn 1 show up without a restart.
+			// The closure reads m.agent at call time: resume/model-switch
+			// replace the agent, and wireTasks re-points the manager at it.
+			m.mcpMgr.SetOnChange(func() {
+				m.agent.SetMCPTools(m.mcpMgr.Tools())
+				if m.prog != nil { // nil in headless tests
+					m.prog.Send(mcpStatusMsg{})
+				}
+			})
+			m.mcpMgr.Start(context.Background())
+			ag.SetMCPTools(m.mcpMgr.Tools())
+			for src, derr := range mcpErrs {
+				m.append(errStyle.Render(fmt.Sprintf("mcp: %s: %s", src, derr)))
+			}
+		}
+	}
 	if dir, derr := config.Dir(); derr == nil {
 		if st, serr := session.Open(dir + "/sessions.db"); serr == nil {
 			m.store = st
@@ -266,6 +297,11 @@ func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string) (s
 	// reporting directly on the TTY (bubbletea doesn't manage it), so release it.
 	if m.mouseOn {
 		disableClickWheelMouse(os.Stdout)
+	}
+	// Shut MCP servers down first (graceful: stdin close → SIGTERM → SIGKILL)
+	// so a clean stdio server never becomes a KillAll target.
+	if m.mcpMgr != nil {
+		m.mcpMgr.Close()
 	}
 	// Make sure no agent-spawned child process (a server the model started, a
 	// watcher, a daemon) outlives loopy. KillAll SIGKILLs every tracked process
@@ -1141,6 +1177,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case mcpStatusMsg:
+		// an MCP server changed state; nothing to redraw persistently, but
+		// the header/dock may show counts later — repaint is cheap.
+		return m, nil
+
 	case taskEventMsg:
 		// one live event from the open task's subagent stream; append it to
 		// the pane's transcript (deltas coalesce into lines before append)
@@ -1578,6 +1619,12 @@ func (m *model) wireTasks() {
 	}
 	m.agent.Tasks().OnChange = func(*agent.BackgroundTask) {
 		m.prog.Send(taskUpdateMsg{})
+	}
+	// Point the MCP manager at the NEW agent — resume/model-switch replace
+	// m.agent wholesale, and the OnChange closure captures the model, not a
+	// specific agent, precisely so this handoff works.
+	if m.mcpMgr != nil {
+		m.agent.SetMCPTools(m.mcpMgr.Tools())
 	}
 }
 
@@ -2036,6 +2083,8 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 			}
 		}()
 		return m, m.spin.Tick
+	case "/mcp":
+		return m.mcpCommand(fields)
 	case "/tasks":
 		if len(fields) > 1 { // /tasks <id>: jump straight into the detail view
 			m.openTask(fields[1])
@@ -2134,7 +2183,7 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 		m.openPicker()
 	case "/help":
 		m.append(dimStyle.Render(
-			"/model <name> [provider] — switch model\n/compact [model] [provider]|off — compact now at 90% context, or pick the compaction model\n/mouse — toggle mouse capture (on = wheel scroll + clicks, drag to copy)\n/theme [light|dark|auto] — color scheme (bare toggles)\n/tasks [id] — background subagents: focus the dock, or open one task's live view (ctrl+t toggles dock focus)\n/resume [id] — resume a previous session\n/goal <text> — keep working until the goal is met (resume | clear | rounds <n>|default [--global])\n/clear — reset conversation\n/quit — exit\ntab — complete · ctrl+t — focus the background-tasks dock (↑/↓ select, enter opens, esc backs out) · ctrl+o — toggle thinking tokens · ctrl+e — expand the last tool result · ctrl+j / shift+enter — newline · ctrl+v — paste image · esc — interrupt the agent · while busy with queued messages: ↑/↓ select, del removes · PgUp/PgDn — scroll · wheel — scroll · drag — select/copy text · ctrl+c ctrl+c — quit"))
+			"/model <name> [provider] — switch model\n/mcp [name] [reconnect|enable|disable] — MCP servers: status, reconnect, toggle\n/compact [model] [provider]|off — compact now at 90% context, or pick the compaction model\n/mouse — toggle mouse capture (on = wheel scroll + clicks, drag to copy)\n/theme [light|dark|auto] — color scheme (bare toggles)\n/tasks [id] — background subagents: focus the dock, or open one task's live view (ctrl+t toggles dock focus)\n/resume [id] — resume a previous session\n/goal <text> — keep working until the goal is met (resume | clear | rounds <n>|default [--global])\n/clear — reset conversation\n/quit — exit\ntab — complete · ctrl+t — focus the background-tasks dock (↑/↓ select, enter opens, esc backs out) · ctrl+o — toggle thinking tokens · ctrl+e — expand the last tool result · ctrl+j / shift+enter — newline · ctrl+v — paste image · esc — interrupt the agent · while busy with queued messages: ↑/↓ select, del removes · PgUp/PgDn — scroll · wheel — scroll · drag — select/copy text · ctrl+c ctrl+c — quit"))
 	case "/model":
 		if len(fields) < 2 {
 			m.openModelPicker()

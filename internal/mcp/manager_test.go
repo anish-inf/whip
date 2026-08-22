@@ -1,0 +1,305 @@
+package mcp
+
+import (
+	"context"
+	"encoding/json"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/context-labs/loopy/internal/tools"
+)
+
+// newTestServer builds an in-process MCP server with greet/fail/structured/
+// media tools for manager tests.
+func newTestServer(name string) *sdkmcp.Server {
+	srv := sdkmcp.NewServer(&sdkmcp.Implementation{Name: name}, nil)
+	{
+		type greetIn struct {
+			Name string `json:"name"`
+		}
+		sdkmcp.AddTool(srv, &sdkmcp.Tool{
+			Name:        "greet",
+			Description: "greets by name",
+			InputSchema: map[string]any{"type": "object", "properties": map[string]any{"name": map[string]any{"type": "string"}}},
+		}, func(ctx context.Context, req *sdkmcp.CallToolRequest, in greetIn) (*sdkmcp.CallToolResult, any, error) {
+			return &sdkmcp.CallToolResult{
+				Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: "hi " + in.Name}},
+			}, nil, nil
+		})
+		sdkmcp.AddTool(srv, &sdkmcp.Tool{
+			Name:        "fail",
+			Description: "always fails",
+			InputSchema: map[string]any{"type": "object"},
+		}, func(ctx context.Context, req *sdkmcp.CallToolRequest, in struct{}) (*sdkmcp.CallToolResult, any, error) {
+			return &sdkmcp.CallToolResult{
+				Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: "boom"}},
+				IsError: true,
+			}, nil, nil
+		})
+		sdkmcp.AddTool(srv, &sdkmcp.Tool{
+			Name:        "structured",
+			Description: "returns only structured content",
+			InputSchema: map[string]any{"type": "object"},
+		}, func(ctx context.Context, req *sdkmcp.CallToolRequest, in struct{}) (*sdkmcp.CallToolResult, any, error) {
+			return &sdkmcp.CallToolResult{StructuredContent: map[string]any{"answer": 42}}, nil, nil
+		})
+		sdkmcp.AddTool(srv, &sdkmcp.Tool{
+			Name:        "media",
+			Description: "returns an image",
+			InputSchema: map[string]any{"type": "object"},
+		}, func(ctx context.Context, req *sdkmcp.CallToolRequest, in struct{}) (*sdkmcp.CallToolResult, any, error) {
+			return &sdkmcp.CallToolResult{Content: []sdkmcp.Content{
+				&sdkmcp.TextContent{Text: "here you go"},
+				&sdkmcp.ImageContent{MIMEType: "image/png", Data: []byte{1, 2, 3}},
+			}}, nil, nil
+		})
+	}
+	return srv
+}
+
+// waitReady blocks until every server settles its first connect attempt.
+func waitReady(t *testing.T, m *Manager) {
+	t.Helper()
+	for _, s := range m.servers {
+		select {
+		case <-s.ready:
+		case <-time.After(10 * time.Second):
+			t.Fatalf("server %s never settled", s.name)
+		}
+	}
+}
+
+// newTestManager wires a manager whose connects each get a FRESH in-process
+// server+transport (real stdio/HTTP transports are fresh per attempt too — a
+// closed in-memory transport can't reconnect).
+func newTestManager(t *testing.T, cfgs map[string]ServerConfig) *Manager {
+	t.Helper()
+	m := NewManager(cfgs)
+	m.connectTransport = func(cfg ServerConfig, stderr *ringBuffer) (sdkmcp.Transport, error) {
+		return serveTestServer(t, cfg.Command[0]), nil // Command[0] is the server name in tests
+	}
+	t.Cleanup(m.Close)
+	return m
+}
+
+// serveTestServer starts one in-process MCP server behind a fresh in-memory
+// client transport. The server is connected (not Run) so a client
+// disconnect ends just the session, leaving the server able to accept a
+// reconnect on a fresh transport — like a real stdio server respawn.
+func serveTestServer(t *testing.T, name string) *sdkmcp.InMemoryTransport {
+	t.Helper()
+	srv := newTestServer(name)
+	clientT, serverT := sdkmcp.NewInMemoryTransports()
+	ss, err := srv.Connect(context.Background(), serverT, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ss.Close() })
+	return clientT
+}
+
+func testCfg(name string) ServerConfig {
+	return ServerConfig{Command: []string{name}, StartupTimeout: 5, ToolTimeout: 5}
+}
+
+func TestManagerConnectAndCall(t *testing.T) {
+	m := newTestManager(t, map[string]ServerConfig{"docs": testCfg("docs")})
+	m.Start(context.Background())
+	waitReady(t, m)
+
+	ts := m.Tools()
+	if len(ts) != 4 {
+		t.Fatalf("expected 4 tools, got %d: %v", len(ts), toolNames(ts))
+	}
+	out := tools.Execute(context.Background(), ts, "mcp__docs__greet", json.RawMessage(`{"name":"loopy"}`))
+	if out != "hi loopy" {
+		t.Errorf("greet = %q", out)
+	}
+
+	st := m.Statuses()
+	if len(st) != 1 || st[0].Status != StatusReady || st[0].Tools != 4 {
+		t.Fatalf("status = %+v", st)
+	}
+}
+
+func TestManagerToolFailuresAreToolOutput(t *testing.T) {
+	m := newTestManager(t, map[string]ServerConfig{"docs": testCfg("docs")})
+	m.Start(context.Background())
+	waitReady(t, m)
+	out := tools.Execute(context.Background(), m.Tools(), "mcp__docs__fail", nil)
+	if !strings.HasPrefix(out, "Error: ") || !strings.Contains(out, "boom") {
+		t.Errorf("fail = %q", out)
+	}
+}
+
+func TestManagerStructuredAndMedia(t *testing.T) {
+	m := newTestManager(t, map[string]ServerConfig{"docs": testCfg("docs")})
+	m.Start(context.Background())
+	waitReady(t, m)
+	ts := m.Tools()
+	out := tools.Execute(context.Background(), ts, "mcp__docs__structured", nil)
+	if !strings.Contains(out, `"answer": 42`) {
+		t.Errorf("structured = %q", out)
+	}
+	out = tools.Execute(context.Background(), ts, "mcp__docs__media", nil)
+	if !strings.Contains(out, "here you go") || !strings.Contains(out, "[image content omitted: image/png, 3 bytes]") {
+		t.Errorf("media = %q", out)
+	}
+}
+
+func TestManagerFailedServerDegradesToErrorString(t *testing.T) {
+	m := NewManager(map[string]ServerConfig{"ghost": testCfg("ghost")})
+	// No transport registered for "ghost": connect fails.
+	m.connectTransport = func(cfg ServerConfig, stderr *ringBuffer) (sdkmcp.Transport, error) {
+		return nil, context.DeadlineExceeded
+	}
+	t.Cleanup(m.Close)
+	m.Start(context.Background())
+	waitReady(t, m)
+
+	st := m.Statuses()
+	if st[0].Status != StatusFailed || st[0].Err == "" {
+		t.Fatalf("status = %+v", st)
+	}
+	if n := len(m.Tools()); n != 0 {
+		t.Fatalf("failed server contributed %d tools", n)
+	}
+	// A direct call against a tool name for the dead server is an error
+	// string, not a hang or panic.
+	s := m.servers["ghost"]
+	_, err := s.call(context.Background(), "anything", nil)
+	if err == nil || !strings.Contains(err.Error(), "unavailable") {
+		t.Errorf("call err = %v", err)
+	}
+}
+
+func TestManagerReconnect(t *testing.T) {
+	m := newTestManager(t, map[string]ServerConfig{"docs": testCfg("docs")})
+	m.Start(context.Background())
+	waitReady(t, m)
+	if st := m.Statuses(); st[0].Status != StatusReady {
+		t.Fatal("expected ready")
+	}
+	// Kill the session; the watcher marks the server failed.
+	s := m.servers["docs"]
+	s.mu.Lock()
+	sess := s.sess
+	s.mu.Unlock()
+	sess.Close()
+	deadline := time.Now().Add(2 * time.Second)
+	for m.Statuses()[0].Status != StatusFailed && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if st := m.Statuses(); st[0].Status != StatusFailed {
+		t.Fatalf("after session close: %+v", st[0])
+	}
+	// Reconnect brings it back.
+	if !m.Reconnect("docs") {
+		t.Fatal("reconnect returned false")
+	}
+	for m.Statuses()[0].Status != StatusReady && time.Now().Before(deadline.Add(2*time.Second)) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if st := m.Statuses(); st[0].Status != StatusReady {
+		t.Fatalf("after reconnect: %+v", st[0])
+	}
+	out := tools.Execute(context.Background(), m.Tools(), "mcp__docs__greet", json.RawMessage(`{"name":"back"}`))
+	if out != "hi back" {
+		t.Errorf("greet after reconnect = %q", out)
+	}
+	if m.Reconnect("nope") {
+		t.Error("reconnect of unknown server should return false")
+	}
+}
+
+func TestManagerParallelCallsRaceClean(t *testing.T) {
+	var calls atomic.Int64
+	m := newTestManager(t, map[string]ServerConfig{"a": testCfg("a"), "b": testCfg("b")})
+	m.Start(context.Background())
+	waitReady(t, m)
+	ts := m.Tools()
+
+	done := make(chan struct{}, 32)
+	for i := 0; i < 32; i++ {
+		go func(i int) {
+			name := "mcp__a__greet"
+			if i%2 == 1 {
+				name = "mcp__b__greet"
+			}
+			out := tools.Execute(context.Background(), ts, name, json.RawMessage(`{"name":"x"}`))
+			if out == "hi x" {
+				calls.Add(1)
+			}
+			done <- struct{}{}
+		}(i)
+	}
+	for i := 0; i < 32; i++ {
+		<-done
+	}
+	if calls.Load() != 32 {
+		t.Errorf("only %d/32 calls succeeded", calls.Load())
+	}
+}
+
+func TestManagerCallRespectsCancel(t *testing.T) {
+	m := NewManager(map[string]ServerConfig{"slowpoke": testCfg("slowpoke")})
+	// Server that never settles its connect: transport that blocks forever.
+	m.connectTransport = func(cfg ServerConfig, stderr *ringBuffer) (sdkmcp.Transport, error) {
+		return &hangTransport{}, nil
+	}
+	t.Cleanup(m.Close)
+	m.Start(context.Background())
+
+	s := m.servers["slowpoke"]
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, err := s.call(ctx, "greet", nil)
+	if err == nil || time.Since(start) > time.Second {
+		t.Errorf("call should respect ctx cancel while connecting, err=%v after %s", err, time.Since(start))
+	}
+}
+
+// hangTransport never finishes Connect (a wedged server process).
+type hangTransport struct{}
+
+func (hangTransport) Connect(ctx context.Context) (sdkmcp.Connection, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func toolNames(ts []tools.Tool) []string {
+	var out []string
+	for _, t := range ts {
+		out = append(out, t.Def.Function.Name)
+	}
+	return out
+}
+
+func TestNormalizeSchema(t *testing.T) {
+	got := normalizeSchema(nil)
+	if got != `{"type":"object","properties":{}}` {
+		t.Errorf("nil schema = %s", got)
+	}
+	got = normalizeSchema(map[string]any{"title": "x"})
+	var m map[string]any
+	if err := json.Unmarshal([]byte(got), &m); err != nil {
+		t.Fatal(err)
+	}
+	if m["type"] != "object" || m["properties"] == nil || m["title"] != "x" {
+		t.Errorf("coerced schema = %v", m)
+	}
+}
+
+func TestFlattenTruncates(t *testing.T) {
+	big := strings.Repeat("x", 60_000)
+	res := &sdkmcp.CallToolResult{Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: big}}}
+	out := flattenResult(res)
+	if len(out) > 60_0000 || !strings.Contains(out, "[truncated") {
+		t.Errorf("truncation missing, len=%d", len(out))
+	}
+}

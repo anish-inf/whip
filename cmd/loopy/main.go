@@ -53,6 +53,15 @@ func main() {
 		return
 	}
 
+	// `loopy mcp ...` — server management and the MCP server mode.
+	if flag.NArg() > 0 && flag.Arg(0) == "mcp" {
+		if err := mcpCLI(flag.Args()[1:], version); err != nil {
+			fmt.Fprintln(os.Stderr, "loopy:", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	cfg, err := config.Load()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "loopy:", err)

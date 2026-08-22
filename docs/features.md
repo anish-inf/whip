@@ -134,6 +134,60 @@ errors for the compaction retry, `Stream` returns the message + usage, and
   `@file` mentions, `$skill` invocation, `/goal` loop, `/resume` session
   picker, `/effort` reasoning levels — see the roadmap for the full list.
 
+## MCP
+
+`internal/mcp/` — loopy is an MCP client (stdio + streamable HTTP) and, via
+`loopy mcp serve`, an MCP server. Three sources of server config merge with
+loopy's own on top (per-name, whole entry): a project `.mcp.json`
+(claude-style: `{"mcpServers": {name: {type, command, args, env, url,
+headers}}}`), `~/.codex/config.toml` `[mcp_servers.*]` (codex-style), and the
+`"mcp"` block in `~/.loopy/config.json`. Claude `type: sse` imports as
+disabled-with-note (legacy transport); `${VAR}` references in env/headers
+expand from loopy's environment.
+
+- **Manager** (`manager.go`) — one lifecycle goroutine per server; a
+  `ready chan struct{}` closes once on first settle (the BackgroundTask
+  close-to-broadcast pattern), so tool calls block only on *their* server and
+  startup never waits. Statuses: connecting → ready/failed (plus disabled);
+  a dropped session flips to failed via a generation-guarded watcher
+  (opencode's client-identity check, `mcp/index.ts:443`). Connect/list bounded
+  by `startupTimeout` (default 30s — opencode's DEFAULT_TIMEOUT).
+- **Tool bridge** — listed tools become agent tools named
+  `mcp__<server>__<tool>` (claude-code convention; double underscores keep
+  the split unambiguous since tool names contain `_`). Unsafe server-name
+  chars get an fnv hash suffix so sanitized names can't collide (an opencode
+  weakness). Calls serialize per server (1-cap channel — many stdio servers
+  are single-request), run under `toolTimeout` (default 60s), and respect
+  ctrl+c via ctx. Results flatten to text: images/audio/binary resources →
+  placeholders, `structuredContent` → JSON when there's no text, `IsError` →
+  `"Error: …"` fed back to the model — a broken MCP tool never kills a turn.
+  Output capped at the shared 50KB truncation. MCP tools take no file locks
+  and run in parallel with everything.
+- **Late arrivals** — `Manager.SetOnChange` pushes refreshed tool sets into
+  `Agent.SetMCPTools` (mutex-guarded; a settle mid-turn can't race the slice
+  a request reads), so a server connecting after turn 1 appears without a
+  restart.
+- **TUI** — `/mcp` shows the status table (`● N tools` / `✗ err` /
+  `○ disabled` / `◌ connecting…`); `/mcp <name> reconnect|enable|disable`
+  reconnects live or persists a toggle through the guarded `Config.Save`.
+- **CLI** — `loopy mcp list` (merged view with source labels), `loopy mcp
+  add <name> -- <cmd...>` / `--url`, `loopy mcp remove`. `loopy mcp serve`
+  (`serve.go`) exposes loopy's read/bash/edit/write as an MCP stdio server
+  for other harnesses.
+- **Shutdown** — `Manager.Close()` runs before `bashrun.KillAll()`; stdio
+  children spawn in their own process group, and the SDK terminates them
+  (stdin close → SIGTERM → SIGKILL after 3s).
+
+Tests: `config_test.go` (claude/codex parsing incl. a real-world codex
+config, merge precedence, discovery errors, tool-name round-trips),
+`manager_test.go` (connect/call, error-as-output, structured+media
+flattening, dead-server degradation, reconnect, parallel calls under `-race`,
+ctx cancel mid-connect), `loop_test.go` (model→MCP→model round trip against
+a fake provider; stale def on a dead server returns `"Error: …"` and the turn
+completes), `selfhost_test.go` (`loopy mcp serve` end-to-end, gated on
+`LOOPY_TEST_SELFHOST=1`), `tui/mcp_test.go` (status view, toggle persistence
+round-trip).
+
 ## Process safety
 
 `internal/tools/bashrun/bashrun.go` — every command the agent runs is tracked
