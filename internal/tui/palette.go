@@ -257,14 +257,11 @@ func (m *model) paletteItems() []paletteItem {
 			dynDesc: func(m *model) string { return "show or hide model reasoning" },
 			dynHint: func(m *model) string { return "ctrl+o" },
 			run: func(m *model) (tea.Model, tea.Cmd) {
-				m.showThinking = !m.showThinking
-				if !m.showThinking {
-					m.flushThink()
-				}
+				m.toggleThinking()
 				return m, nil
 			},
-			stepBack: func(m *model) { m.showThinking = false; m.flushThink() },
-			stepFwd:  func(m *model) { m.showThinking = true }},
+			stepBack: func(m *model) { m.setThinking(false) },
+			stepFwd:  func(m *model) { m.setThinking(true) }},
 		{title: "Theme", category: "Display",
 			dynDesc: func(m *model) string { return "current: " + CurrentTheme() },
 			dynHint: func(m *model) string { return "/theme" },

@@ -132,6 +132,52 @@ func TestStoreRoundTrip(t *testing.T) {
 	}
 }
 
+func TestEffortRoundTrip(t *testing.T) {
+	st, err := Open(filepath.Join(t.TempDir(), "s.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	id, err := st.Create("/tmp", "m", "p")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Save(id, 1, []llm.Message{{Role: "system"}, {Role: "user", Content: "q"}}, "m", "p"); err != nil {
+		t.Fatal(err)
+	}
+
+	// a fresh row has no per-session effort: resume inherits the global default
+	meta, _, err := st.Load(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.Effort != "" {
+		t.Fatalf("new session should carry no effort, got %q", meta.Effort)
+	}
+
+	if err := st.SetEffort(id, "high"); err != nil {
+		t.Fatal(err)
+	}
+	meta, _, _ = st.Load(id)
+	if meta.Effort != "high" {
+		t.Fatalf("effort did not round-trip: %q", meta.Effort)
+	}
+
+	// a fork inherits the parent's effort
+	forkID, err := st.Fork(id, 1, "copy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fmeta, _, err := st.Load(forkID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fmeta.Effort != "high" {
+		t.Fatalf("fork should inherit effort, got %q", fmeta.Effort)
+	}
+}
+
 func TestUserHistory(t *testing.T) {
 	st, err := Open(filepath.Join(t.TempDir(), "s.db"))
 	if err != nil {
