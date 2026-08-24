@@ -174,7 +174,7 @@ func newInput() textarea.Model {
 	ti.Placeholder = "Ask loopy anything… (/ for commands, tab completes)"
 	ti.Prompt = "┃ "
 	ti.SetHeight(1)
-	ti.MaxHeight = 12 // input grows with content up to this many lines
+	ti.MaxHeight = 24 // input grows with content up to this many lines
 	ti.ShowLineNumbers = false
 	ti.KeyMap.InsertNewline = key.NewBinding(
 		key.WithKeys("ctrl+j", "shift+enter", "alt+enter"),
