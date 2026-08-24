@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/context-labs/loopy/internal/llm"
@@ -52,6 +53,11 @@ type Agent struct {
 	pending   []string // steered user messages awaiting injection
 	compacted bool     // a compaction already happened this turn — don't retry-loop
 
+	// msgsSnap publishes a snapshot of Messages after every agent-side
+	// mutation so concurrent readers (tests, UIs rendering another
+	// goroutine's turn) never read the live slice. See MessagesSnapshot.
+	msgsSnap atomic.Pointer[[]llm.Message]
+
 	files *fileLocks // per-path mutation locks for parallel tool calls
 	bg    *taskRegistry
 
@@ -83,6 +89,7 @@ func (a *Agent) AppendUser(content string) {
 	a.mu.Lock()
 	a.Messages = append(a.Messages, llm.Message{Role: "user", Content: content})
 	a.mu.Unlock()
+	a.publishMsgs()
 }
 
 func (a *Agent) drainPending() []string {
@@ -149,7 +156,25 @@ func New(client *llm.Client, model string, maxTokens int, systemPrompt string) *
 	a.Tools = append(tools.All(), taskTool(a))
 	a.files = newFileLocks()
 	a.bg = newTaskRegistry()
+	a.publishMsgs()
 	return a
+}
+
+// publishMsgs stores a snapshot of Messages for concurrent readers. Call
+// after every agent-side mutation of a.Messages.
+func (a *Agent) publishMsgs() {
+	snap := append([]llm.Message(nil), a.Messages...)
+	a.msgsSnap.Store(&snap)
+}
+
+// MessagesSnapshot returns a copy of the conversation safe to read while a
+// turn runs on another goroutine. Direct field access (a.Messages) is only
+// safe for the goroutine driving the turn.
+func (a *Agent) MessagesSnapshot() []llm.Message {
+	if p := a.msgsSnap.Load(); p != nil {
+		return *p
+	}
+	return append([]llm.Message(nil), a.Messages...)
 }
 
 // SetMCPTools swaps in the current MCP tool set (called by the MCP manager's
@@ -213,6 +238,7 @@ func (a *Agent) turn(ctx context.Context, input string, authored bool, ev Events
 		msg.SentAt = &now
 	}
 	a.Messages = append(a.Messages, msg)
+	a.publishMsgs()
 	for {
 		if err := a.maybeCompact(ctx, ev); err != nil {
 			return "", err
@@ -247,6 +273,7 @@ func (a *Agent) turn(ctx context.Context, input string, authored bool, ev Events
 		msg.Usage = &usage
 		msg.Model = a.Model + " @ " + a.Provider
 		a.Messages = append(a.Messages, msg)
+		a.publishMsgs()
 		if len(msg.ToolCalls) > 0 {
 			results := a.runTools(ctx, msg.ToolCalls, ev)
 			for i, tc := range msg.ToolCalls {
@@ -257,6 +284,7 @@ func (a *Agent) turn(ctx context.Context, input string, authored bool, ev Events
 					Name:       tc.Function.Name,
 				})
 			}
+			a.publishMsgs()
 			if ctx.Err() != nil {
 				return "", ctx.Err()
 			}
@@ -267,6 +295,9 @@ func (a *Agent) turn(ctx context.Context, input string, authored bool, ev Events
 				ev.OnSteer(s)
 			}
 			a.Messages = append(a.Messages, llm.Message{Role: "user", Content: s})
+		}
+		if len(steered) > 0 {
+			a.publishMsgs()
 		}
 		if len(msg.ToolCalls) == 0 && len(steered) == 0 {
 			a.compacted = false // reset for the next Turn
@@ -461,6 +492,7 @@ func (a *Agent) compact(ctx context.Context) error {
 	a.Messages = append(append([]llm.Message{}, sysPrompt,
 		llm.Message{Role: "system", Content: "Summary of the conversation so far:\n\n" + strings.TrimSpace(summary)},
 	), kept...)
+	a.publishMsgs()
 	return nil
 }
 

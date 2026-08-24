@@ -314,14 +314,14 @@ disables the built-in; absence of config = gopls active when on PATH.
   identical empty list, which a diff can't see. Versionless servers
   (rust-analyzer) are covered by the same wake since publish() closes all
   waiters on the file.
-- 2026-08-24: `go build`, `go vet`, `gofmt -s`, `go test ./...` all green;
-  `go test -race` green EXCEPT pre-existing failure on main:
-  `TestEmptyEnter{SteerDrainsQueue,IdleDrainsStuckQueue}` in
-  internal/tui/queue_test.go — the test helper `hasUserMsg` polls
-  `m.agent.Messages` from the test goroutine while the turn goroutine
-  appends (Agent.Messages is a bare field). Reproduces on main with the
-  branch fully stashed. Needs an agent-side snapshot accessor + test
-  update; separate fix, not folded into this diff.
+- 2026-08-24: `go build`, `go vet`, `gofmt -s`, `go test ./...` all green.
+  The two `-race` failures in `TestEmptyEnter{SteerDrainsQueue,
+  IdleDrainsStuckQueue}` (internal/tui/queue_test.go) turned out to be a
+  pre-existing main-branch bug — the helper `hasUserMsg` polled the bare
+  `m.agent.Messages` field while the turn goroutine appended — and were
+  fixed in this branch at the root: `Agent` now publishes an atomic snapshot
+  on every `Messages` mutation (`publishMsgs`/`MessagesSnapshot`), and the
+  helper reads the snapshot. `go test -race ./...` is fully green.
 - 2026-08-24: adversarial review landed and was applied: (1) BLOCKER —
   `client.send` could block forever on a wedged server (full out-buffer,
   dead never closes); fixed with a 5s writeTimeout that tears the client

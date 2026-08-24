@@ -298,12 +298,13 @@ func TestEmptyEnterSteerDrainsQueue(t *testing.T) {
 }
 
 // hasUserMsg reports whether the conversation holds the given user message.
-// submitTurn appends it from a goroutine, so poll briefly rather than assert
-// on the first read.
+// submitTurn appends it from a goroutine, so read via the agent's published
+// snapshot (never the live slice) and poll briefly rather than assert on the
+// first read.
 func hasUserMsg(t *testing.T, m *model, content string) bool {
 	t.Helper()
 	for range 100 {
-		for _, msg := range m.agent.Messages {
+		for _, msg := range m.agent.MessagesSnapshot() {
 			if msg.Role == "user" && msg.Content == content {
 				return true
 			}
