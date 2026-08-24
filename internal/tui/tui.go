@@ -21,6 +21,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/context-labs/loopy/internal/agent"
+	"github.com/context-labs/loopy/internal/browser"
 	"github.com/context-labs/loopy/internal/config"
 	"github.com/context-labs/loopy/internal/llm"
 	"github.com/context-labs/loopy/internal/lsp"
@@ -786,6 +787,34 @@ func buildAgent(cfg *config.Config, modelName, provName, sysPrompt string) (*age
 	ag := agent.New(llm.New(prov.BaseURL, key), apiID, maxOut, sysPrompt)
 	ag.ModelName, ag.Provider = modelName, provName
 	ag.ContextLimit = ctxLimit
+	// Native browser subsystem: install the shared manager once; screenshots
+	// steer back into the conversation as image parts on vision models.
+	ag.BrowserDisabled = cfg.Browser.Enabled != nil && !*cfg.Browser.Enabled
+	if !ag.BrowserDisabled && tools.Browser == nil {
+		mode := browser.ModeLive
+		switch cfg.Browser.Mode {
+		case "dedicated":
+			mode = browser.ModeDedicated
+		case "headless":
+			mode = browser.ModeHeadless
+		}
+		tools.Browser = browser.NewManager(mode)
+		if cfg.Browser.CDPURL != "" {
+			os.Setenv("LOOPY_CDP_URL", cfg.Browser.CDPURL)
+		}
+		browser.AllowPrivateURLs = cfg.Browser.AllowPrivateURLs
+	}
+	if modelSupportsVision(cfg, modelName, apiID, config.LoadCatalogs(), provName) {
+		tools.ScreenshotSink = func(jpegs [][]byte) {
+			var parts []llm.ContentPart
+			for _, j := range jpegs {
+				parts = append(parts, llm.ImagePart("jpg", j))
+			}
+			ag.SteerImages("browser_exec screenshots attached:", parts)
+		}
+	} else {
+		tools.ScreenshotSink = nil
+	}
 	return ag, modelName, provName, nil
 }
 
@@ -1314,9 +1343,17 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case toolStartMsg:
 		m.flushThink()
 		m.flushCurrent()
+		args := msg.args
+		if msg.name == "browser_exec" {
+			// Surface the step label (the code's first # comment) as the row
+			// text instead of raw JSON — the model writes it for the user.
+			if label := browserStepLabel(msg.args); label != "" {
+				args = label
+			}
+		}
 		// full args, wrapped at render time like every other block — no
 		// truncation: the command being run must always be fully visible
-		m.append(toolStyle.Render("⚒ "+msg.name+" ") + dimStyle.Render(msg.args))
+		m.append(toolStyle.Render("⚒ "+msg.name+" ") + dimStyle.Render(args))
 		return m, nil
 
 	case toolEndMsg:
@@ -2404,15 +2441,21 @@ func (m *model) prepareTurn(text string) (string, []llm.ContentPart) {
 // advertised input_modalities entry (from /models, cached in the catalog)
 // wins; otherwise the config's per-model vision flag decides (default false).
 func (m *model) supportsVision() bool {
-	id := m.agent.Model
-	if cat, ok := m.catalogs[m.provName]; ok {
-		if vision, found := cat.SupportsVision(id); found {
+	return modelSupportsVision(m.cfg, m.modelName, m.agent.Model, m.catalogs, m.provName)
+}
+
+// modelSupportsVision is supportsVision lifted off the TUI model so
+// buildAgent (which runs before the model exists) can gate the screenshot
+// sink the same way.
+func modelSupportsVision(cfg *config.Config, modelName, modelID string, catalogs map[string]config.Catalog, provName string) bool {
+	if cat, ok := catalogs[provName]; ok {
+		if vision, found := cat.SupportsVision(modelID); found {
 			return vision
 		}
 	}
-	if m.cfg != nil {
-		if cfg, ok := m.cfg.Models[m.modelName]; ok {
-			return cfg.Vision
+	if cfg != nil {
+		if mc, ok := cfg.Models[modelName]; ok {
+			return mc.Vision
 		}
 	}
 	return false

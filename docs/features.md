@@ -452,3 +452,65 @@ Tests: `tui/startup_report_test.go` (warnings, MCP glyphs, silence when empty).
 
 Installed: the `golang-*` skill set plus `i-have-adhd` (output-shaping for ADHD
 readers; invoke with `/i-have-adhd`, off with "stop adhd mode").
+
+## Browser automation
+
+`internal/browser/` + `internal/tools/browser*.go` — a native Go browser
+subsystem (go-rod/rod; no Python/Node) exposed to the model as one
+code-shaped tool, `browser_exec`. Design: docs/learnings/browser-use-integration.md §5b.
+
+- **Three modes** (`config.Browser.Mode`): `live` attaches to the user's
+  running Chromium-family browser (their real cookies/sessions) via
+  DevToolsActivePort profile scan + SingletonLock liveness + `/json/version`
+  → WS resolution (Chrome 147+ 404 falls back to the file's WS path;
+  Chrome 144+ 403 surfaces as `ErrPermissionBlocked` with user-actionable
+  text). `dedicated` launches a separate Chrome with a loopy-owned
+  `~/.loopy/browser/dedicated-profile` (no popups); `headless` is the same
+  without a window. Explicit endpoints win: `LOOPY_CDP_WS`/`LOOPY_CDP_URL`
+  env or `browser.cdpUrl` config.
+- **One tool, per hermes's benchmark** (36/36 task success at ~60% fewer
+  schema tokens vs a 12-tool granular set): the `code` argument is a line/
+  semicolon-separated helper-call program (`goto`, `js`, `click`, `type`,
+  `press`, `fill`, `scroll`, `waitLoad`, `waitFor`, `ax`+`box` for
+  AX-tree→coordinate workflows, `tabs`/`useTab`, `upload`, `dialog`,
+  `screenshot`, `info`, `print`) — parsed by a ~200-line quote-aware
+  mini-interpreter (`browser_lang.go`), no eval surface in loopy.
+- **Named sessions** (`session: "<name>"`, prefix `<mode>:` to override the
+  default mode per session): one lazily-opened browser per (mode, name),
+  calls serialized through a 1-capacity channel semaphore (the filelocks
+  idiom), dead connections reopened once (stale-tab recovery).
+- **Safety floor** (`safety.go`, ported from hermes's url_safety.py):
+  cloud-metadata endpoints (169.254.169.254, metadata.google.internal, ECS)
+  blocked unconditionally on every `goto` in every mode, all DNS answers
+  checked, fail-closed on resolution errors; private/LAN addresses blocked
+  on dedicated/headless unless `browser.allowPrivateUrls`; post-action URL
+  recheck neutralizes the page to about:blank when JS navigation laundered
+  the target.
+- **Vision loop**: `screenshot()` returns a JPEG (≤1568px, quality 80, via
+  CDP clip-scale); when the model has vision, the TUI's `ScreenshotSink`
+  steers the image into the conversation as a multimodal user message
+  (`Agent.SteerImages` → `pendingSteer.parts`), so the model inspects it
+  natively on the next request — no temp-file dance.
+- **UX**: the TUI tool row shows the code's first `# comment` as a
+  plain-language step label (`tui/browser.go browserStepLabel`) instead of
+  raw JSON; `browser.enabled: false` removes the tool.
+
+Tests: `internal/browser/browser_test.go` (DevToolsActivePort parsing,
+profile scan with fake dirs, /json/version + 404-fallback + 403-permission
+discovery, SSRF floor, session/mode selection), `e2e_test.go` (real Chrome
+× all three modes — cookie round-trip, AX-tree→click, screenshot JPEG,
+dedicated-profile isolation, live-attach survival after Close),
+`internal/tools/browser_lang_test.go` (parser), `schema_test.go` (all
+built-in tool schemas parse — ratchet for the request-corrupting malformed
+schema class), `browser_e2e_test.go` (tool-level E2E),
+`internal/agent/browser_test.go` (fake-provider loop: model calls
+browser_exec, page title reaches the model).
+
+Environment note (this dev box): Playwright's Chromium + unpacked Ubuntu
+debs under `/tmp/chromelibs` (LD_LIBRARY_PATH) drive the E2E tests; tests
+skip cleanly without a Chromium binary. Form-control text input
+(`<input>`/textarea) wedges the renderer in that sandboxed build — an
+environment quirk, not a rod/loopy bug; verified on real Chrome.
+
+The browser-use CLI-over-MCP escape hatch remains available via config for
+anyone wanting the Python ecosystem (§4 option B).

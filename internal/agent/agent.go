@@ -49,8 +49,8 @@ type Agent struct {
 	CompactThreshold float64
 
 	mu        sync.Mutex
-	pending   []string // steered user messages awaiting injection
-	compacted bool     // a compaction already happened this turn — don't retry-loop
+	pending   []pendingSteer // steered user messages awaiting injection
+	compacted bool           // a compaction already happened this turn — don't retry-loop
 
 	// msgsMu guards Messages for concurrent READERS: the turn goroutine
 	// mutates Messages freely, but a test/UI reader taking msgsMu sees a
@@ -66,6 +66,10 @@ type Agent struct {
 	toolsMu  sync.Mutex
 	mcpTools []tools.Tool
 
+	// BrowserDisabled, when true, keeps browser_exec out of the tool set
+	// (config browser.enabled=false) even when the manager hook exists.
+	BrowserDisabled bool
+
 	usageMu sync.Mutex
 	usage   llm.Usage // session totals across every API call (PromptTokens = input)
 }
@@ -75,7 +79,22 @@ type Agent struct {
 // never mid-generation.
 func (a *Agent) Steer(text string) {
 	a.mu.Lock()
-	a.pending = append(a.pending, text)
+	a.pending = append(a.pending, pendingSteer{text: text})
+	a.mu.Unlock()
+}
+
+// pendingSteer is a queued steered message, optionally carrying images
+// (browser_exec screenshots attach to the conversation this way).
+type pendingSteer struct {
+	text  string
+	parts []llm.ContentPart
+}
+
+// SteerImages is Steer with image parts — the model receives text and
+// images together as a multimodal user message at the loop boundary.
+func (a *Agent) SteerImages(text string, parts []llm.ContentPart) {
+	a.mu.Lock()
+	a.pending = append(a.pending, pendingSteer{text: text, parts: parts})
 	a.mu.Unlock()
 }
 
@@ -92,7 +111,7 @@ func (a *Agent) AppendUser(content string) {
 	a.mu.Unlock()
 }
 
-func (a *Agent) drainPending() []string {
+func (a *Agent) drainPending() []pendingSteer {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	p := a.pending
@@ -153,7 +172,11 @@ func New(client *llm.Client, model string, maxTokens int, systemPrompt string) *
 		MaxTokens: maxTokens,
 		Messages:  []llm.Message{{Role: "system", Content: systemPrompt}},
 	}
-	a.Tools = append(tools.All(), taskTool(a))
+	a.Tools = tools.All()
+	if !a.BrowserDisabled {
+		a.Tools = append(a.Tools, tools.BrowserExec())
+	}
+	a.Tools = append(a.Tools, taskTool(a))
 	a.files = newFileLocks()
 	a.bg = newTaskRegistry()
 	return a
@@ -296,9 +319,9 @@ func (a *Agent) turn(ctx context.Context, input string, parts []llm.ContentPart,
 		}
 		for _, s := range steered {
 			if ev.OnSteer != nil {
-				ev.OnSteer(s)
+				ev.OnSteer(s.text)
 			}
-			a.Messages = append(a.Messages, llm.Message{Role: "user", Content: s})
+			a.Messages = append(a.Messages, llm.Message{Role: "user", Content: s.text, Parts: s.parts})
 		}
 		if len(steered) > 0 {
 			a.msgsMu.Unlock()
