@@ -1412,8 +1412,18 @@ func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		(msg.Type == tea.KeyEnter && msg.Alt) ||
 		(msg.Type == tea.KeyRunes && msg.Alt && string(msg.Runes) == "\r") ||
 		isShiftEnterSeq(msg) {
+		// bubbles gates InsertNewline on MaxHeight, treating the visual cap as
+		// a content limit — after a paste reaches MaxHeight lines every ctrl+j
+		// would be silently swallowed. Lift the cap for this one call so the
+		// newline always lands (and the textarea's own repositionView scrolls
+		// the new line into view), then reapply the visual cap via SetHeight,
+		// which clamps rendering only, never content.
+		cap := m.input.MaxHeight
+		m.input.MaxHeight = 0
 		var cmd tea.Cmd
 		m.input, cmd = m.input.Update(tea.KeyMsg{Type: tea.KeyCtrlJ})
+		m.input.MaxHeight = cap
+		m.input.SetHeight(cap)
 		m.refreshMenu()
 		return m, cmd
 	}
