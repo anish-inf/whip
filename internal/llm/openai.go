@@ -21,6 +21,10 @@ type Message struct {
 	Content    string     `json:"content"`
 	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
 	ToolCallID string     `json:"tool_call_id,omitempty"`
+	// Name is the function name on role "tool" messages. OpenAI ignores it,
+	// but Moonshot/Kimi requires it ("tool messages need a resolvable tool
+	// name") — without it every tool-using turn 400s.
+	Name string `json:"name,omitempty"`
 	// Authored marks a user message the human actually typed and submitted, as
 	// opposed to one loopy injected on their behalf (steered background-task
 	// results, goal-check continuations). Internal only — never sent to the
@@ -78,6 +82,21 @@ func stripAuthored(msgs []Message) []Message {
 			out[i].ToolCalls[j].ExitCode = 0
 		}
 	}
+	// Backfill tool-message Name from the owning call (older sessions predate
+	// the field; providers that require it only look at Name).
+	names := map[string]string{}
+	for _, m := range out {
+		if m.Role == "assistant" {
+			for _, tc := range m.ToolCalls {
+				names[tc.ID] = tc.Function.Name
+			}
+		}
+	}
+	for i := range out {
+		if out[i].Role == "tool" && out[i].Name == "" {
+			out[i].Name = names[out[i].ToolCallID]
+		}
+	}
 	return out
 }
 
@@ -93,12 +112,14 @@ func stripAuthored(msgs []Message) []Message {
 // Idempotent: a well-formed conversation comes through unchanged.
 func repairToolHistory(msgs []Message) []Message {
 	answered := make(map[string]bool, len(msgs))
+	callName := make(map[string]string, len(msgs))
 	for i, m := range msgs {
 		if m.Role != "assistant" {
 			continue
 		}
 		for _, tc := range m.ToolCalls {
 			answered[tc.ID] = false
+			callName[tc.ID] = tc.Function.Name
 			for _, r := range msgs[i+1:] {
 				if r.Role == "tool" && r.ToolCallID == tc.ID {
 					answered[tc.ID] = true
@@ -118,6 +139,7 @@ func repairToolHistory(msgs []Message) []Message {
 				Role:       "tool",
 				Content:    "(interrupted before execution)",
 				ToolCallID: id,
+				Name:       callName[id],
 			})
 		}
 		pending = nil

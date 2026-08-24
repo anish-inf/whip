@@ -119,3 +119,37 @@ func TestStreamSendsSyntheticResultsForUnansweredCalls(t *testing.T) {
 		t.Fatalf("no tool result paired with unanswered call: %s", s)
 	}
 }
+
+// Moonshot/Kimi rejects tool messages without a "name" field (400 "tool
+// messages need a resolvable tool name"). Every tool result on the wire —
+// real, synthetic, or resumed from an old session — must carry the owning
+// function's name.
+func TestStreamToolMessagesCarryName(t *testing.T) {
+	var body []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n"))
+	}))
+	defer srv.Close()
+
+	calls := []ToolCall{{ID: "call_1"}}
+	calls[0].Function.Name = "bash"
+	msgs := []Message{
+		{Role: "user", Content: "q"},
+		{Role: "assistant", ToolCalls: calls},
+		// a real result from a pre-Name session: ToolCallID set, Name empty
+		{Role: "tool", Content: "ok", ToolCallID: "call_1"},
+		{Role: "assistant", ToolCalls: []ToolCall{{ID: "call_2"}}}, // unanswered
+	}
+	if _, _, err := New(srv.URL, "test-key").Stream(context.Background(), Request{Model: "m", Messages: msgs}, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	s := string(body)
+	if !strings.Contains(s, `"tool_call_id":"call_1","name":"bash"`) {
+		t.Fatalf("real result missing backfilled name: %s", s)
+	}
+	if !strings.Contains(s, `"role":"tool","content":"(interrupted before execution)","tool_call_id":"call_2"`) {
+		t.Fatalf("synthetic result missing: %s", s)
+	}
+}

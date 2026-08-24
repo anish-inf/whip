@@ -246,6 +246,7 @@ func (a *Agent) turn(ctx context.Context, input string, authored bool, ev Events
 					Role:       "tool",
 					Content:    results[i],
 					ToolCallID: tc.ID,
+					Name:       tc.Function.Name,
 				})
 			}
 			if ctx.Err() != nil {
