@@ -144,6 +144,11 @@ the repo root. The curated to-do view of all this lives in [../../../roadmap.md]
 
 - **Share links**: `/share` → consent dialog once (`share_consent` in KV), URL to
   clipboard, title flips to "Copy share link"; `/unshare` revokes.
+- **Clickable links**: a `Link` component (`packages/tui/src/ui/link.tsx`) opens
+  `href` via `open()` on `onMouseUp` — but it's only used in auth dialogs, never
+  in the chat transcript. loopy instead emits terminal-native OSC 8 hyperlinks
+  transcript-wide (URLs + existing local files), so every link is clickable with
+  no per-widget mouse plumbing (`internal/tui/links.go`).
 - **Rename** (ctrl+r), **fork** from timeline or from any message's action menu (fork
   carries the message's text + file parts into the new session's prompt).
 - **Timeline** (`<leader>g`, `dialog-timeline.tsx`): user messages newest-first;

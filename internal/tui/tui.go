@@ -524,7 +524,7 @@ func (m *model) seedTranscript(msgs []llm.Message, base int) {
 		switch msg.Role {
 		case "user":
 			bi = len(m.blocks)
-			m.blocks = append(m.blocks, block{kind: blockText, text: youStyle.Render("❯ ") + msg.Content})
+			m.blocks = append(m.blocks, block{kind: blockText, text: youStyle.Render("❯ ") + linkifyFilePaths(msg.Content, realFileExists)})
 		case "assistant":
 			if strings.TrimSpace(msg.Content) != "" {
 				bi = len(m.blocks)
@@ -1189,7 +1189,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case steeredMsg:
 		m.flushThink()
 		m.flushCurrent()
-		m.append(youStyle.Render("❯ ") + string(msg) + dimStyle.Render("  (steered)"))
+		m.append(youStyle.Render("❯ ") + linkifyFilePaths(string(msg), realFileExists) + dimStyle.Render("  (steered)"))
 		return m, nil
 
 	case shellDoneMsg:
@@ -2254,7 +2254,7 @@ func (m *model) submitTurn(text string, authored bool) (tea.Model, tea.Cmd) {
 		flush()
 		send(turnDoneMsg{final: final, err: err})
 	}()
-	m.append(youStyle.Render("❯ ") + text)
+	m.append(youStyle.Render("❯ ") + linkifyFilePaths(text, realFileExists))
 	if authored {
 		// map the message index to its block for rewind live-scroll
 		for len(m.msgBlock) <= userMsgIdx {

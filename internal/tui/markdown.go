@@ -29,7 +29,10 @@ func renderMarkdown(s string, width int) string {
 	if err != nil {
 		return s
 	}
-	return wrapWideLines(stripLinePadding(strings.Trim(out, "\n")), width)
+	rendered := stripLinePadding(strings.Trim(out, "\n"))
+	linked := hyperlinkGlamourLinks(rendered, realFileExists)
+	linked = linkifyRenderedFilePaths(linked, realFileExists)
+	return wrapWideLines(linked, width)
 }
 
 // wrapWideLines hard-wraps any rendered line still wider than width.
