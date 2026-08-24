@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -38,7 +37,7 @@ type chromedpBackend struct {
 // openChromedp connects per mode: live attaches via the discovered WS URL
 // (remote allocator); dedicated/headless launch via the default allocator
 // (chromedp's own launcher, headed off in headless mode).
-func openChromedp(ctx context.Context, mode Mode) (*chromedpBackend, error) {
+func openChromedp(ctx context.Context, mode Mode, sessionName string) (*chromedpBackend, error) {
 	b := &chromedpBackend{mode: mode}
 	var allocCtx context.Context
 	var cancel context.CancelFunc
@@ -55,7 +54,7 @@ func openChromedp(ctx context.Context, mode Mode) (*chromedpBackend, error) {
 			chromedp.Flag("remote-debugging-port", "0"), // string — int hits "invalid exec pool flag"
 		)
 		if home, err := os.UserHomeDir(); err == nil {
-			opts = append(opts, chromedp.UserDataDir(filepath.Join(home, ".loopy", "browser", "dedicated-profile")))
+			opts = append(opts, chromedp.UserDataDir(dedicatedProfileDir(home, sessionName)))
 		}
 		if bin := os.Getenv("ROD_BROWSER_BIN"); bin != "" { // same override hook
 			opts = append(opts, chromedp.ExecPath(bin))

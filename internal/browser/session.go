@@ -102,7 +102,7 @@ func (s *Session) get(ctx context.Context) (Backend, error) {
 	if s.backend != nil {
 		return s.backend, nil
 	}
-	b, err := Open(ctx, s.mode)
+	b, err := OpenNamed(ctx, s.mode, s.name)
 	if err != nil {
 		return nil, err
 	}
@@ -117,6 +117,14 @@ func (s *Session) drop() {
 		s.backend.Close()
 		s.backend = nil
 	}
+}
+
+// SwitchDriver sets the active driver and closes every open session so the
+// next browser_exec reopens on the new driver. Live-mode sessions detach
+// (the user's Chrome is untouched); dedicated/headless sessions are killed.
+func (m *Manager) SwitchDriver(d string) {
+	SetDriver(d)
+	m.CloseAll()
 }
 
 // CloseAll closes every session's backend. Dedicated/headless sessions
