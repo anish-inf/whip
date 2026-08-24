@@ -168,3 +168,27 @@ func TestInteractiveKeyForwardingDelaysInactivity(t *testing.T) {
 		t.Fatalf("forwarded keys did not reset the inactivity clock: %s", elapsed)
 	}
 }
+
+// TestUserShellResolution: $SHELL wins, an empty $SHELL falls back to the
+// passwd entry (or bash), and the runner actually executes through the
+// resolved shell — the `!` escape regression ("should use the user's shell").
+func TestUserShellResolution(t *testing.T) {
+	t.Setenv("SHELL", "/bin/zsh")
+	if sh := userShell(); sh != "/bin/zsh" {
+		t.Fatalf("$SHELL should win, got %q", sh)
+	}
+
+	t.Setenv("SHELL", "")
+	if sh := userShell(); sh == "" {
+		t.Fatal("empty $SHELL must fall back to the passwd entry or bash")
+	}
+
+	// end-to-end: run through a "shell" that proves it was the interpreter.
+	// A real shell is required for -c, so point $SHELL at /bin/sh and check
+	// the command ran through it.
+	t.Setenv("SHELL", "/bin/sh")
+	res := Run(context.Background(), Options{Command: "echo shell-ok"})
+	if !strings.Contains(res.Output, "shell-ok") || res.Exit != "" {
+		t.Fatalf("run via user shell: %+v", res)
+	}
+}

@@ -1,4 +1,5 @@
-// Package bashrun executes bash commands for the agent, with optional PTY
+// Package bashrun executes shell commands (via the user's shell, see
+// userShell) for the agent, with optional PTY
 // support for interactive programs (sudo, ssh, gpg) that prompt on the
 // controlling terminal.
 //
@@ -22,12 +23,48 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/user"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
 
 	"github.com/creack/pty"
 )
+
+// userShell resolves the user's login shell: $SHELL first, then the passwd
+// entry, then bash. `-c` semantics are POSIX, so zsh/fish/etc. all run the
+// same command strings bash would.
+func userShell() string {
+	if sh := os.Getenv("SHELL"); sh != "" {
+		return sh
+	}
+	if sh := passwdShell(); sh != "" {
+		return sh
+	}
+	return "bash"
+}
+
+// passwdShell reads the current user's shell field from /etc/passwd (last
+// colon-separated field of their entry). Empty when unresolvable — NIS/LDAP
+// users fall through to bash, same as before this change.
+func passwdShell() string {
+	u, err := user.Current()
+	if err != nil {
+		return ""
+	}
+	data, err := os.ReadFile("/etc/passwd")
+	if err != nil {
+		return ""
+	}
+	for line := range strings.Lines(string(data)) {
+		fields := strings.Split(strings.TrimRight(line, "\n"), ":")
+		if len(fields) == 7 && fields[2] == u.Uid {
+			return fields[6]
+		}
+	}
+	return ""
+}
 
 // Result is the outcome of one command run.
 type Result struct {
@@ -86,7 +123,7 @@ func Run(ctx context.Context, opts Options) Result {
 	ctx, cancel := context.WithTimeout(ctx, opts.Timeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "bash", "-c", opts.Command)
+	cmd := exec.CommandContext(ctx, userShell(), "-c", opts.Command)
 	cmd.Env = os.Environ()
 
 	if opts.Interactive {
