@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -360,7 +361,9 @@ func TestSessionCost(t *testing.T) {
 		{"zero usage", Usage{}, 1e-6, 5e-6, 1e-7, 0},
 	}
 	for _, c := range cases {
-		if got := SessionCost(c.u, c.in, c.out, c.cacheRead); got != c.want {
+		// float64 multiplication can't hit these decimals exactly; compare
+		// with tolerance rather than ==.
+		if got := SessionCost(c.u, c.in, c.out, c.cacheRead); math.Abs(got-c.want) > 1e-12 {
 			t.Errorf("%s: SessionCost = %v, want %v", c.name, got, c.want)
 		}
 	}

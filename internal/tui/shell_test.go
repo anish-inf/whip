@@ -2,6 +2,7 @@ package tui
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -163,7 +164,12 @@ func TestCdAndPwd(t *testing.T) {
 		t.Fatalf("/pwd should print the cwd: %q", b)
 	}
 
-	dir := t.TempDir()
+	// macOS: t.TempDir lives under /var, a symlink to /private/var — Getwd
+	// resolves it, the literal dir doesn't.
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	m.command("/cd " + dir)
 	if wd, _ := os.Getwd(); wd != dir {
 		t.Fatalf("/cd should chdir: got %q", wd)
@@ -194,7 +200,10 @@ func TestCdTilde(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.Chdir(orig) })
-	home := t.TempDir()
+	home, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	t.Setenv("HOME", home)
 
 	m := shellModel()
