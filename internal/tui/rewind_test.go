@@ -200,6 +200,56 @@ func TestEscDismissalDoesNotArm(t *testing.T) {
 	}
 }
 
+// Regression: the picker lists oldest at the TOP and the latest message at
+// the BOTTOM, with the selection starting on the latest. ↑ moves up toward
+// older, ↓ down toward newer. The bug was newest-first rendering plus a
+// "distance from newest" selection index, which read reversed.
+func TestRewindPickerOrderAndArrows(t *testing.T) {
+	m := rewindModel(t,
+		llm.Message{Role: "user", Content: "q1", Authored: true},
+		llm.Message{Role: "assistant", Content: "a1"},
+		llm.Message{Role: "user", Content: "q2", Authored: true},
+		llm.Message{Role: "assistant", Content: "a2"},
+		llm.Message{Role: "user", Content: "q3", Authored: true},
+	)
+	press(t, m, esc(m))
+	press(t, m, esc(m))
+
+	// entries are chronological; the selection starts on the LATEST (bottom)
+	if got := len(m.rew.entries); got != 3 {
+		t.Fatalf("entries: %d", got)
+	}
+	if m.rew.sel != 2 || m.rew.entries[m.rew.sel].text != "q3" {
+		t.Fatalf("selection should start on the latest q3: sel=%d", m.rew.sel)
+	}
+
+	// rendered top-to-bottom: q1, q2, q3 — q3 (the latest) last
+	view := m.rewindView()
+	i1, i2, i3 := strings.Index(view, "q1"), strings.Index(view, "q2"), strings.Index(view, "q3")
+	if !(i1 >= 0 && i1 < i2 && i2 < i3) {
+		t.Fatalf("list should read oldest→latest top→bottom (q1 q2 q3)\n%s", view)
+	}
+	// exactly one row carries the cursor marker, and it is q3's
+	if strings.Count(view, "❯") != 1 {
+		t.Fatalf("exactly one selected row should be marked\n%s", view)
+	}
+
+	// ↑ walks toward older (up the list): q3 → q2 → q1, then clamps
+	for _, want := range []string{"q2", "q1", "q1"} {
+		press(t, m, tea.KeyMsg{Type: tea.KeyUp})
+		if got := m.rew.entries[m.rew.sel].text; got != want {
+			t.Fatalf("↑ should move to %s, on %s", want, got)
+		}
+	}
+	// ↓ walks back toward newer: q1 → q2 → q3, then clamps at the latest
+	for _, want := range []string{"q2", "q3", "q3"} {
+		press(t, m, tea.KeyMsg{Type: tea.KeyDown})
+		if got := m.rew.entries[m.rew.sel].text; got != want {
+			t.Fatalf("↓ should move to %s, on %s", want, got)
+		}
+	}
+}
+
 func TestRewindTruncatesAndRestoresInput(t *testing.T) {
 	m := rewindModel(t,
 		llm.Message{Role: "user", Content: "q1", Authored: true},
@@ -209,7 +259,7 @@ func TestRewindTruncatesAndRestoresInput(t *testing.T) {
 	)
 	press(t, m, esc(m))
 	press(t, m, esc(m))
-	press(t, m, tea.KeyMsg{Type: tea.KeyUp}) // newest-first: 0→"q2", 1→"q1"
+	press(t, m, tea.KeyMsg{Type: tea.KeyUp}) // sel starts on the latest (q2); ↑ moves to q1
 	press(t, m, tea.KeyMsg{Type: tea.KeyEnter})
 
 	// rewound to just before q1: only the system prompt survives
@@ -250,7 +300,7 @@ func TestRewindForwardTravel(t *testing.T) {
 	)
 	press(t, m, esc(m))
 	press(t, m, esc(m))
-	press(t, m, tea.KeyMsg{Type: tea.KeyUp}) // select q1, rewind to just before it
+	press(t, m, tea.KeyMsg{Type: tea.KeyUp}) // q2 → q1, rewind to just before it
 	press(t, m, tea.KeyMsg{Type: tea.KeyEnter})
 	m.input.Reset()
 	if len(m.agent.Messages) != 1 || len(m.future) != 4 {
@@ -329,7 +379,7 @@ func TestPartialRewindKeepsPrefixInDB(t *testing.T) {
 	)
 	press(t, m, esc(m))
 	press(t, m, esc(m))
-	press(t, m, tea.KeyMsg{Type: tea.KeyUp}) // select q2 (0=q3, 1=q2)
+	press(t, m, tea.KeyMsg{Type: tea.KeyUp}) // sel starts on q3 (latest); ↑ moves to q2
 	press(t, m, tea.KeyMsg{Type: tea.KeyEnter})
 
 	if len(m.agent.Messages) != 3 { // sys, q1, a1

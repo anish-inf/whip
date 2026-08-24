@@ -32,8 +32,8 @@ type rewindEntry struct {
 }
 
 type rewindState struct {
-	entries []rewindEntry // chronological
-	sel     int           // newest-first navigation: 0 = last entry
+	entries []rewindEntry // chronological: oldest first, latest LAST
+	sel     int           // direct index into entries; starts at the latest
 	savedVP int           // viewport offset on open, restored on cancel
 }
 
@@ -85,22 +85,22 @@ func (m *model) openRewind() {
 		m.append(dimStyle.Render("(nothing to rewind to yet)"))
 		return
 	}
-	m.rew = &rewindState{entries: entries, savedVP: m.vp.YOffset}
-	m.scrollToMsg(entries[len(entries)-1].cut) // selection starts on the newest
+	m.rew = &rewindState{entries: entries, sel: len(entries) - 1, savedVP: m.vp.YOffset}
+	m.scrollToMsg(entries[len(entries)-1].cut) // selection starts on the latest
 }
 
 func (m *model) rewindKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	r := m.rew
-	sel := func() rewindEntry { return r.entries[len(r.entries)-1-r.sel] }
+	sel := func() rewindEntry { return r.entries[r.sel] }
 	switch msg.Type {
 	case tea.KeyEsc:
 		m.vp.SetYOffset(r.savedVP) // put the scroll back where the user had it
 		m.rew = nil
-	case tea.KeyUp:
-		r.sel = min(r.sel+1, len(r.entries)-1)
-		m.scrollToMsg(sel().cut)
-	case tea.KeyDown:
+	case tea.KeyUp: // up the list = toward the oldest (top)
 		r.sel = max(r.sel-1, 0)
+		m.scrollToMsg(sel().cut)
+	case tea.KeyDown: // down the list = toward the latest (bottom)
+		r.sel = min(r.sel+1, len(r.entries)-1)
 		m.scrollToMsg(sel().cut)
 	case tea.KeyEnter:
 		e := sel()
@@ -171,24 +171,25 @@ func (m *model) rebuildTranscript() {
 	m.seedTranscript(m.agent.Messages[1:], 1) // skip the system prompt
 }
 
-// rewindView renders the picker strip above the input.
+// rewindView renders the picker strip above the input: oldest at the top,
+// latest at the bottom, so ↑ moves toward older and ↓ toward newer.
 func (m *model) rewindView() string {
 	r := m.rew
 	const maxRows = 8
+	// window over entries; sel starts at the latest (bottom) so anchor there
 	start := max(0, min(r.sel-maxRows/2, len(r.entries)-maxRows))
 	end := min(start+maxRows, len(r.entries))
 	var b strings.Builder
 	b.WriteString(dimStyle.Render("⏪ rewind — enter: rewind here · f: fork from here · esc: cancel"))
 	for row := start; row < end; row++ {
-		e := r.entries[len(r.entries)-1-row]
+		e := r.entries[row]
 		b.WriteString("\n")
-		line := "❯ " + e.text
 		if row == r.sel {
-			b.WriteString(youStyle.Render(line))
+			b.WriteString(youStyle.Render("❯ " + e.text))
 		} else if e.future {
-			b.WriteString(dimStyle.Render(line + " (rewound)"))
+			b.WriteString(dimStyle.Render("  " + e.text + " (rewound)"))
 		} else {
-			b.WriteString("  " + line)
+			b.WriteString("  " + e.text)
 		}
 	}
 	fmt.Fprintf(&b, "\n%s", dimStyle.Render(fmt.Sprintf("  (%d/%d) ↑ older · ↓ newer", r.sel+1, len(r.entries))))
