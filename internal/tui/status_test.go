@@ -94,6 +94,32 @@ func TestStatusLineBelowInputAndWarnings(t *testing.T) {
 	}
 }
 
+// Exactly one blank line separates the status line from whatever is above it,
+// and the status line is the final row (no blank line below).
+func TestStatusLineSpacing(t *testing.T) {
+	m := statusModel()
+	m.modelName = "m"
+	m.provName = "p"
+
+	lines := strings.Split(m.View(), "\n")
+	var statusRow = -1
+	for i, l := range lines {
+		if strings.Contains(l, "0/0 tok") {
+			statusRow = i
+		}
+	}
+	if statusRow < 1 {
+		t.Fatalf("status line not found\n%s", m.View())
+	}
+	if lines[statusRow-1] != "" {
+		t.Errorf("want one blank line above the status line, got %q", lines[statusRow-1])
+	}
+	// the status line is the last row, with nothing below it
+	if statusRow != len(lines)-1 {
+		t.Errorf("status line should be the last row (row %d of %d lines)", statusRow, len(lines)-1)
+	}
+}
+
 // tailLines returns the last n lines of s, for failure output.
 func tailLines(s string, n int) string {
 	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")

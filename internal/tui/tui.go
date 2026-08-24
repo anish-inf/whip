@@ -2859,8 +2859,7 @@ func (m *model) View() string {
 	if m.menu != nil {
 		b.WriteString("\n" + m.menuView())
 	}
-	b.WriteString("\n" + m.statusView()) // persistent status line
-	b.WriteString("\n")                  // bottom padding
+	b.WriteString("\n\n" + m.statusView()) // persistent status line, with a blank line above
 	return b.String()
 }
 
