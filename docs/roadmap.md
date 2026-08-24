@@ -39,7 +39,7 @@ parallel tool calls and background subagents).
 - [ ] Diff view for `edit` tool results (pi edit tool returns `details: {diff, patch, firstChangedLine}` — `packages/agent/src/harness/tools/edit.ts`; opencode picks split vs unified by terminal width >120)
 - [ ] Tool rows: icon + present-participle verb while running ("Reading file…"), collapse to one line on completion, red + expandable on failure (opencode `routes/session/index.tsx:1836`, `util/collapse-tool-output.ts` — 19 lines)
 - [ ] Render tool calls as they stream, before execution starts (pi: `message_update` spawns `ToolExecutionComponent` keyed by tool-call id)
-- [ ] Spinner with elapsed time + token count (% of context window) + cost in status line (opencode `routes/session/footer.tsx`)
+- [ ] Spinner with elapsed time + token count (% of context window) in status line (opencode `routes/session/footer.tsx`) — cost part done (status line shows session spend when the provider advertises pricing)
 - [ ] Toast-style transient notifications for command success/failure (opencode `ui/toast.tsx` — 102 lines)
 - [ ] Desktop notification/sound when a turn finishes and the terminal is blurred (opencode `attention.ts` — "when: blurred" is the detail that makes it not-annoying)
 
@@ -52,7 +52,7 @@ parallel tool calls and background subagents).
 - [x] Timeline: jump-to-message picker that live-scrolls the transcript as you browse (opencode `dialog-timeline.tsx`) — the rewind picker (idle esc esc) does this and rewinds/forwards too
 - [x] Undo last message (conversation half): rewind restores the prompt text into the input for editing (opencode `routes/session/index.tsx:615`); file-change revert (opencode `revert.ts` git snapshots) is NOT done — conversation-only by design
 - [x] Compaction: summarize old turns when context fills (pi settings: `compaction: {reserveTokens, keepRecentTokens}`; opencode `/compact`) — `/compact` manually; auto-compacts proactively at a configurable % of the provider-advertised context_length (GET /models, cached in ~/.loopy/models.json; default 50%, `compactPct`, slidable ←/→ in the ctrl+p palette) plus retries once when the provider errors with context_length_exceeded; `/compact <model> [provider]` picks the summarizer (default `deepseek-v4-flash-0731`, else the current model when the default isn't configured); kept tail never orphans a tool_call from its result
-- [ ] Token/cost tracking per session (pi models.json carries `cost: {input, output, cacheRead, cacheWrite}`)
+- [x] Token/cost tracking per session (pi models.json carries `cost: {input, output, cacheRead, cacheWrite}`) — session usage totals in the status line; cost computed from provider-advertised `pricing` in GET /models (cached in ~/.loopy/models.json), cached input billed at the cache-read rate; hidden when the provider doesn't advertise prices
 - [ ] Export transcript to markdown with include-options dialog (opencode `/export`, `ui/dialog-export-options.tsx`)
 
 ## Agent loop

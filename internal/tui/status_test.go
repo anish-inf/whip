@@ -1,10 +1,14 @@
 package tui
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/context-labs/loopy/internal/agent"
+	"github.com/context-labs/loopy/internal/config"
 	"github.com/context-labs/loopy/internal/llm"
 )
 
@@ -129,4 +133,107 @@ func tailLines(s string, n int) string {
 		lines = lines[len(lines)-n:]
 	}
 	return strings.Join(lines, "\n")
+}
+
+// Cost appears in the spend segment when the provider's catalog advertises
+// pricing for the current model, and is hidden otherwise.
+func TestStatusLineShowsCost(t *testing.T) {
+	m := statusModel()
+	m.modelName = "m"
+	m.provName = "p"
+	m.agent.Model = "priced"
+	m.catalogs = map[string]config.Catalog{
+		"p": {Models: []config.ModelInfoLite{{ID: "priced", InPrice: 1e-6, OutPrice: 5e-6, CacheReadPrice: 1e-7}}},
+	}
+	u := llm.Usage{PromptTokens: 10000, CompletionTokens: 1000}
+	u.PromptTokensDetails = &struct {
+		CachedTokens int `json:"cached_tokens"`
+	}{CachedTokens: 8000}
+	m.agent.AddUsage(u)
+
+	// (10k-8k)*1e-6 + 8k*1e-7 + 1k*5e-6 = 0.0078
+	if got := m.statusView(); !strings.Contains(got, "$0.0078") {
+		t.Errorf("cost should show in the spend: %q", got)
+	}
+}
+
+func TestStatusLineHidesCostWithoutPricing(t *testing.T) {
+	m := statusModel()
+	m.modelName = "m"
+	m.provName = "p"
+	m.agent.Model = "unpriced"
+	m.catalogs = map[string]config.Catalog{
+		"p": {Models: []config.ModelInfoLite{{ID: "unpriced"}}},
+	}
+	m.agent.AddUsage(llm.Usage{PromptTokens: 10000, CompletionTokens: 1000})
+
+	if got := m.statusView(); strings.Contains(got, "$") {
+		t.Errorf("unpriced model should hide cost: %q", got)
+	}
+
+	// no catalog for the provider at all (startup fetch still in flight)
+	m.catalogs = nil
+	if got := m.statusView(); strings.Contains(got, "$") {
+		t.Errorf("missing catalog should hide cost: %q", got)
+	}
+}
+
+func TestFmtCost(t *testing.T) {
+	if got := fmtCost(0.0134); got != "$0.0134" {
+		t.Errorf("sub-dollar: %q", got)
+	}
+	if got := fmtCost(12.345); got != "$12.35" {
+		t.Errorf("over a dollar: %q", got)
+	}
+}
+
+// The /models fetch → catalog → cost pipeline keeps per-variant pricing
+// distinct (kimi-k3-fast bills higher than kimi-k3) with nothing hardcoded:
+// rates come from the provider's response body alone.
+func TestSessionCostUsesFetchedPricing(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"data":[
+			{"id":"kimi-k3","pricing":{"prompt":"0.000003","completion":"0.000015","input_cache_read":"0.0000003"}},
+			{"id":"kimi-k3-fast","pricing":{"prompt":"0.0000045","completion":"0.0000225","input_cache_read":"0.00000045"}}
+		]}`))
+	}))
+	defer srv.Close()
+
+	infos, err := llm.New(srv.URL, "k").Models(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	lites := make([]config.ModelInfoLite, len(infos))
+	for i, mi := range infos {
+		lites[i] = config.ModelInfoLite{ID: mi.ID}
+		if mi.Pricing != nil {
+			lites[i].InPrice, lites[i].OutPrice, lites[i].CacheReadPrice = mi.Pricing.Rates()
+		}
+	}
+	m := statusModel()
+	m.provName = "inference"
+	m.catalogs = map[string]config.Catalog{"inference": {Models: lites}}
+	u := llm.Usage{PromptTokens: 31100, CompletionTokens: 360}
+	u.PromptTokensDetails = &struct {
+		CachedTokens int `json:"cached_tokens"`
+	}{CachedTokens: 20700}
+	m.agent.AddUsage(u)
+
+	m.agent.Model = "kimi-k3-fast"
+	fast, ok := m.sessionCost()
+	if !ok {
+		t.Fatal("fast variant should be priced")
+	}
+	m.agent.Model = "kimi-k3"
+	std, ok := m.sessionCost()
+	if !ok {
+		t.Fatal("standard variant should be priced")
+	}
+	if fast <= std {
+		t.Errorf("kimi-k3-fast cost %v should exceed kimi-k3 %v", fast, std)
+	}
+	// exact: (31100-20700)*4.5e-6 + 20700*4.5e-7 + 360*22.5e-6
+	if want := 0.064215; fast != want {
+		t.Errorf("kimi-k3-fast cost = %v, want %v", fast, want)
+	}
 }

@@ -468,6 +468,9 @@ func (m *model) fetchCatalogs() {
 				MaxCompletionTokens: mi.MaxCompletionTokens,
 				ReasoningEfforts:    mi.ReasoningEfforts,
 			}
+			if mi.Pricing != nil {
+				models[i].InPrice, models[i].OutPrice, models[i].CacheReadPrice = mi.Pricing.Rates()
+			}
 		}
 		cats[name] = config.Catalog{FetchedAt: time.Now(), BaseURL: prov.BaseURL, Models: models}
 		dirty = true
@@ -966,6 +969,15 @@ func fmtTok(n int) string {
 	default:
 		return fmt.Sprint(n)
 	}
+}
+
+// fmtCost renders a USD spend compactly: 4 decimals under a dollar (where the
+// cents would hide the signal), 2 at or above.
+func fmtCost(d float64) string {
+	if d >= 1 {
+		return fmt.Sprintf("$%.2f", d)
+	}
+	return fmt.Sprintf("$%.4f", d)
 }
 
 func cwd() string {
@@ -1974,6 +1986,21 @@ func (m *model) contextLimitFor(provName, apiID string) int {
 		return cat.ContextLength(apiID)
 	}
 	return 0
+}
+
+// sessionCost returns the session's cumulative USD spend at the current
+// model's advertised rates; ok is false when the provider's catalog has no
+// pricing for the model, in which case the status line hides the segment.
+func (m *model) sessionCost() (float64, bool) {
+	cat, ok := m.catalogs[m.provName]
+	if !ok {
+		return 0, false
+	}
+	in, out, cacheRead, ok := cat.Pricing(m.agent.Model)
+	if !ok {
+		return 0, false
+	}
+	return llm.SessionCost(m.agent.Usage(), in, out, cacheRead), true
 }
 
 // compactThresholdFor converts the config's compactPct preference into the
@@ -3016,6 +3043,9 @@ func (m *model) statusView() string {
 	spend := fmt.Sprintf("%s/%s tok", fmtTok(u.PromptTokens), fmtTok(u.CompletionTokens))
 	if c := u.Cached(); c > 0 {
 		spend = fmt.Sprintf("%s(%s)/%s tok", fmtTok(u.PromptTokens), fmtTok(c), fmtTok(u.CompletionTokens))
+	}
+	if cost, ok := m.sessionCost(); ok {
+		spend += " · " + fmtCost(cost)
 	}
 	line := fmt.Sprintf(" %s   %s   %s   %s", shortCWD(), model, m.provName, spend)
 	return dimStyle.Render(truncLine(line, max(m.width, 0)))

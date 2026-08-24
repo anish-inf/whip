@@ -132,7 +132,16 @@ capabilities. Two distinct limits, both honored:
   else the context window. Sent as the request's `max_tokens`.
 
 The catalog (`~/.loopy/models.json`) caches each provider's model list with a
-24h TTL and refreshes in the background.
+24h TTL and refreshes in the background. When the provider advertises
+per-token `pricing` (inference.net / OpenRouter shape — `prompt`,
+`completion`, `input_cache_read` decimal strings), the catalog caches the
+parsed rates and the status line appends the session's cumulative cost to the
+token spend (`31.1k(20.7k)/360 tok · $0.0134`): fresh input at the prompt
+rate, cached input at the cache-read rate (full prompt rate when none is
+advertised), output at the completion rate — `llm.SessionCost`. Providers
+without pricing hide the segment entirely. Tests: `llm/openai_test.go`
+(`TestSessionCost`, pricing unmarshal), `config/catalog_test.go`,
+`tui/status_test.go` (`TestStatusLineShowsCost`, `TestStatusLineHidesCostWithoutPricing`).
 
 `internal/llm/openai.go` — the streaming client. Typed `HTTPError` (keeps the
 `<status>: <body>` shape), `IsContextLimit()` classifies context-overflow

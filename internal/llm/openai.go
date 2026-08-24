@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -319,13 +320,46 @@ func IsContextLimit(err error) bool {
 }
 
 // ModelInfo is one entry from the provider's GET /models list. Fields beyond
-// the OpenAI spec (context_length, reasoning_efforts) are omitted by APIs
-// that don't supply them.
+// the OpenAI spec (context_length, reasoning_efforts, pricing) are omitted
+// by APIs that don't supply them.
 type ModelInfo struct {
 	ID                  string   `json:"id"`
 	ContextLength       int      `json:"context_length,omitempty"`
 	MaxCompletionTokens int      `json:"max_completion_tokens,omitempty"`
 	ReasoningEfforts    []string `json:"reasoning_efforts,omitempty"`
+	Pricing             *Pricing `json:"pricing,omitempty"`
+}
+
+// Pricing is the provider's per-token USD rates as decimal strings
+// (inference.net / OpenRouter shape). Nil Pricing on ModelInfo means the
+// provider doesn't advertise prices.
+type Pricing struct {
+	Prompt         string `json:"prompt"`
+	Completion     string `json:"completion"`
+	InputCacheRead string `json:"input_cache_read,omitempty"`
+}
+
+// Rates parses the decimal-string prices into floats (0 for missing or
+// unparseable fields).
+func (p Pricing) Rates() (in, out, cacheRead float64) {
+	in, _ = strconv.ParseFloat(p.Prompt, 64)
+	out, _ = strconv.ParseFloat(p.Completion, 64)
+	cacheRead, _ = strconv.ParseFloat(p.InputCacheRead, 64)
+	return
+}
+
+// SessionCost returns the USD spend for cumulative usage u at per-token
+// rates. Cached prompt tokens are billed at the cache-read rate when
+// advertised, else at the full input rate (pi models.ts calculateCost has
+// the same shape, plus a cache-write term OpenAI-compatible usage lacks).
+func SessionCost(u Usage, in, out, cacheRead float64) float64 {
+	cached := u.Cached()
+	if cacheRead == 0 {
+		cacheRead = in
+	}
+	return float64(u.PromptTokens-cached)*in +
+		float64(cached)*cacheRead +
+		float64(u.CompletionTokens)*out
 }
 
 // Models fetches GET /models from the provider.

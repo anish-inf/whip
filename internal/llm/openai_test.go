@@ -312,3 +312,56 @@ func TestIsContextLimit(t *testing.T) {
 		}
 	}
 }
+
+func TestModelInfoPricingParsed(t *testing.T) {
+	// fixture mirrors inference.net's GET /models entry shape
+	var mi ModelInfo
+	err := json.Unmarshal([]byte(`{"id":"claude-haiku-4-5","context_length":200000,
+		"pricing":{"prompt":"0.000001000000","completion":"0.000005000000","input_cache_read":"0.000000100000"}}`), &mi)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mi.Pricing == nil {
+		t.Fatal("pricing block should unmarshal")
+	}
+	in, out, cr := mi.Pricing.Rates()
+	if in != 1e-6 || out != 5e-6 || cr != 1e-7 {
+		t.Fatalf("rates: in=%v out=%v cr=%v", in, out, cr)
+	}
+}
+
+func TestModelInfoPricingOmitted(t *testing.T) {
+	var mi ModelInfo
+	if err := json.Unmarshal([]byte(`{"id":"m"}`), &mi); err != nil {
+		t.Fatal(err)
+	}
+	if mi.Pricing != nil {
+		t.Fatalf("pricing should stay nil when unadvertised: %+v", mi.Pricing)
+	}
+}
+
+func TestSessionCost(t *testing.T) {
+	cached := func(n int) Usage {
+		u := Usage{PromptTokens: 10000, CompletionTokens: 1000}
+		u.PromptTokensDetails = &struct {
+			CachedTokens int `json:"cached_tokens"`
+		}{CachedTokens: n}
+		return u
+	}
+	cases := []struct {
+		name               string
+		u                  Usage
+		in, out, cacheRead float64
+		want               float64
+	}{
+		{"no cache", Usage{PromptTokens: 10000, CompletionTokens: 1000}, 1e-6, 5e-6, 0, 0.015},
+		{"partial cache with cache rate", cached(8000), 1e-6, 5e-6, 1e-7, 0.0078},
+		{"cache billed at input rate when no cache rate", cached(8000), 1e-6, 5e-6, 0, 0.015},
+		{"zero usage", Usage{}, 1e-6, 5e-6, 1e-7, 0},
+	}
+	for _, c := range cases {
+		if got := SessionCost(c.u, c.in, c.out, c.cacheRead); got != c.want {
+			t.Errorf("%s: SessionCost = %v, want %v", c.name, got, c.want)
+		}
+	}
+}

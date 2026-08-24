@@ -23,6 +23,9 @@ type ModelInfoLite struct {
 	ContextLength       int      `json:"contextLength,omitempty"`       // model's context window (input), 0 if unadvertised
 	MaxCompletionTokens int      `json:"maxCompletionTokens,omitempty"` // provider's output cap, 0 if unadvertised
 	ReasoningEfforts    []string `json:"reasoningEfforts,omitempty"`
+	InPrice             float64  `json:"inPrice,omitempty"`        // USD per prompt token, 0 if unadvertised
+	OutPrice            float64  `json:"outPrice,omitempty"`       // USD per completion token, 0 if unadvertised
+	CacheReadPrice      float64  `json:"cacheReadPrice,omitempty"` // USD per cached prompt token, 0 = bill at InPrice
 }
 
 // ContextLength reports the advertised context window for a model id
@@ -45,6 +48,18 @@ func (c Catalog) MaxCompletionTokens(id string) int {
 		}
 	}
 	return 0
+}
+
+// Pricing reports the advertised per-token USD rates for a model id; ok is
+// false when the catalog has no entry for it or the entry has no prices, in
+// which case callers should hide cost rather than show $0.
+func (c Catalog) Pricing(id string) (in, out, cacheRead float64, ok bool) {
+	for _, mi := range c.Models {
+		if mi.ID == id {
+			return mi.InPrice, mi.OutPrice, mi.CacheReadPrice, mi.InPrice > 0 || mi.OutPrice > 0
+		}
+	}
+	return 0, 0, 0, false
 }
 
 func catalogPath() (string, error) {
