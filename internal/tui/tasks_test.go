@@ -103,10 +103,15 @@ func TestResumeRestoresTasks(t *testing.T) {
 	if !ok || stale.Status != agent.TaskError || !strings.Contains(stale.Report, "interrupted") {
 		t.Fatalf("a persisted running task must restore as interrupted-error, got %+v", stale)
 	}
-	// the dock shows both
+	// restored tasks are history: /tasks lists them (marked), the dock does NOT
+	// — their subagents died with the previous process
 	dock := stripAll(m.tasksDock())
-	if !strings.Contains(dock, "finished probe") || !strings.Contains(dock, "died mid-flight") {
-		t.Fatalf("dock should list the restored subagents, got %q", dock)
+	if strings.Contains(dock, "finished probe") || strings.Contains(dock, "died mid-flight") {
+		t.Fatalf("restored subagents must not clutter the dock, got %q", dock)
+	}
+	view := stripAll(m.tasksView())
+	if !strings.Contains(view, "finished probe") || !strings.Contains(view, "(restored)") {
+		t.Fatalf("/tasks should list restored subagents with a marker, got %q", view)
 	}
 	// opening a restored settled task renders its stored report — no live stream
 	m.openTask("task-1")
@@ -158,7 +163,22 @@ func TestTaskPersistsOnStartAndSettle(t *testing.T) {
 // time, so the settle — which lands after the turn's persist() publishes the
 // id — records the task even though the start was skipped.
 func TestTaskPersistsWhenSessionIDAssignedMidFlight(t *testing.T) {
-	srv := sseTextServer(t, "late report")
+	// Hold the stream open until the session id is published: without this the
+	// subagent can settle before SetSessionID lands, and skipping the record
+	// is then correct behavior (the settle genuinely raced the publish).
+	stream := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.(http.Flusher).Flush()
+		select {
+		case <-stream:
+		case <-r.Context().Done():
+			return
+		}
+		b, _ := json.Marshal("late report")
+		fmt.Fprintf(w, `data: {"choices":[{"delta":{"content":%s},"finish_reason":"stop"}]}`+"\n\n", b)
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
 	defer srv.Close()
 	m := tasksModelStore(t, srv.URL)
 	m.wireTasks()
@@ -172,6 +192,7 @@ func TestTaskPersistsWhenSessionIDAssignedMidFlight(t *testing.T) {
 		t.Fatal(err)
 	}
 	m.agent.Tasks().SetSessionID(id) // what persist() publishes when the turn lands
+	close(stream)                    // let the subagent's stream complete now
 
 	waitSettled(t, task)
 	rows, err := m.store.LoadTasks(id)
@@ -640,5 +661,26 @@ func TestCtrlTFromTaskViewLandsOnDock(t *testing.T) {
 	}
 	if !m.tasksFocus {
 		t.Fatal("ctrl+t from a task view should land on the focused dock")
+	}
+}
+
+// sendTaskMsg must never block the subagent worker goroutine, even when the
+// UI isn't draining its queue: prog.Send parks on the program's msg channel,
+// so the helper detaches the send. Nil program (headless) must be a no-op.
+func TestSendTaskMsgNeverBlocksWorker(t *testing.T) {
+	sendTaskMsg(nil, taskEventMsg{id: "task-1"}) // headless no-op must not panic
+
+	// A real program whose event loop never runs simulates a wedged UI: Send
+	// would block forever on the undrained queue.
+	p := tea.NewProgram(&model{})
+	done := make(chan struct{})
+	go func() {
+		sendTaskMsg(p, taskEventMsg{id: "task-1", kind: 0, s: "chunk"})
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("sendTaskMsg blocked on an undrained program — it must detach the Send")
 	}
 }

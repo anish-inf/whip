@@ -32,6 +32,10 @@ type BackgroundTask struct {
 	Report      string // final report (done) or error text (error)
 	StartedAt   time.Time
 	EndedAt     time.Time
+	// Restored marks a task seeded from the session store by --resume: its
+	// subagent died with the previous process, so it's history for /tasks —
+	// never live, and the dock leaves it out.
+	Restored bool
 
 	Done   chan struct{}      // closed on settle; <-Done() wakes all waiters
 	cancel context.CancelFunc // cancels the subagent's turn
@@ -117,11 +121,17 @@ func (r *taskRegistry) Get(id string) (BackgroundTask, bool) {
 }
 
 // Cancel signals a running task's context. Returns false if not running.
+// The status check happens under the registry mutex: settle() writes Status
+// under the same lock, so a Cancel racing a settle must read it there too
+// (an unsynchronized read is a data race — and could cancel a task that just
+// finished). The cancel func itself runs AFTER unlocking: it cancels the
+// subagent's turn, and the resulting settle re-takes the lock.
 func (r *taskRegistry) Cancel(id string) bool {
 	r.mu.Lock()
 	t, ok := r.tasks[id]
+	running := ok && t.Status == TaskRunning
 	r.mu.Unlock()
-	if !ok || t.Status != TaskRunning {
+	if !running {
 		return false
 	}
 	t.cancel()
@@ -269,12 +279,19 @@ func (r *taskRegistry) emitter(id string) Events {
 }
 
 // broadcast runs a subscriber callback for each of the task's subscribers.
-// The slice is walked under the registry lock; settle deletes the entry, so
-// post-settle events (there should be none) would go nowhere.
+// The slice is snapshotted under the registry lock, then callbacks run AFTER
+// the lock is released: subscribers are allowed to block (the TUI's task view
+// funnels events through prog.Send, which parks when the UI event queue is
+// backed up), and a blocked callback must never hold mu hostage — the UI
+// goroutine itself takes mu via List/Get when rendering the dock, so running
+// a blocking callback under the lock is an ABBA deadlock (worker holds mu →
+// waits on the UI queue; UI waits on mu). settle deletes the entry, so
+// post-settle events (there should be none) go nowhere.
 func (r *taskRegistry) broadcast(id string, call func(Events)) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
-	for _, e := range r.subs[id] {
+	subs := append([]Events(nil), r.subs[id]...)
+	r.mu.Unlock()
+	for _, e := range subs {
 		call(e)
 	}
 }

@@ -426,3 +426,74 @@ func TestRestoreTaskSettledAndVisible(t *testing.T) {
 		t.Fatalf("List should include the restored task, got %d", n)
 	}
 }
+
+// Regression test for the live-stream deadlock: broadcast used to run
+// subscriber callbacks while holding the registry mutex. A subscriber that
+// blocks (the TUI funnels events through prog.Send, which parks when the UI
+// queue backs up) then holds mu hostage — and the UI goroutine itself takes
+// mu via List/Get to render the dock, deadlocking both (worker: mu held →
+// waiting on the UI queue; UI: waiting on mu). This test simulates exactly
+// that shape with an unbuffered chan in place of bubbletea's queue: List must
+// still complete while a subscriber is parked mid-callback, and the parked
+// subscriber must be released by Cancel (not by contending on mu first).
+func TestBroadcastBlockingSubscriberCannotDeadlock(t *testing.T) {
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, `data: {"choices":[{"delta":{"content":"hi"}}]}`+"\n\n")
+		w.(http.Flusher).Flush() // deliver the delta while the stream stays open
+		// Park the handler (not the body read) so the connection closes on
+		// server shutdown even if a test assertion fails mid-way.
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+	}))
+	t.Cleanup(func() { close(release) }) // before srv.Close so the handler unwinds first
+	defer srv.Close()
+
+	ag := New(llm.New(srv.URL, "k"), "m", 100, "sys")
+	task := ag.StartBackground(context.Background(), "probe", "p")
+
+	inCallback := make(chan struct{})
+	notify := sync.OnceFunc(func() { close(inCallback) })
+	if !ag.Tasks().Subscribe(task.ID, Events{
+		OnText: func(string) {
+			notify()  // parked mid-broadcast, like Send on a full queue
+			<-release // simulates prog.Send parked behind a stuck UI event loop
+		},
+	}) {
+		t.Fatal("task should accept a subscriber while running")
+	}
+
+	select {
+	case <-inCallback:
+	case <-time.After(5 * time.Second):
+		t.Fatal("subscriber never received the stream's OnText")
+	}
+
+	// The mutex must NOT be held by the parked broadcast: this is the UI
+	// goroutine rendering the dock (background.go's broadcast used to block
+	// this exact call forever).
+	done := make(chan struct{})
+	go func() {
+		ag.Tasks().List()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("List blocked behind a parked subscriber — registry mutex held across a blocking callback")
+	}
+
+	// Cancel must also reach the registry (it takes mu too) even though the
+	// worker is parked mid-callback. Note the task itself cannot settle until
+	// the subscriber returns — the parked callback runs ON the worker
+	// goroutine, so it also blocks the stream read and the settle. That is
+	// inherent to blocking callbacks and is why the TUI's subscriber detaches
+	// its sends (sendTaskMsg); the mutex — and with it the UI — must stay
+	// free regardless.
+	if !ag.Tasks().Cancel(task.ID) {
+		t.Fatal("Cancel should accept a running task even with a parked subscriber")
+	}
+}

@@ -83,6 +83,28 @@ published atomically: the registry holds an `atomic.Pointer[string]` session
 id (`SetSessionID`, written by the UI goroutine at persist/resume/clear/fork),
 and `OnRecord` receives the id as an argument. No lock, no closure over `m`.
 
+The second trap is a worker-goroutine callback that **blocks while touching
+the registry mutex**: `broadcast` used to walk subscribers under `r.mu`, and
+the TUI's task-view subscriber funnels events through `prog.Send`, which
+parks when the UI queue is backed up. The UI goroutine itself takes `r.mu`
+via `List`/`Get` to render the dock — worker holds `mu` waiting on the UI
+queue, UI waits on `mu`: an ABBA deadlock that froze the whole TUI (caught in
+the wild from a goroutine dump: UI parked in `List` ← `tasksDock` ← `Update`,
+worker parked in `prog.Send` ← `openTask`'s subscriber ← `broadcast`). Two
+rules now keep the cycle impossible:
+
+1. `broadcast` snapshots the subscriber slice under `r.mu`, then runs
+   callbacks **after** unlocking — a parked subscriber can hold its own worker
+   goroutine, but never the registry mutex.
+2. The TUI's subscriber callbacks never block the worker: `sendTaskMsg` (and
+   the `OnChange` redraw) detach `prog.Send` into its own goroutine. The task
+   pane resyncs from the stored `Report` on the next paint, so a reordered
+   interim frame is cosmetic; stalling the subagent on the UI is not.
+
+`TestBroadcastBlockingSubscriberCannotDeadlock` reproduces the original shape
+(a subscriber parked on an unbuffered channel stands in for the wedged
+`prog.Send`) and fails against the pre-fix `broadcast`.
+
 ### What this buys over the TS versions
 
 - **No leak bookkeeping.** The channel semaphore and the Done-close both have

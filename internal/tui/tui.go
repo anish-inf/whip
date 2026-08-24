@@ -502,6 +502,7 @@ func (m *model) resume(id string) error {
 				ID: st.ID, Description: st.Description, Prompt: st.Prompt,
 				Status: status, Report: st.Report,
 				StartedAt: st.StartedAt, EndedAt: st.EndedAt,
+				Restored: true,
 			})
 		}
 	} else {
@@ -1930,7 +1931,9 @@ func (m *model) wireTasks() {
 		return // headless (tests)
 	}
 	m.agent.Tasks().OnChange = func(*agent.BackgroundTask) {
-		m.prog.Send(taskUpdateMsg{})
+		// Detached: OnChange runs on the subagent worker goroutine, and a
+		// backed-up UI queue must never stall the agent (see sendTaskMsg).
+		go m.prog.Send(taskUpdateMsg{})
 	}
 	// Point the MCP manager at the NEW agent — resume/model-switch replace
 	// m.agent wholesale, and the OnChange closure captures the model, not a
@@ -1968,6 +1971,9 @@ func (m *model) tasksView() string {
 			icon = "✗"
 		}
 		line := fmt.Sprintf("  %s %s  %s", icon, t.ID, t.Description)
+		if t.Restored {
+			line += dimStyle.Render("  (restored)")
+		}
 		if t.Status == agent.TaskRunning {
 			line += dimStyle.Render(fmt.Sprintf("  (%ds)", int(time.Since(t.StartedAt).Seconds())))
 		}
