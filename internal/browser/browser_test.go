@@ -28,6 +28,14 @@ func TestParseDevToolsActivePort(t *testing.T) {
 
 // Profile scan finds a DevToolsActivePort in a fake profile dir.
 func TestProfileScanFindsPortFile(t *testing.T) {
+	if os.Getenv("LOOPY_CDP_WS") != "" || os.Getenv("LOOPY_CDP_URL") != "" {
+		t.Skip("explicit CDP endpoint set — profile scan bypassed")
+	}
+	for _, p := range []int{9222, 9223} { // a real Chrome here wins the fallback probe
+		if portLive(p) {
+			t.Skipf("a real browser is listening on %d", p)
+		}
+	}
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	prof := filepath.Join(home, ".config", "google-chrome")
