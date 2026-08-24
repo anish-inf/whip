@@ -2,6 +2,7 @@ package lsp
 
 import (
 	"context"
+	"errors"
 	"io"
 	"strings"
 	"sync/atomic"
@@ -102,7 +103,7 @@ func TestClientForDedupLosersGetClient(t *testing.T) {
 		go func() {
 			out := m.WaitDiagnostics(context.Background(), dir+"/main.go")
 			if out == "" {
-				errs <- errString("empty diagnostics")
+				errs <- errors.New("empty diagnostics")
 				return
 			}
 			outs <- out
@@ -119,21 +120,6 @@ func TestClientForDedupLosersGetClient(t *testing.T) {
 	}
 	if got := calls.Load(); got > n {
 		t.Fatalf("keyer calls %d > waiters %d", got, n)
-	}
-}
-
-type errString string
-
-func (e errString) Error() string { return string(e) }
-
-// TestLanguageID covers the extension → languageId table.
-func TestLanguageID(t *testing.T) {
-	for ext, want := range map[string]string{
-		"a.go": "go", "a.py": "python", "a.ts": "typescript", "a.rs": "rust", "a.ml": "ml",
-	} {
-		if got := languageID(ext); got != want {
-			t.Errorf("languageID(%q) = %q, want %q", ext, got, want)
-		}
 	}
 }
 

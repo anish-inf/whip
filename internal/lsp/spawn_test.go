@@ -7,9 +7,14 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
+
+// kill0 probes whether pid is alive (signal 0).
+func kill0(pid int) error { return syscall.Kill(pid, 0) }
 
 // TestHelperProcess is the real-process fake server: the test binary
 // re-execs itself with GO_LSP_FAKE=1 and serves scripted LSP over stdio.
@@ -83,7 +88,7 @@ func TestRealProcessLifecycle(t *testing.T) {
 
 	before := runtime.NumGoroutine()
 	out := m.WaitDiagnostics(context.Background(), dir+"/main.go")
-	if out == "" || !containsStr(out, "from real process") {
+	if out == "" || !strings.Contains(out, "from real process") {
 		t.Fatalf("real-process diagnostics missing: %q", out)
 	}
 
@@ -121,13 +126,4 @@ func TestRealProcessLifecycle(t *testing.T) {
 	if sts := m.Statuses(); len(sts) != 1 || sts[0].Name != "fake" {
 		t.Fatalf("statuses after close: %+v", sts)
 	}
-}
-
-func containsStr(s, sub string) bool {
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			return true
-		}
-	}
-	return false
 }

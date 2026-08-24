@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/context-labs/loopy/internal/llm"
@@ -53,10 +52,10 @@ type Agent struct {
 	pending   []string // steered user messages awaiting injection
 	compacted bool     // a compaction already happened this turn — don't retry-loop
 
-	// msgsSnap publishes a snapshot of Messages after every agent-side
-	// mutation so concurrent readers (tests, UIs rendering another
-	// goroutine's turn) never read the live slice. See MessagesSnapshot.
-	msgsSnap atomic.Pointer[[]llm.Message]
+	// msgsMu guards Messages for concurrent READERS: the turn goroutine
+	// mutates Messages freely, but a test/UI reader taking msgsMu sees a
+	// consistent slice. Mutations hold it only for the append.
+	msgsMu sync.Mutex
 
 	files *fileLocks // per-path mutation locks for parallel tool calls
 	bg    *taskRegistry
@@ -87,9 +86,10 @@ func (a *Agent) Steer(text string) {
 // -race on the same word rather than silently tearing the slice.
 func (a *Agent) AppendUser(content string) {
 	a.mu.Lock()
+	a.msgsMu.Lock()
 	a.Messages = append(a.Messages, llm.Message{Role: "user", Content: content})
+	a.msgsMu.Unlock()
 	a.mu.Unlock()
-	a.publishMsgs()
 }
 
 func (a *Agent) drainPending() []string {
@@ -156,24 +156,15 @@ func New(client *llm.Client, model string, maxTokens int, systemPrompt string) *
 	a.Tools = append(tools.All(), taskTool(a))
 	a.files = newFileLocks()
 	a.bg = newTaskRegistry()
-	a.publishMsgs()
 	return a
-}
-
-// publishMsgs stores a snapshot of Messages for concurrent readers. Call
-// after every agent-side mutation of a.Messages.
-func (a *Agent) publishMsgs() {
-	snap := append([]llm.Message(nil), a.Messages...)
-	a.msgsSnap.Store(&snap)
 }
 
 // MessagesSnapshot returns a copy of the conversation safe to read while a
 // turn runs on another goroutine. Direct field access (a.Messages) is only
 // safe for the goroutine driving the turn.
 func (a *Agent) MessagesSnapshot() []llm.Message {
-	if p := a.msgsSnap.Load(); p != nil {
-		return *p
-	}
+	a.msgsMu.Lock()
+	defer a.msgsMu.Unlock()
 	return append([]llm.Message(nil), a.Messages...)
 }
 
@@ -244,8 +235,9 @@ func (a *Agent) turn(ctx context.Context, input string, parts []llm.ContentPart,
 		now := time.Now()
 		msg.SentAt = &now
 	}
+	a.msgsMu.Lock()
 	a.Messages = append(a.Messages, msg)
-	a.publishMsgs()
+	a.msgsMu.Unlock()
 	for {
 		if err := a.maybeCompact(ctx, ev); err != nil {
 			return "", err
@@ -279,10 +271,12 @@ func (a *Agent) turn(ctx context.Context, input string, parts []llm.ContentPart,
 		}
 		msg.Usage = &usage
 		msg.Model = a.Model + " @ " + a.Provider
+		a.msgsMu.Lock()
 		a.Messages = append(a.Messages, msg)
-		a.publishMsgs()
+		a.msgsMu.Unlock()
 		if len(msg.ToolCalls) > 0 {
 			results := a.runTools(ctx, msg.ToolCalls, ev)
+			a.msgsMu.Lock()
 			for i, tc := range msg.ToolCalls {
 				a.Messages = append(a.Messages, llm.Message{
 					Role:       "tool",
@@ -291,12 +285,15 @@ func (a *Agent) turn(ctx context.Context, input string, parts []llm.ContentPart,
 					Name:       tc.Function.Name,
 				})
 			}
-			a.publishMsgs()
+			a.msgsMu.Unlock()
 			if ctx.Err() != nil {
 				return "", ctx.Err()
 			}
 		}
 		steered := a.drainPending()
+		if len(steered) > 0 {
+			a.msgsMu.Lock()
+		}
 		for _, s := range steered {
 			if ev.OnSteer != nil {
 				ev.OnSteer(s)
@@ -304,7 +301,7 @@ func (a *Agent) turn(ctx context.Context, input string, parts []llm.ContentPart,
 			a.Messages = append(a.Messages, llm.Message{Role: "user", Content: s})
 		}
 		if len(steered) > 0 {
-			a.publishMsgs()
+			a.msgsMu.Unlock()
 		}
 		if len(msg.ToolCalls) == 0 && len(steered) == 0 {
 			a.compacted = false // reset for the next Turn
@@ -496,10 +493,11 @@ func (a *Agent) compact(ctx context.Context) error {
 		return fmt.Errorf("compaction summary failed: %w", err)
 	}
 	kept := append([]llm.Message(nil), tail...)
+	a.msgsMu.Lock()
 	a.Messages = append(append([]llm.Message{}, sysPrompt,
 		llm.Message{Role: "system", Content: "Summary of the conversation so far:\n\n" + strings.TrimSpace(summary)},
 	), kept...)
-	a.publishMsgs()
+	a.msgsMu.Unlock()
 	return nil
 }
 

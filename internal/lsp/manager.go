@@ -184,7 +184,9 @@ func (m *Manager) WaitDiagnostics(ctx context.Context, path string) string {
 	if version == 1 {
 		cs.cli.notify("textDocument/didOpen", map[string]any{
 			"textDocument": map[string]any{
-				"uri": uri, "languageId": languageID(abs), "version": version, "text": string(data),
+				// languageId: servers match on extension anyway; gopls only
+				// accepts "go". Trim the dot and go.
+				"uri": uri, "languageId": strings.TrimPrefix(filepath.Ext(abs), "."), "version": version, "text": string(data),
 			},
 		})
 	} else {
@@ -394,13 +396,9 @@ func (m *Manager) spawn(ctx context.Context, key, name string, spec ServerSpec, 
 
 	initCtx, cancel := context.WithTimeout(ctx, initTimeout)
 	defer cancel()
-	var initialized struct {
-		Capabilities map[string]any `json:"capabilities"`
-	}
-	// ponytail: capabilities are parsed but not consulted — didChange always
-	// sends full text, which gopls (and every server worth configuring)
-	// accepts; check textDocumentSync.change here if a stricter server ever
-	// rejects it.
+	// ponytail: didChange always sends full text, which gopls (and every
+	// server worth configuring) accepts; if a stricter server ever rejects
+	// it, parse capabilities.textDocumentSync.change from the result.
 	err = cs.cli.request(initCtx, "initialize", map[string]any{
 		"processId": os.Getpid(),
 		"rootUri":   fileURI(root),
@@ -413,7 +411,7 @@ func (m *Manager) spawn(ctx context.Context, key, name string, spec ServerSpec, 
 				"publishDiagnostics": map[string]any{"versionSupport": true},
 			},
 		},
-	}, &initialized)
+	}, nil)
 	if err != nil {
 		cs.kill()
 		return nil, fmt.Errorf("initialize: %w", err)
@@ -511,18 +509,13 @@ func (cs *clientState) kill() {
 	_ = cs.cli.request(ctx, "shutdown", nil, nil) // best effort
 	cs.cli.notify("exit", nil)
 	cs.cli.shutdown()
-	_ = cs.stdinClose()
+	if c, ok := cs.cli.stdin.(io.Closer); ok {
+		_ = c.Close()
+	}
 	if cs.cmd.Process != nil {
 		_ = syscall.Kill(-cs.cmd.Process.Pid, syscall.SIGKILL)
 	}
 	_ = cs.cmd.Wait()
-}
-
-func (cs *clientState) stdinClose() error {
-	if c, ok := cs.cli.stdin.(io.Closer); ok {
-		return c.Close()
-	}
-	return nil
 }
 
 // findRoot walks up from dir looking for any marker, falling back to dir
@@ -556,24 +549,4 @@ func uriPath(uri string) string {
 		return ""
 	}
 	return u.Path
-}
-
-// languageID maps an extension to an LSP languageId for didOpen.
-//
-// ponytail: only what the registry can match; extend alongside extensions.
-func languageID(path string) string {
-	switch filepath.Ext(path) {
-	case ".go":
-		return "go"
-	case ".py":
-		return "python"
-	case ".ts", ".tsx":
-		return "typescript"
-	case ".js", ".jsx":
-		return "javascript"
-	case ".rs":
-		return "rust"
-	default:
-		return strings.TrimPrefix(filepath.Ext(path), ".")
-	}
 }
