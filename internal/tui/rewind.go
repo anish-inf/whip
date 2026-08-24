@@ -28,9 +28,9 @@ import (
 // enter rewinds to just before cut; f forks the history through cut.
 type rewindEntry struct {
 	cut    int
-	text   string    // single-line preview
+	text   string     // single-line preview
 	when   *time.Time // when the message was submitted (nil = unknown)
-	future bool      // clipped by the active rewind; selecting moves forward
+	future bool       // clipped by the active rewind; selecting moves forward
 }
 
 type rewindState struct {
