@@ -23,9 +23,30 @@ type ModelInfoLite struct {
 	ContextLength       int      `json:"contextLength,omitempty"`       // model's context window (input), 0 if unadvertised
 	MaxCompletionTokens int      `json:"maxCompletionTokens,omitempty"` // provider's output cap, 0 if unadvertised
 	ReasoningEfforts    []string `json:"reasoningEfforts,omitempty"`
-	InPrice             float64  `json:"inPrice,omitempty"`        // USD per prompt token, 0 if unadvertised
-	OutPrice            float64  `json:"outPrice,omitempty"`       // USD per completion token, 0 if unadvertised
-	CacheReadPrice      float64  `json:"cacheReadPrice,omitempty"` // USD per cached prompt token, 0 = bill at InPrice
+	InPrice             float64  `json:"inPrice,omitempty"`         // USD per prompt token, 0 if unadvertised
+	OutPrice            float64  `json:"outPrice,omitempty"`        // USD per completion token, 0 if unadvertised
+	CacheReadPrice      float64  `json:"cacheReadPrice,omitempty"`  // USD per cached prompt token, 0 = bill at InPrice
+	InputModalities     []string `json:"inputModalities,omitempty"` // provider-advertised input types (["text","image"])
+}
+
+// SupportsVision reports whether the catalog advertises image input for a model
+// id. The bool is tri-state: found==false means the catalog has no entry or the
+// entry doesn't advertise modalities, so the caller falls back to config.
+func (c Catalog) SupportsVision(id string) (vision, found bool) {
+	for _, mi := range c.Models {
+		if mi.ID == id {
+			if len(mi.InputModalities) == 0 {
+				return false, false
+			}
+			for _, m := range mi.InputModalities {
+				if m == "image" {
+					return true, true
+				}
+			}
+			return false, true
+		}
+	}
+	return false, false
 }
 
 // ContextLength reports the advertised context window for a model id

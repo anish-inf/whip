@@ -73,6 +73,11 @@ type Model struct {
 	// MaxTokens is the legacy field name for Context (it was misnamed: it held
 	// the context window, not an output cap). Read on load for back-compat.
 	MaxTokens int `json:"maxTokens,omitempty"`
+	// Vision reports whether the model accepts image inputs. When false (the
+	// default), @image tags are NOT inlined as base64 vision parts — the model
+	// gets a pointer note instead, so a text-only model isn't sent a request it
+	// would reject. A provider-advertised input_modalities entry overrides this.
+	Vision bool `json:"vision,omitempty"`
 }
 
 // ContextWindow returns the model's context (input) size, honoring the legacy
@@ -335,7 +340,7 @@ func Default() *Config {
 			},
 		},
 		Models: map[string]Model{
-			"kimi-k3-fast":           {Providers: []string{"inference"}, Context: 131072},
+			"kimi-k3-fast":           {Providers: []string{"inference"}, Context: 131072, Vision: true},
 			"glm-5.2-fast":           {Providers: []string{"inference"}, Context: 128000},
 			"deepseek-v4-flash-0731": {Providers: []string{"inference"}, Context: 384000},
 		},

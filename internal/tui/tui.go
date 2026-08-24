@@ -481,6 +481,7 @@ func (m *model) fetchCatalogs() {
 				ContextLength:       mi.ContextLength,
 				MaxCompletionTokens: mi.MaxCompletionTokens,
 				ReasoningEfforts:    mi.ReasoningEfforts,
+				InputModalities:     mi.InputModalities,
 			}
 			if mi.Pricing != nil {
 				models[i].InPrice, models[i].OutPrice, models[i].CacheReadPrice = mi.Pricing.Rates()
@@ -2389,8 +2390,32 @@ func (m *model) prepareTurn(text string) (string, []llm.ContentPart) {
 	}
 	m.agent.Messages[0].Content = sys
 	expanded := expandMentions(expandSkills(text, sk))
+	if !m.supportsVision() {
+		// text-only model: leave @image tags as pointer notes (from
+		// expandMentions) instead of inlining base64 the model would reject.
+		return expanded, nil
+	}
 	parts, withNote := imageParts(text)
 	return expanded + withNote, parts
+}
+
+// supportsVision reports whether the current model accepts image inputs, so
+// @image tags are inlined only for models that can use them. A provider-
+// advertised input_modalities entry (from /models, cached in the catalog)
+// wins; otherwise the config's per-model vision flag decides (default false).
+func (m *model) supportsVision() bool {
+	id := m.agent.Model
+	if cat, ok := m.catalogs[m.provName]; ok {
+		if vision, found := cat.SupportsVision(id); found {
+			return vision
+		}
+	}
+	if m.cfg != nil {
+		if cfg, ok := m.cfg.Models[m.modelName]; ok {
+			return cfg.Vision
+		}
+	}
+	return false
 }
 
 // appendAssistant writes assistant text into the transcript, rendering it as

@@ -448,6 +448,19 @@ type ModelInfo struct {
 	MaxCompletionTokens int      `json:"max_completion_tokens,omitempty"`
 	ReasoningEfforts    []string `json:"reasoning_efforts,omitempty"`
 	Pricing             *Pricing `json:"pricing,omitempty"`
+	// InputModalities lists the input types the model accepts (OpenRouter
+	// shape: ["text","image"]). Nil when the provider doesn't advertise it.
+	InputModalities []string `json:"input_modalities,omitempty"`
+}
+
+// SupportsVision reports whether the model advertises image input.
+func (mi ModelInfo) SupportsVision() bool {
+	for _, m := range mi.InputModalities {
+		if m == "image" {
+			return true
+		}
+	}
+	return false
 }
 
 // Pricing is the provider's per-token USD rates as decimal strings

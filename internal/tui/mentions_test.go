@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/context-labs/loopy/internal/agent"
+	"github.com/context-labs/loopy/internal/config"
 	"github.com/context-labs/loopy/internal/llm"
 	"github.com/context-labs/loopy/internal/skills"
 )
@@ -162,5 +163,82 @@ func TestMessageMultimodalRoundTrip(t *testing.T) {
 	}
 	if len(back.Parts) != 1 || back.Parts[0].ImageURL == nil {
 		t.Fatalf("parts: %+v", back.Parts)
+	}
+}
+
+// supportsVision gates whether @image tags inline base64. A provider-advertised
+// input_modalities entry wins over config; config's vision flag is the default.
+func TestSupportsVisionGate(t *testing.T) {
+	newModel := func(visionCfg bool, catalog *config.Catalog) *model {
+		ag := agent.New(llm.New("http://unused", "k"), "m", 1, "sys")
+		ag.Model = "some-model"
+		m := &model{
+			agent:     ag,
+			modelName: "some-model",
+			provName:  "inference",
+			cfg:       &config.Config{Models: map[string]config.Model{"some-model": {Vision: visionCfg}}},
+			catalogs:  map[string]config.Catalog{},
+		}
+		if catalog != nil {
+			m.catalogs["inference"] = *catalog
+		}
+		return m
+	}
+
+	// config default off → no vision
+	if newModel(false, nil).supportsVision() {
+		t.Error("config vision=false should not enable vision")
+	}
+	// config on → vision
+	if !newModel(true, nil).supportsVision() {
+		t.Error("config vision=true should enable vision")
+	}
+	// provider advertises image → wins over config=false
+	withImg := &config.Catalog{Models: []config.ModelInfoLite{{ID: "some-model", InputModalities: []string{"text", "image"}}}}
+	if !newModel(false, withImg).supportsVision() {
+		t.Error("provider-advertised image modality should override config vision=false")
+	}
+	// provider advertises text-only → wins over config=true
+	textOnly := &config.Catalog{Models: []config.ModelInfoLite{{ID: "some-model", InputModalities: []string{"text"}}}}
+	if newModel(true, textOnly).supportsVision() {
+		t.Error("provider-advertised text-only should override config vision=true")
+	}
+	// provider entry without modalities → falls back to config
+	noModal := &config.Catalog{Models: []config.ModelInfoLite{{ID: "some-model"}}}
+	if !newModel(true, noModal).supportsVision() {
+		t.Error("no advertised modalities should fall back to config vision=true")
+	}
+}
+
+// prepareTurn leaves @image as a pointer note (no parts) for text-only models,
+// and inlines it for vision models.
+func TestPrepareTurnVisionGate(t *testing.T) {
+	dir := t.TempDir()
+	img := filepath.Join(dir, "shot.png")
+	if err := os.WriteFile(img, []byte("\x89PNG\r\n\x1a\nfake"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	build := func(vision bool) *model {
+		ag := agent.New(llm.New("http://unused", "k"), "m", 1, "sys")
+		ag.Model = "m"
+		return &model{
+			agent:     ag,
+			modelName: "m",
+			provName:  "p",
+			cfg:       &config.Config{Models: map[string]config.Model{"m": {Vision: vision}}},
+			catalogs:  map[string]config.Catalog{},
+		}
+	}
+
+	_, parts := build(false).prepareTurn("look @" + img)
+	if len(parts) != 0 {
+		t.Errorf("text-only model should get no image parts, got %d", len(parts))
+	}
+	txt, parts := build(true).prepareTurn("look @" + img)
+	if len(parts) != 1 {
+		t.Fatalf("vision model should get 1 image part, got %d", len(parts))
+	}
+	if !strings.Contains(txt, "attached image(s):") {
+		t.Errorf("vision note missing: %q", txt)
 	}
 }
