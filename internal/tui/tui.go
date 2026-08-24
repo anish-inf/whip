@@ -2295,7 +2295,19 @@ func (m *model) submitTurn(text string, authored bool) (tea.Model, tea.Cmd) {
 	m.busy = true
 	prepared := m.prepareTurn(text)
 	userMsgIdx := len(m.agent.Messages) // where Turn will append this message
-	m.discardFuture()                   // new activity while rewound kills the redo stack
+	// Rewind bookkeeping: if a redo stack exists, this resubmission replaces a
+	// clipped message. Record the replaced text on the new message (internal,
+	// stripped before the provider) before discardFuture drops the stack.
+	rewoundFrom := ""
+	if authored && len(m.future) > 0 {
+		for _, fm := range m.future {
+			if fm.Role == "user" && fm.Authored {
+				rewoundFrom = oneLine(fm.Content)
+				break
+			}
+		}
+	}
+	m.discardFuture() // new activity while rewound kills the redo stack
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancel = cancel
 	p := m.prog
@@ -2369,6 +2381,10 @@ func (m *model) submitTurn(text string, authored bool) (tea.Model, tea.Cmd) {
 			OnUsage:   func(u llm.Usage) { send(usageMsg(u)) },
 		})
 		flush()
+		// stamp rewind provenance on the submitted message (appended by turn)
+		if rewoundFrom != "" && userMsgIdx < len(m.agent.Messages) {
+			m.agent.Messages[userMsgIdx].RewoundFrom = rewoundFrom
+		}
 		send(turnDoneMsg{final: final, err: err})
 	}()
 	m.append(youStyle.Render("❯ ") + linkifyFilePaths(text, realFileExists))

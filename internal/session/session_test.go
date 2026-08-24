@@ -70,10 +70,12 @@ func TestStoreRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	sent := time.Date(2025, 6, 1, 14, 30, 0, 0, time.UTC)
+	use := llm.Usage{PromptTokens: 12, CompletionTokens: 4}
 	msgs := []llm.Message{
 		{Role: "system", Content: "sys"},
 		{Role: "user", Content: "first question here", Authored: true, SentAt: &sent},
-		{Role: "assistant", Content: "the answer"},
+		{Role: "assistant", Content: "the answer", Usage: &use, Model: "kimi-k3-fast @ inference",
+			ToolCalls: []llm.ToolCall{{ID: "c1", DurationMs: 42, ExitCode: 0}}},
 		{Role: "user", Content: "follow-up"},
 		{Role: "assistant", Content: "final\nanswer"},
 	}
@@ -94,6 +96,17 @@ func TestStoreRoundTrip(t *testing.T) {
 	// the submission timestamp must survive the round trip (rewind picker)
 	if got[0].SentAt == nil || !got[0].SentAt.Equal(sent) {
 		t.Fatalf("SentAt did not round-trip: %+v", got[0])
+	}
+	// so must the per-message usage, model, and tool timing
+	asst := got[1]
+	if asst.Usage == nil || asst.Usage.PromptTokens != 12 || asst.Usage.CompletionTokens != 4 {
+		t.Fatalf("usage did not round-trip: %+v", asst.Usage)
+	}
+	if asst.Model != "kimi-k3-fast @ inference" {
+		t.Fatalf("model did not round-trip: %q", asst.Model)
+	}
+	if len(asst.ToolCalls) != 1 || asst.ToolCalls[0].DurationMs != 42 {
+		t.Fatalf("tool timing did not round-trip: %+v", asst.ToolCalls)
 	}
 
 	u, a := st.LastExchange(id)

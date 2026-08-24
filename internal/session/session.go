@@ -46,15 +46,30 @@ CREATE TABLE IF NOT EXISTS tasks (
 	PRIMARY KEY (session_id, task_id)
 );`
 
+// extraColumns are added idempotently after the base schema: SQLite's
+// ADD COLUMN errors if the column already exists, so each is guarded by an
+// information check in migrate(). New per-session bookkeeping lands here, not
+// in the CREATE above (which only runs on a fresh DB).
+var extraColumns = []struct{ name, def string }{
+	{"forked_from", "forked_from TEXT NOT NULL DEFAULT ''"}, // source session id
+	{"fork_seq", "fork_seq INTEGER NOT NULL DEFAULT 0"},     // branch point in the source
+	{"tags", "tags TEXT NOT NULL DEFAULT ''"},               // comma-separated labels
+	{"pinned", "pinned INTEGER NOT NULL DEFAULT 0"},         // 1 = keep / sort first
+}
+
 // Meta is a session's bookkeeping row.
 type Meta struct {
-	ID        string
-	Title     string
-	Model     string
-	Provider  string
-	CWD       string
-	Goal      string
-	UpdatedAt time.Time
+	ID         string
+	Title      string
+	Model      string
+	Provider   string
+	CWD        string
+	Goal       string
+	ForkedFrom string   // source session id when created by /fork ("" = root)
+	ForkSeq    int      // conversation index the fork branched at
+	Tags       []string // freeform labels, for filtering /resume
+	Pinned     bool     // pinned sessions sort first and survive cleanup
+	UpdatedAt  time.Time
 }
 
 type Store struct{ db *sql.DB }
@@ -80,6 +95,11 @@ func Open(path string) (*Store, error) {
 	}
 	// migrate pre-goal databases; duplicate-column errors are expected
 	db.Exec(`ALTER TABLE sessions ADD COLUMN goal TEXT NOT NULL DEFAULT ''`)
+	// later per-session bookkeeping (fork linkage, tags, pinned); the same
+	// duplicate-column-tolerant migration as goal
+	for _, c := range extraColumns {
+		db.Exec(`ALTER TABLE sessions ADD COLUMN ` + c.def)
+	}
 	return &Store{db: db}, nil
 }
 
@@ -189,7 +209,7 @@ func (s *Store) Save(id string, from int, msgs []llm.Message, model, provider st
 
 // Load resolves idOrPrefix to a session and returns its metadata and messages.
 func (s *Store) Load(idOrPrefix string) (Meta, []llm.Message, error) {
-	rows, err := s.db.Query(`SELECT id, title, model, provider, cwd, goal, updated_at FROM sessions WHERE id LIKE ?||'%' LIMIT 3`, idOrPrefix)
+	rows, err := s.db.Query(`SELECT id, title, model, provider, cwd, goal, forked_from, fork_seq, tags, pinned, updated_at FROM sessions WHERE id LIKE ?||'%' LIMIT 3`, idOrPrefix)
 	if err != nil {
 		return Meta{}, nil, err
 	}
@@ -233,7 +253,7 @@ func (s *Store) Load(idOrPrefix string) (Meta, []llm.Message, error) {
 
 // Recent returns up to n sessions, newest first.
 func (s *Store) Recent(n int) ([]Meta, error) {
-	rows, err := s.db.Query(`SELECT id, title, model, provider, cwd, goal, updated_at FROM sessions
+	rows, err := s.db.Query(`SELECT id, title, model, provider, cwd, goal, forked_from, fork_seq, tags, pinned, updated_at FROM sessions
 		WHERE EXISTS (SELECT 1 FROM messages WHERE session_id = sessions.id)
 		ORDER BY updated_at DESC LIMIT ?`, n)
 	if err != nil {
@@ -343,9 +363,9 @@ func (s *Store) Fork(srcID string, uptoSeq int, title string) (string, error) {
 		return "", err
 	}
 	defer tx.Rollback()
-	if _, err := tx.Exec(`INSERT INTO sessions (id, created_at, updated_at, cwd, model, provider, title, goal)
-		SELECT ?, ?, ?, cwd, model, provider, ?, goal FROM sessions WHERE id=?`,
-		newID, now(), now(), title, srcID); err != nil {
+	if _, err := tx.Exec(`INSERT INTO sessions (id, created_at, updated_at, cwd, model, provider, title, goal, forked_from, fork_seq)
+		SELECT ?, ?, ?, cwd, model, provider, ?, goal, ?, ? FROM sessions WHERE id=?`,
+		newID, now(), now(), title, srcID, uptoSeq, srcID); err != nil {
 		return "", err
 	}
 	if uptoSeq > 0 {
@@ -356,6 +376,33 @@ func (s *Store) Fork(srcID string, uptoSeq int, title string) (string, error) {
 		}
 	}
 	return newID, tx.Commit()
+}
+
+// SetTags replaces a session's label set (comma-separated storage).
+func (s *Store) SetTags(id string, tags []string) error {
+	_, err := s.db.Exec(`UPDATE sessions SET tags=? WHERE id=?`, strings.Join(tags, ","), id)
+	return err
+}
+
+// SetPinned marks a session pinned (sorts first in /resume, kept by cleanup).
+func (s *Store) SetPinned(id string, pinned bool) error {
+	v := 0
+	if pinned {
+		v = 1
+	}
+	_, err := s.db.Exec(`UPDATE sessions SET pinned=? WHERE id=?`, v, id)
+	return err
+}
+
+// ForksOf lists sessions forked from id, newest first — the session tree's
+// children of one node.
+func (s *Store) ForksOf(id string) ([]Meta, error) {
+	rows, err := s.db.Query(`SELECT id, title, model, provider, cwd, goal, forked_from, fork_seq, tags, pinned, updated_at
+		FROM sessions WHERE forked_from=? ORDER BY updated_at DESC`, id)
+	if err != nil {
+		return nil, err
+	}
+	return scanMetas(rows)
 }
 
 // ForkTitle derives the default fork name: "<title> (fork #N)" with N
@@ -410,10 +457,16 @@ func scanMetas(rows *sql.Rows) ([]Meta, error) {
 	var out []Meta
 	for rows.Next() {
 		var m Meta
-		var updated string
-		if err := rows.Scan(&m.ID, &m.Title, &m.Model, &m.Provider, &m.CWD, &m.Goal, &updated); err != nil {
+		var updated, tags string
+		var pinned int
+		if err := rows.Scan(&m.ID, &m.Title, &m.Model, &m.Provider, &m.CWD, &m.Goal,
+			&m.ForkedFrom, &m.ForkSeq, &tags, &pinned, &updated); err != nil {
 			return nil, err
 		}
+		if tags != "" {
+			m.Tags = strings.Split(tags, ",")
+		}
+		m.Pinned = pinned != 0
 		m.UpdatedAt, _ = time.Parse(time.RFC3339, updated)
 		out = append(out, m)
 	}

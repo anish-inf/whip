@@ -229,6 +229,8 @@ func (a *Agent) turn(ctx context.Context, input string, authored bool, ev Events
 			}
 			return "", err
 		}
+		msg.Usage = &usage
+		msg.Model = a.Model + " @ " + a.Provider
 		a.Messages = append(a.Messages, msg)
 		if len(msg.ToolCalls) > 0 {
 			results := a.runTools(ctx, msg.ToolCalls, ev)
@@ -273,8 +275,10 @@ func (a *Agent) turn(ctx context.Context, input string, authored bool, ev Events
 func (a *Agent) runTools(ctx context.Context, calls []llm.ToolCall, ev Events) []string {
 	results := make([]string, len(calls))
 	type outcome struct {
-		i   int
-		out string
+		i    int
+		out  string
+		ms   int64 // wall-clock run time, stored on the ToolCall for /tools perf
+		code int   // exit/status: 0 ok, 1 error (best-effort from the output)
 	}
 	outCh := make(chan outcome, len(calls)) // buffered: never blocks the workers
 
@@ -301,11 +305,13 @@ func (a *Agent) runTools(ctx context.Context, calls []llm.ToolCall, ev Events) [
 			if ev.OnToolStart != nil {
 				ev.OnToolStart(name, args)
 			}
+			start := time.Now()
 			out := tools.Execute(ctx, a.AllTools(), name, json.RawMessage(args))
+			ms := time.Since(start).Milliseconds()
 			if ev.OnToolEnd != nil {
 				ev.OnToolEnd(name, out)
 			}
-			outCh <- outcome{i, out}
+			outCh <- outcome{i, out, ms, toolExitCode(out)}
 		}(i, tc)
 	}
 
@@ -316,8 +322,20 @@ func (a *Agent) runTools(ctx context.Context, calls []llm.ToolCall, ev Events) [
 	}()
 	for oc := range outCh {
 		results[oc.i] = oc.out
+		calls[oc.i].DurationMs = oc.ms
+		calls[oc.i].ExitCode = oc.code
 	}
 	return results
+}
+
+// toolExitCode infers an exit status from a tool's output. Tools signal errors
+// by prefixing their output; 0 means success, 1 means the tool reported a
+// failure. Best-effort: the exact status lives in the tool, not the output.
+func toolExitCode(out string) int {
+	if strings.HasPrefix(out, "error") || strings.HasPrefix(out, "Error") {
+		return 1
+	}
+	return 0
 }
 
 // compactKeepBack counts assistant turns (and any tool results they pulled in)
