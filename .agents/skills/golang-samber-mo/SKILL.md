@@ -1,6 +1,6 @@
 ---
 name: golang-samber-mo
-description: "Monadic types for Golang using samber/mo — Option, Result, Either, Future, IO, Task, and State types for type-safe nullable values, error handling, and functional composition with pipeline sub-packages. Apply when using or adopting samber/mo, when the codebase imports `github.com/samber/mo`, or when considering functional programming patterns as a safety design for Golang."
+description: "Monadic types in Golang via samber/mo — Option, Result, Either, Future, IO, Task, State for type-safe nullable values, error handling, functional composition. Apply when using/adopting samber/mo, when the codebase imports github.com/samber/mo, or for functional patterns as a safety design."
 user-invocable: true
 license: MIT
 compatibility: Designed for Claude Code, Codex or similar harness, and for projects using Golang.

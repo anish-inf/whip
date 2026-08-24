@@ -1,6 +1,6 @@
 ---
 name: golang-lint
-description: "Linting best practices and golangci-lint configuration for Golang projects — running linters, configuring .golangci.yml, suppressing warnings with nolint directives, interpreting lint output, and selecting linters. Use when configuring golangci-lint, asking about lint warnings or nolint suppressions, setting up code quality tooling, or choosing linters. Also use when the user mentions golangci-lint, go vet, staticcheck, or revive."
+description: "Linting best practices and golangci-lint configuration for Go — running linters, configuring .golangci.yml, nolint suppressions, selecting linters. Use when setting up golangci-lint or code quality tooling, handling lint warnings or nolint, or when go vet, staticcheck, or revive are mentioned."
 user-invocable: true
 license: MIT
 compatibility: Designed for Claude Code, Codex or similar harness, and for projects using Golang.

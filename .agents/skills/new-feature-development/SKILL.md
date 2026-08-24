@@ -1,6 +1,6 @@
 ---
 name: new-feature-development
-description: "End-to-end playbook for building a NET-NEW feature in loopy. Use whenever the user wants to add a feature, tool, slash command, integration, or UX behavior ('build…', 'add…', 'implement…', 'wire up…', 'support…'), even without the word 'feature'. Clarifies ambiguity first, mines docs/roadmap.md + docs/learnings/ for prior art from pi/opencode/claude-code/codex/grok, writes a living plan in .ai-docs/, keeps code minimal and channel-idiomatic, gates on task check + go test -race, drives adversarial review, and lands docs/features.md + roadmap updates in the same change. Prefer over jumping into code for anything larger than a one-file change. NOT for debugging an existing bug (use golang-troubleshooting) or narrow changes owned by a dedicated golang-* skill."
+description: "Playbook for building a NET-NEW feature in loopy. Use when the user wants to add a feature, tool, slash command, integration, or UX behavior ('build…', 'add…', 'implement…'), even without the word 'feature'. Mines docs/roadmap.md + docs/learnings/. NOT for debugging or narrow golang-* changes."
 ---
 
 # New Feature Development

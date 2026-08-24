@@ -1,6 +1,6 @@
 ---
 name: golang-naming
-description: "Go (Golang) naming conventions — covers packages, constructors, structs, interfaces, constants, enums, errors, booleans, receivers, getters/setters, functional options, acronyms, test functions, and subtest names. Use this skill when writing new Go code, reviewing or refactoring, choosing between naming alternatives (New vs NewTypeName, isConnected vs connected, ErrNotFound vs NotFoundError, StatusReady vs StatusUnknown at iota 0), debating Go package names (utils/helpers anti-patterns), or asking about Go naming best practices. Also trigger when the user mentions MixedCaps vs snake_case, ALL_CAPS constants, Get-prefix on getters, or error string casing. Do NOT use for general Go implementation questions that don't involve naming decisions."
+description: "Go naming conventions — packages, constructors, structs, interfaces, enums, errors, receivers, getters/setters, acronyms, tests. Use when writing/reviewing Go code or picking between naming alternatives (New vs NewTypeName, ErrNotFound vs NotFoundError). Not for non-naming Go questions."
 user-invocable: true
 license: MIT
 compatibility: Designed for Claude Code, Codex or similar harness, and for projects using Golang.

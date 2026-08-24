@@ -1,6 +1,6 @@
 ---
 name: golang-dependency-management
-description: "Dependency management strategies for Golang projects — go.mod management, installing/upgrading packages, Minimal Version Selection, vulnerability scanning, outdated dependency tracking, binary size analysis, Dependabot/Renovate setup, conflict resolution, and go.work workspaces. Use when adding, removing, or upgrading Go dependencies, auditing vulnerabilities, resolving version conflicts, or setting up automated dependency updates."
+description: "Golang dependency management — go.mod, installing/upgrading packages, Minimal Version Selection, vulnerability scanning, binary size, Dependabot/Renovate, conflict resolution, go.work. Use when adding, removing, upgrading dependencies, auditing vulnerabilities, or automating updates."
 user-invocable: true
 license: MIT
 compatibility: Designed for Claude Code, Codex or similar harness, and for projects using Golang.

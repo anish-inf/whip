@@ -1,6 +1,6 @@
 ---
 name: golang-samber-ro
-description: "Reactive streams and event-driven programming in Golang using samber/ro — ReactiveX implementation with 150+ type-safe operators, cold/hot observables, 5 subject types (Publish, Behavior, Replay, Async, Unicast), declarative pipelines via Pipe, 40+ plugins (HTTP, cron, fsnotify, JSON, logging), automatic backpressure, error propagation, and Go context integration. Apply when using or adopting samber/ro, when the codebase imports github.com/samber/ro, or when building asynchronous event-driven pipelines, real-time data processing, streams, or reactive architectures in Go. Not for finite slice transforms (→ See `samber/cc-skills-golang@golang-samber-lo` skill)."
+description: "Reactive streams in Golang using samber/ro — ReactiveX with 150+ operators, cold/hot observables, subjects, Pipe pipelines, backpressure. Apply when using/adopting samber/ro, when the codebase imports it, or building async event pipelines. Not for finite slice transforms (golang-samber-lo)."
 user-invocable: true
 license: MIT
 compatibility: Designed for Claude Code, Codex or similar harness, and for projects using Golang.

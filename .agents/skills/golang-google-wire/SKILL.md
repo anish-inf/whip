@@ -1,6 +1,6 @@
 ---
 name: golang-google-wire
-description: "Compile-time dependency injection in Golang using google/wire — wire.NewSet, wire.Build, wire.Bind (interface→concrete), wire.Struct, wire.Value, wire.InterfaceValue, wire.FieldsOf, cleanup functions, //go:build wireinject injector files, and generated wire_gen.go. Apply when using or adopting google/wire, when the codebase imports `github.com/google/wire`, or when wiring an application graph at compile time via `wire.Build`. For runtime DI with reflection, see `samber/cc-skills-golang@golang-uber-dig` skill."
+description: "Compile-time dependency injection in Golang using google/wire — wire.NewSet, wire.Build, wire.Bind, wire.Struct, wire.FieldsOf, cleanup, wireinject, wire_gen.go. Apply when using google/wire, when code imports `github.com/google/wire`, or wiring at compile time. Runtime DI → `golang-uber-dig`."
 user-invocable: true
 license: MIT
 compatibility: Designed for Claude Code, Codex or similar harness, and for projects using Golang.

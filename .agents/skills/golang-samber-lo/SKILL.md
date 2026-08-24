@@ -1,6 +1,6 @@
 ---
 name: golang-samber-lo
-description: "Functional programming helpers for Golang using samber/lo — 500+ type-safe generic functions for slices, maps, channels, strings, math, tuples, and concurrency (Map, Filter, Reduce, GroupBy, Chunk, Flatten, Find, Uniq, etc.). Core immutable package (lo), concurrent variants (lo/parallel aka lop), in-place mutations (lo/mutable aka lom), lazy iterators (lo/it aka loi for Go 1.23+), and experimental SIMD (lo/exp/simd). Apply when using or adopting samber/lo, when the codebase imports github.com/samber/lo, or when implementing functional-style data transformations in Go. Not for streaming pipelines (→ See `samber/cc-skills-golang@golang-samber-ro` skill)."
+description: "Functional helpers for Go using samber/lo — 500+ type-safe generics for slices, maps, strings, concurrency (Map, Filter, Reduce); concurrent (lo/parallel), in-place (lo/mutable), lazy iterators (lo/it). Apply when using/importing github.com/samber/lo. Not for streaming (→ golang-ro)."
 user-invocable: true
 license: MIT
 compatibility: Designed for Claude Code, Codex or similar harness, and for projects using Golang.

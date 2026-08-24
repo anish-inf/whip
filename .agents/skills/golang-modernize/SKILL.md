@@ -1,6 +1,6 @@
 ---
 name: golang-modernize
-description: "Modernize Golang code to use recent language features, standard library improvements, and idiomatic patterns. Trigger proactively when writing or reviewing Go code and old-style patterns are detected, or when encountering a deprecation warning. Also use when the user explicitly asks for modernization, a Go version upgrade, or a CI/tooling refresh."
+description: "Modernize Go code to recent language features, standard library improvements, and idiomatic patterns. Trigger proactively when writing or reviewing Go code with old-style patterns or a deprecation warning, or when the user asks for modernization, a Go version upgrade, or a CI/tooling refresh."
 user-invocable: true
 license: MIT
 compatibility: Designed for Claude Code, Codex or similar harness, and for projects using Golang.

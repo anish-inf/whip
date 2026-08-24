@@ -1,6 +1,6 @@
 ---
 name: golang-continuous-integration
-description: "CI/CD pipeline configuration using GitHub Actions for Golang projects — testing, linting, SAST, security scanning, code coverage, Dependabot, Renovate, GoReleaser, code review automation, and release pipelines. Use when setting up or improving Go project CI, configuring GitHub Actions workflows, adding linters or security scanners, automating dependency updates, or adding quality gates."
+description: "CI/CD with GitHub Actions for Golang — testing, linting, SAST, security scanning, coverage, Dependabot, Renovate, GoReleaser, release pipelines. Use when setting up Go project CI, GitHub Actions workflows, linters/scanners, dependency update automation, or quality gates."
 user-invocable: true
 license: MIT
 compatibility: Designed for Claude Code, Codex or similar harness, and for projects using Golang.

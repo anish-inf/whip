@@ -1,6 +1,6 @@
 ---
 name: golang-error-handling
-description: "Idiomatic Golang error handling — creation, wrapping with %w, errors.Is/As, errors.Join, custom error types, sentinel errors, panic/recover, the single handling rule, structured logging with slog, HTTP request logging middleware, and samber/oops for production errors. Built to make logs usable at scale with log aggregation 3rd-party tools. Apply when creating, wrapping, inspecting, or logging errors in Go code. For samber/oops specifics → See `samber/cc-skills-golang@golang-samber-oops` skill; for slog handler ecosystem → See `samber/cc-skills-golang@golang-samber-slog` skill."
+description: "Idiomatic Golang error handling — %w wrapping, errors.Is/As, errors.Join, custom and sentinel errors, panic/recover, single handling rule, slog logging, samber/oops. Apply when creating, wrapping, inspecting, or logging errors. oops → `golang-samber-oops`; slog → `golang-samber-slog`."
 user-invocable: true
 license: MIT
 compatibility: Designed for Claude Code, Codex or similar harness, and for projects using Golang.

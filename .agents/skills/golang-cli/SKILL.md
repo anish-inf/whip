@@ -1,6 +1,6 @@
 ---
 name: golang-cli
-description: "Golang CLI application development. Use when building, modifying, or reviewing a Go CLI tool — especially for command structure, flag handling, configuration layering, version embedding, exit codes, I/O patterns, signal handling, shell completion, argument validation, and CLI unit testing. Also triggers when code uses cobra, viper, or urfave/cli. For cobra-specific APIs → See `samber/cc-skills-golang@golang-spf13-cobra` skill; for viper configuration layering → See `samber/cc-skills-golang@golang-spf13-viper` skill."
+description: "Golang CLI development — command structure, flags, config layering, exit codes, I/O, signals, shell completion, validation, testing. Use when building or reviewing a Go CLI or code using cobra, viper, urfave/cli. Cobra → `golang-spf13-cobra`; viper → `golang-spf13-viper`."
 user-invocable: true
 license: MIT
 compatibility: Designed for Claude Code, Codex or similar harness, and for projects using Golang.

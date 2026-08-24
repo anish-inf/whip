@@ -1,6 +1,6 @@
 ---
 name: golang-documentation
-description: "Comprehensive documentation guide for Golang projects, covering godoc comments, README, CONTRIBUTING, CHANGELOG, Go Playground, Example tests, API docs, and llms.txt. Use when writing or reviewing doc comments, documentation, adding code examples, setting up doc sites, or discussing documentation best practices. Triggers for both libraries and applications/CLIs."
+description: "Documentation for Golang projects — godoc comments, README, CONTRIBUTING, CHANGELOG, Go Playground, Example tests, API docs, llms.txt. Use when writing or reviewing doc comments or documentation, adding code examples, setting up doc sites, or documentation best practices. For libraries and CLIs."
 user-invocable: true
 license: MIT
 compatibility: Designed for Claude Code, Codex or similar harness, and for projects using Golang.

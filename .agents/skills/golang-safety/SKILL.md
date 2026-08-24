@@ -1,6 +1,6 @@
 ---
 name: golang-safety
-description: "Defensive Golang coding to prevent panics, silent data corruption, and subtle runtime bugs. Use when encountering nil panics, append aliasing, map concurrent access, float comparison pitfalls, or zero-value design questions. Also use when reviewing code for nil-safety, numeric conversion overflow, resource lifecycle issues (defer in loops), or defensive copying of slices and maps."
+description: "Defensive Go coding to prevent panics, silent data corruption, and subtle runtime bugs. Use for nil panics, append aliasing, concurrent map access, float comparison pitfalls, zero-value design; or when reviewing for nil-safety, numeric overflow, defer in loops, or defensive copying of slices/maps."
 user-invocable: true
 license: MIT
 compatibility: Designed for Claude Code, Codex or similar harness, and for projects using Golang.
