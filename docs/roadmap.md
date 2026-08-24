@@ -79,7 +79,7 @@ parallel tool calls and background subagents).
 - [x] Model → provider routing in config (switch providers without touching models)
 - [ ] `anthropic-messages` API style alongside `openai-completions` (pi: `packages/ai/src/api/`)
 - [ ] `"$VAR"` / `"!cmd"` resolution for apiKey/header values in config (pi models.json value resolution)
-- [x] Reasoning effort: `/effort [off|low|medium|high]` (bare cycles), tab-completes, clickable `⚡` control in the header top-right; sent as `reasoning_effort`, inherited by subagents, survives model switches
+- [x] Reasoning effort: `/effort [off|low|medium|high]` (bare opens the selector), tab-completes, clickable `⚡` control in the header top-right; sent as `reasoning_effort`, inherited by subagents, survives model switches
 - [ ] Per-model sampling params in config (`samplingParams: {temperature, top_p}`)
 
 ## MCP

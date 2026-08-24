@@ -3,6 +3,8 @@ package tui
 import (
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
+
 	"github.com/context-labs/loopy/internal/agent"
 	"github.com/context-labs/loopy/internal/config"
 )
@@ -82,6 +84,31 @@ func TestEffortsForAdvertisedLevels(t *testing.T) {
 	m.provName = "elsewhere"
 	if got := m.effortsFor(); len(got) != len(defaultEfforts) {
 		t.Fatalf("missing catalog should fall back to defaults: %v", got)
+	}
+}
+
+// bare /effort opens the level selector (palette panel) so the user can
+// scroll ↑/↓ and pick — cycling blindly hides the choices.
+func TestEffortBareOpensSelector(t *testing.T) {
+	m := compactCmdModel()
+	m.command("/effort")
+	if m.palette == nil {
+		t.Fatal("bare /effort should open the palette")
+	}
+	pp := m.palette.top()
+	if pp == nil || pp.kind != panelEffort {
+		t.Fatalf("expected the effort panel, got %+v", pp)
+	}
+	if len(pp.levels) != len(defaultEfforts) || pp.levels[pp.lidx] != m.agent.Effort {
+		t.Fatalf("effort panel should list the model's levels on the current one: %v @%d", pp.levels, pp.lidx)
+	}
+	// scroll down to low and apply with enter
+	tm, _ := m.paletteKey(tea.KeyMsg{Type: tea.KeyDown})
+	m = tm.(*model)
+	tm, _ = m.paletteKey(tea.KeyMsg{Type: tea.KeyEnter})
+	m = tm.(*model)
+	if m.agent.Effort != "low" {
+		t.Fatalf("selecting low in the selector should apply it, got %q", m.agent.Effort)
 	}
 }
 
