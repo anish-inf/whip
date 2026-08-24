@@ -123,6 +123,39 @@ func TestResumeRestoresTasks(t *testing.T) {
 	}
 }
 
+// Resumed sessions seed ↑ history with only messages the user actually typed:
+// steered subagent reports and goal prompts are stored as role "user" with
+// Authored=false and must not be recallable.
+func TestResumeHistorySkipsUnauthoredMessages(t *testing.T) {
+	srv := sseTextServer(t, "ok")
+	defer srv.Close()
+	m := tasksModelStore(t, srv.URL)
+
+	id, err := m.store.Create("/tmp", "m", "p")
+	if err != nil {
+		t.Fatal(err)
+	}
+	msgs := []llm.Message{
+		{Role: "system", Content: "sys"},
+		{Role: "user", Content: "typed by the human", Authored: true},
+		{Role: "assistant", Content: "a"},
+		{Role: "user", Content: "[background task task-1 done] PONG", Authored: false}, // steered report
+		{Role: "user", Content: "continue until the goal is met", Authored: false},     // goal prompt
+		{Role: "user", Content: "another typed one", Authored: true},
+	}
+	if err := m.store.Save(id, 1, msgs, "m", "p"); err != nil {
+		t.Fatal(err)
+	}
+
+	m.agent = agent.New(llm.New(srv.URL, "k"), "m", 100, "sys")
+	if err := m.resume(id); err != nil {
+		t.Fatal(err)
+	}
+	if len(m.hist) != 2 || m.hist[0] != "typed by the human" || m.hist[1] != "another typed one" {
+		t.Fatalf("↑ history should hold only authored messages, got %v", m.hist)
+	}
+}
+
 // Starting a background task with a store attached persists it; the settle
 // overwrites the running row with the final report (end-to-end through the
 // OnRecord hook, no tea.Program).

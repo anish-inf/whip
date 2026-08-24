@@ -521,7 +521,9 @@ func (m *model) resume(id string) error {
 		seen[h] = true
 	}
 	for _, msg := range msgs {
-		if msg.Role == "user" && !seen[msg.Content] {
+		// Authored only: steered subagent reports and goal prompts are stored
+		// as role "user" but were never typed — ↑ must not recall them.
+		if msg.Role == "user" && msg.Authored && !seen[msg.Content] {
 			seen[msg.Content] = true
 			m.hist = append(m.hist, msg.Content)
 		}
