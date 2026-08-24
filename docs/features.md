@@ -494,6 +494,12 @@ code-shaped tool, `browser_exec`. Design: docs/learnings/browser-use-integration
 - **UX**: the TUI tool row shows the code's first `# comment` as a
   plain-language step label (`tui/browser.go browserStepLabel`) instead of
   raw JSON; `browser.enabled: false` removes the tool.
+- **Screencast hook (follow-up, not shipped)**: because the driver is
+  in-process, `Page.startScreencast` frames could stream to a TUI pane for
+  a live view of the agent's page — impossible through the CLI-subprocess
+  design. The seam is `internal/browser.Backend` (add a
+  `Screencast(ctx, func(frame []byte))` method) feeding a new transcript
+  block type; no agent-loop changes needed.
 
 Tests: `internal/browser/browser_test.go` (DevToolsActivePort parsing,
 profile scan with fake dirs, /json/version + 404-fallback + 403-permission
