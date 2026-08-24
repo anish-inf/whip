@@ -59,6 +59,7 @@ type Agent struct {
 
 	files *fileLocks // per-path mutation locks for parallel tool calls
 	bg    *taskRegistry
+	todos *todos // the todowrite plan store, injected per round
 
 	// toolsMu guards mcpTools: the MCP manager's OnChange can fire (server
 	// settled) while a Turn is streaming, and Turn reads the tool set per
@@ -177,8 +178,10 @@ func New(client *llm.Client, model string, maxTokens int, systemPrompt string) *
 		a.Tools = append(a.Tools, tools.BrowserExec())
 	}
 	a.Tools = append(a.Tools, taskTool(a))
+	a.Tools = append(a.Tools, todoTool(a))
 	a.files = newFileLocks()
 	a.bg = newTaskRegistry()
+	a.todos = &todos{}
 	return a
 }
 
@@ -265,9 +268,17 @@ func (a *Agent) turn(ctx context.Context, input string, parts []llm.ContentPart,
 		if err := a.maybeCompact(ctx, ev); err != nil {
 			return "", err
 		}
+		msgs := a.Messages
+		if block := a.todosFor().block(); block != "" {
+			// Open plan items ride along as an ephemeral system message each
+			// round: a.Messages stays clean, and the plan survives long tool
+			// loops and compaction because it is re-derived, not stored.
+			msgs = append(append([]llm.Message(nil), a.Messages...),
+				llm.Message{Role: "system", Content: block})
+		}
 		msg, usage, err := a.Client.Stream(ctx, llm.Request{
 			Model:           a.Model,
-			Messages:        a.Messages,
+			Messages:        msgs,
 			Tools:           tools.Defs(a.AllTools()),
 			ReasoningEffort: a.Effort,
 		}, ev.OnText, ev.OnThink)

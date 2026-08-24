@@ -542,6 +542,7 @@ func (m *model) resume(id string) error {
 		config.LogEvent("session.task", "load failed: "+terr.Error())
 	}
 	m.agent.Messages = append(m.agent.Messages, msgs...)
+	m.agent.LoadTodosJSON(m.store.Todos(meta.ID))
 	// restore the cumulative token totals saved with the session; a row that
 	// pre-dates the usage columns reads zero, so rebuild by summing the
 	// per-message usage already stored on each assistant message. Either way
@@ -655,6 +656,7 @@ func (m *model) persist() {
 	// survive a compaction rewrite of the messages.
 	m.store.SetGoal(m.sessionID, m.goal)
 	m.store.SetEffort(m.sessionID, m.agent.Effort)
+	m.store.SetTodos(m.sessionID, m.agent.TodosJSON())
 	if u := m.agent.Usage(); u.PromptTokens > 0 || u.CompletionTokens > 0 {
 		m.store.SetUsage(m.sessionID, u.PromptTokens, u.Cached(), u.CompletionTokens)
 	}

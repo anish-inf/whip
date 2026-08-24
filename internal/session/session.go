@@ -59,6 +59,7 @@ var extraColumns = []struct{ name, def string }{
 	{"usage_in", "usage_in INTEGER NOT NULL DEFAULT 0"},         // cumulative input tokens (provider-reported)
 	{"usage_cached", "usage_cached INTEGER NOT NULL DEFAULT 0"}, // of usage_in, tokens served from the prompt cache
 	{"usage_out", "usage_out INTEGER NOT NULL DEFAULT 0"},       // cumulative output tokens
+	{"todos", "todos TEXT NOT NULL DEFAULT ''"},                 // todowrite plan JSON ([]agent.Todo)
 }
 
 // Meta is a session's bookkeeping row.
@@ -115,6 +116,22 @@ func Open(path string) (*Store, error) {
 func (s *Store) SetGoal(id, goal string) error {
 	_, err := s.db.Exec(`UPDATE sessions SET goal=? WHERE id=?`, goal, id)
 	return err
+}
+
+// SetTodos stores the session's todowrite plan as JSON ("" clears it). The
+// plan is a whole-list snapshot: the model rewrites it in full each call, so
+// this is a plain overwrite, not a merge.
+func (s *Store) SetTodos(id, todosJSON string) error {
+	_, err := s.db.Exec(`UPDATE sessions SET todos=? WHERE id=?`, todosJSON, id)
+	return err
+}
+
+// Todos returns the session's stored todowrite plan JSON ("" when unset or
+// the session is unknown). The agent package owns the schema.
+func (s *Store) Todos(id string) string {
+	var v string
+	s.db.QueryRow(`SELECT todos FROM sessions WHERE id=?`, id).Scan(&v)
+	return v
 }
 
 // SetEffort stores the session's reasoning effort. "" means the row pre-dates
