@@ -10,6 +10,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/context-labs/loopy/internal/agent"
 	"github.com/context-labs/loopy/internal/config"
@@ -366,5 +367,30 @@ func TestQueueViewShowsSelection(t *testing.T) {
 	}
 	if !strings.Contains(view, "↑/↓ select") {
 		t.Errorf("queue footer should advertise navigation:\n%s", view)
+	}
+}
+
+// A long queued message must render as ONE line, not wrap to full height —
+// otherwise a couple of long queued messages crowd out the transcript.
+func TestQueueRendersOneLineEach(t *testing.T) {
+	long := strings.Repeat("a very long queued message that would wrap to many lines ", 6)
+	m := busyQueueModel("short", long, "another "+strings.Repeat("word ", 30))
+	view := m.View()
+
+	for _, q := range m.queue {
+		// count rendered lines containing this message's content
+		needle := q
+		if len(needle) > 20 {
+			needle = needle[:20] // a prefix survives truncation
+		}
+		count := 0
+		for _, line := range strings.Split(view, "\n") {
+			if strings.Contains(ansi.Strip(line), ansi.Strip(needle)) {
+				count++
+			}
+		}
+		if count > 1 {
+			t.Errorf("queued message rendered on %d lines (want 1): %.40q…", count, q)
+		}
 	}
 }

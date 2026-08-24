@@ -3097,9 +3097,11 @@ func (m *model) View() string {
 		}
 		b.WriteString(dimStyle.Render(fmt.Sprintf(" ⧗ queued (%d) — enter on empty input to steer into this turn%s", len(m.queue), nav)) + "\n")
 		for i, q := range m.queue {
-			line := wrap(youStyle.Render(" ❯ ")+q, m.width)
+			// one line per queued message: truncate (never wrap) so long
+			// messages don't crowd out the transcript
+			line := ansi.Truncate(youStyle.Render(" ❯ ")+q, m.width, "…")
 			if i == m.queueSel {
-				line = wrap(botStyle.Render(" → ")+q+dimStyle.Render("  (del to remove)"), m.width)
+				line = ansi.Truncate(botStyle.Render(" → ")+q+dimStyle.Render("  (del to remove)"), m.width, "…")
 			}
 			b.WriteString(line + "\n")
 		}
