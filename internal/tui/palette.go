@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/context-labs/loopy/internal/mcp"
 )
 
 // paletteItem is one row in the ctrl+p command palette. It mirrors opencode's
@@ -183,6 +185,26 @@ func (m *model) paletteItems() []paletteItem {
 			dynDesc: func(m *model) string { return "summarize old turns to free context" },
 			dynHint: func(m *model) string { return "/compact" },
 			run:     func(m *model) (tea.Model, tea.Cmd) { return m.command("/compact") }},
+		{title: "Context doctor", category: "Session",
+			dynDesc: func(m *model) string { return "audit what a fresh session injects, in tokens" },
+			dynHint: func(m *model) string { return "/context-doctor" },
+			run:     func(m *model) (tea.Model, tea.Cmd) { return m.command("/context-doctor") }},
+		{title: "MCP servers", category: "Session",
+			dynDesc: func(m *model) string {
+				if m.mcpMgr == nil {
+					return "none configured"
+				}
+				ready, total := 0, 0
+				for _, st := range m.mcpMgr.Statuses() {
+					total++
+					if st.Status == mcp.StatusReady {
+						ready++
+					}
+				}
+				return fmt.Sprintf("%d/%d ready — status, reconnect, toggle", ready, total)
+			},
+			dynHint: func(m *model) string { return "/mcp" },
+			run:     func(m *model) (tea.Model, tea.Cmd) { return m.command("/mcp") }},
 		{title: "Compaction model", category: "Session",
 			dynDesc: func(m *model) string {
 				if m.compactModel == "" {

@@ -20,8 +20,22 @@ func TestCompletions(t *testing.T) {
 
 	// slash commands
 	head, cs := completions("/m", models, provs, nil, nil)
-	if head != "" || len(cs) != 2 || cs[0].Text != "/model" || cs[1].Text != "/mouse" {
+	if head != "" || len(cs) != 3 || cs[0].Text != "/mcp" || cs[1].Text != "/model" || cs[2].Text != "/mouse" {
 		t.Fatalf("command completion: %q %v", head, texts(cs))
+	}
+	// every slash command in the switch must be completable — the "I can't
+	// see /context-doctor" regression class: the command exists but the
+	// completion table was never told.
+	for _, cmd := range []string{"/context-doctor", "/mcp"} {
+		found := false
+		for _, c := range commands {
+			if c.Text == cmd {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("%s missing from completion table", cmd)
+		}
 	}
 	// /model first arg
 	head, cs = completions("/model k", models, provs, nil, nil)
