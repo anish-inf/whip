@@ -34,6 +34,69 @@ func seeded(t *testing.T) (*Store, string) {
 	return st, id
 }
 
+func TestForkRecordsLinkage(t *testing.T) {
+	st, id := seeded(t)
+
+	newID, err := st.Fork(id, 2, "experiment")
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta, _, err := st.Load(newID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.ForkedFrom != id || meta.ForkSeq != 2 {
+		t.Fatalf("fork linkage: %+v", meta)
+	}
+
+	// the source lists the fork among its children
+	forks, err := st.ForksOf(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(forks) != 1 || forks[0].ID != newID {
+		t.Fatalf("ForksOf: %+v", forks)
+	}
+	// a root session has no parent linkage
+	root, _, _ := st.Load(id)
+	if root.ForkedFrom != "" || root.ForkSeq != 0 {
+		t.Fatalf("root should have no fork linkage: %+v", root)
+	}
+}
+
+func TestSessionTagsAndPinned(t *testing.T) {
+	st, id := seeded(t)
+
+	if err := st.SetTags(id, []string{"work", "bug bash"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetPinned(id, true); err != nil {
+		t.Fatal(err)
+	}
+	meta, _, err := st.Load(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(meta.Tags) != 2 || meta.Tags[0] != "work" || meta.Tags[1] != "bug bash" {
+		t.Fatalf("tags: %+v", meta.Tags)
+	}
+	if !meta.Pinned {
+		t.Fatal("session should be pinned")
+	}
+
+	// clearing both round-trips back to empty/false
+	if err := st.SetTags(id, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetPinned(id, false); err != nil {
+		t.Fatal(err)
+	}
+	meta, _, _ = st.Load(id)
+	if len(meta.Tags) != 0 || meta.Pinned {
+		t.Fatalf("cleared: tags=%v pinned=%v", meta.Tags, meta.Pinned)
+	}
+}
+
 func TestForkCopiesPrefix(t *testing.T) {
 	st, id := seeded(t)
 

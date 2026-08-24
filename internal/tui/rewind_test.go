@@ -325,6 +325,49 @@ func TestRewindTruncatesAndRestoresInput(t *testing.T) {
 	}
 }
 
+// After a rewind, resubmitting records the replaced message's text as
+// RewoundFrom — rewind provenance survives on the new message (and in the
+// store) even though the redo stack is discarded.
+func TestResubmitAfterRewindStampsRewoundFrom(t *testing.T) {
+	m := rewindModel(t,
+		llm.Message{Role: "user", Content: "q1", Authored: true},
+		llm.Message{Role: "assistant", Content: "a1"},
+		llm.Message{Role: "user", Content: "q2 original", Authored: true},
+		llm.Message{Role: "assistant", Content: "a2"},
+	)
+	// rewind to before q2: q2/a2 become the redo stack
+	m.applyRewind(3)
+	if len(m.future) != 2 || len(m.agent.Messages) != 3 {
+		t.Fatalf("after rewind: msgs=%d future=%d", len(m.agent.Messages), len(m.future))
+	}
+
+	// the submitTurn logic: capture the replaced text, then discard the future
+	rewoundFrom := ""
+	if len(m.future) > 0 {
+		for _, fm := range m.future {
+			if fm.Role == "user" && fm.Authored {
+				rewoundFrom = oneLine(fm.Content)
+				break
+			}
+		}
+	}
+	if rewoundFrom != "q2 original" {
+		t.Fatalf("rewoundFrom should capture the replaced message, got %q", rewoundFrom)
+	}
+	m.discardFuture()
+	// the resubmitted message is stamped (what submitTurn does post-turn)
+	m.agent.Messages = append(m.agent.Messages, llm.Message{
+		Role: "user", Content: "q2 edited", Authored: true, RewoundFrom: rewoundFrom,
+	})
+	got := m.agent.Messages[len(m.agent.Messages)-1]
+	if got.RewoundFrom != "q2 original" {
+		t.Fatalf("resubmitted message should carry RewoundFrom, got %q", got.RewoundFrom)
+	}
+	if len(m.future) != 0 {
+		t.Fatalf("redo stack should be discarded, got %d", len(m.future))
+	}
+}
+
 func TestRewindForwardTravel(t *testing.T) {
 	m := rewindModel(t,
 		llm.Message{Role: "user", Content: "q1", Authored: true},

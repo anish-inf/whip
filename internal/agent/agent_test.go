@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/context-labs/loopy/internal/llm"
 	"github.com/context-labs/loopy/internal/tools"
@@ -78,6 +80,101 @@ func TestTurnLoop(t *testing.T) {
 	// system, user, assistant(tool call), tool result, assistant(text)
 	if len(ag.Messages) != 5 {
 		t.Fatalf("message count: %d", len(ag.Messages))
+	}
+}
+
+// Each assistant message records its token usage and which model produced it;
+// tool calls record their run time and exit status. All survive for per-turn
+// cost and perf views after the in-memory session totals are gone.
+func TestTurnStampsUsageModelAndToolTiming(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req llm.Request
+		json.NewDecoder(r.Body).Decode(&req)
+		w.Header().Set("Content-Type", "text/event-stream")
+		if len(req.Messages) > 0 && req.Messages[len(req.Messages)-1].Role == "tool" {
+			fmt.Fprint(w, `data: {"choices":[{"delta":{"content":"done"},"finish_reason":"stop"}],"usage":{"prompt_tokens":7,"completion_tokens":3}}`+"\n\n")
+		} else {
+			fmt.Fprint(w, `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"t1","type":"function","function":{"name":"echo","arguments":"{\"s\":\"hi\"}"}}]}}]}`+"\n\n")
+			fmt.Fprint(w, `data: {"usage":{"prompt_tokens":5,"completion_tokens":2}}`+"\n\n")
+		}
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer srv.Close()
+
+	ag := New(llm.New(srv.URL, "k"), "kimi-k3-fast", 100, "sys")
+	ag.Provider = "inference"
+	ag.Tools = []tools.Tool{echoTool()}
+
+	if _, err := ag.TurnAuthored(context.Background(), "go", Events{}); err != nil {
+		t.Fatal(err)
+	}
+	// system, user, assistant(toolcall), tool, assistant(text)
+	if len(ag.Messages) != 5 {
+		t.Fatalf("messages: %d", len(ag.Messages))
+	}
+	user := ag.Messages[1]
+	if user.SentAt == nil {
+		t.Error("authored user message should carry SentAt")
+	}
+	var assistants []llm.Message
+	for _, m := range ag.Messages {
+		if m.Role == "assistant" {
+			assistants = append(assistants, m)
+		}
+	}
+	if len(assistants) != 2 {
+		t.Fatalf("assistants: %d", len(assistants))
+	}
+	for i, a := range assistants {
+		if a.Usage == nil || a.Usage.PromptTokens == 0 {
+			t.Errorf("assistant[%d] missing usage: %+v", i, a.Usage)
+		}
+		if a.Model != "kimi-k3-fast @ inference" {
+			t.Errorf("assistant[%d] model: %q", i, a.Model)
+		}
+	}
+	// the tool call carries its run time and a successful exit status
+	call := assistants[0].ToolCalls[0]
+	if call.DurationMs < 0 {
+		t.Errorf("tool call duration: %d", call.DurationMs)
+	}
+	if call.ExitCode != 0 {
+		t.Errorf("successful echo should be exit 0, got %d", call.ExitCode)
+	}
+}
+
+// The internal stamps (usage, model, tool timing) must be stripped before the
+// provider ever sees them.
+func TestInternalStampsStrippedFromRequest(t *testing.T) {
+	var bodies [][]byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		bodies = append(bodies, b)
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, `data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}`+"\n\ndata: [DONE]\n\n")
+	}))
+	defer srv.Close()
+
+	ag := New(llm.New(srv.URL, "k"), "m", 100, "sys")
+	// pre-seed a message loaded from storage with all internal fields set
+	sent := time.Now()
+	u := llm.Usage{PromptTokens: 9}
+	ag.Messages = append(ag.Messages, llm.Message{
+		Role: "assistant", Content: "prior", Usage: &u, Model: "m @ p",
+		ToolCalls: []llm.ToolCall{{ID: "x", DurationMs: 5, ExitCode: 1}},
+	})
+	ag.Messages = append(ag.Messages, llm.Message{Role: "user", Content: "old", Authored: true, SentAt: &sent, RewoundFrom: "earlier"})
+	if _, err := ag.Turn(context.Background(), "go", Events{}); err != nil {
+		t.Fatal(err)
+	}
+	if len(bodies) == 0 {
+		t.Fatal("no request captured")
+	}
+	body := string(bodies[len(bodies)-1])
+	for _, leak := range []string{"usage\":{", "\"model\":\"m @ p\"", "duration_ms", "exit_code", "sent_at", "rewound_from", "authored"} {
+		if strings.Contains(body, leak) {
+			t.Errorf("internal field %q leaked to provider:\n%s", leak, body)
+		}
 	}
 }
 

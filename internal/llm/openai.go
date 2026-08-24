@@ -31,6 +31,32 @@ type Message struct {
 	// per-message timestamp. A pointer so omitempty drops it for injected and
 	// pre-field messages (a zero time.Time struct is never omitted).
 	SentAt *time.Time `json:"sent_at,omitempty"`
+	// Usage is the token accounting for the assistant response that produced
+	// this message. Internal only — never sent to the provider; powers
+	// per-turn cost display and survives session resume (the in-memory
+	// session totals do not).
+	Usage *Usage `json:"usage,omitempty"`
+	// Model records which model produced an assistant message ("id @
+	// provider"), so a /model switch mid-session doesn't rewrite history
+	// silently. Internal only — never sent to the provider.
+	Model string `json:"model,omitempty"`
+	// RewoundFrom notes that this message replaced an earlier clipped one
+	// (rewind + resubmit). Internal only — never sent to the provider.
+	RewoundFrom string `json:"rewound_from,omitempty"`
+}
+
+// ToolCall is a model-requested tool invocation. DurationMs and ExitCode are
+// loopy-internal execution bookkeeping (never sent to the provider): how long
+// the tool ran and how it finished, for a future /tools perf view.
+type ToolCall struct {
+	ID       string `json:"id"`
+	Type     string `json:"type"`
+	Function struct {
+		Name      string `json:"name"`
+		Arguments string `json:"arguments"`
+	} `json:"function"`
+	DurationMs int64 `json:"duration_ms,omitempty"`
+	ExitCode   int   `json:"exit_code,omitempty"`
 }
 
 // stripAuthored returns a copy of msgs with the internal Authored marker and
@@ -44,18 +70,15 @@ func stripAuthored(msgs []Message) []Message {
 	for i := range out {
 		out[i].Authored = false
 		out[i].SentAt = nil
+		out[i].Usage = nil
+		out[i].Model = ""
+		out[i].RewoundFrom = ""
+		for j := range out[i].ToolCalls {
+			out[i].ToolCalls[j].DurationMs = 0
+			out[i].ToolCalls[j].ExitCode = 0
+		}
 	}
 	return out
-}
-
-// ToolCall is a model-requested tool invocation.
-type ToolCall struct {
-	ID       string `json:"id"`
-	Type     string `json:"type"`
-	Function struct {
-		Name      string `json:"name"`
-		Arguments string `json:"arguments"`
-	} `json:"function"`
 }
 
 // Tool is a tool definition advertised to the model.
