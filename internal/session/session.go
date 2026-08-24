@@ -51,33 +51,33 @@ CREATE TABLE IF NOT EXISTS tasks (
 // information check in migrate(). New per-session bookkeeping lands here, not
 // in the CREATE above (which only runs on a fresh DB).
 var extraColumns = []struct{ name, def string }{
-	{"forked_from", "forked_from TEXT NOT NULL DEFAULT ''"}, // source session id
-	{"fork_seq", "fork_seq INTEGER NOT NULL DEFAULT 0"},     // branch point in the source
-	{"tags", "tags TEXT NOT NULL DEFAULT ''"},               // comma-separated labels
-	{"pinned", "pinned INTEGER NOT NULL DEFAULT 0"},         // 1 = keep / sort first
-	{"effort", "effort TEXT NOT NULL DEFAULT ''"},           // reasoning effort in effect ("" = global default)
-	{"usage_in", "usage_in INTEGER NOT NULL DEFAULT 0"},     // cumulative input tokens (provider-reported)
+	{"forked_from", "forked_from TEXT NOT NULL DEFAULT ''"},     // source session id
+	{"fork_seq", "fork_seq INTEGER NOT NULL DEFAULT 0"},         // branch point in the source
+	{"tags", "tags TEXT NOT NULL DEFAULT ''"},                   // comma-separated labels
+	{"pinned", "pinned INTEGER NOT NULL DEFAULT 0"},             // 1 = keep / sort first
+	{"effort", "effort TEXT NOT NULL DEFAULT ''"},               // reasoning effort in effect ("" = global default)
+	{"usage_in", "usage_in INTEGER NOT NULL DEFAULT 0"},         // cumulative input tokens (provider-reported)
 	{"usage_cached", "usage_cached INTEGER NOT NULL DEFAULT 0"}, // of usage_in, tokens served from the prompt cache
-	{"usage_out", "usage_out INTEGER NOT NULL DEFAULT 0"},   // cumulative output tokens
+	{"usage_out", "usage_out INTEGER NOT NULL DEFAULT 0"},       // cumulative output tokens
 }
 
 // Meta is a session's bookkeeping row.
 type Meta struct {
-	ID         string
-	Title      string
-	Model      string
-	Provider   string
-	CWD        string
-	Goal       string
-	ForkedFrom string   // source session id when created by /fork ("" = root)
-	ForkSeq    int      // conversation index the fork branched at
-	Tags       []string // freeform labels, for filtering /resume
-	Pinned     bool     // pinned sessions sort first and survive cleanup
-	Effort     string   // reasoning effort for this session ("" = use the global default)
-	UsageIn    int      // cumulative input tokens across the session's API calls
-	UsageCached int     // of UsageIn, tokens served from the provider's prompt cache
-	UsageOut   int      // cumulative output tokens
-	UpdatedAt  time.Time
+	ID          string
+	Title       string
+	Model       string
+	Provider    string
+	CWD         string
+	Goal        string
+	ForkedFrom  string   // source session id when created by /fork ("" = root)
+	ForkSeq     int      // conversation index the fork branched at
+	Tags        []string // freeform labels, for filtering /resume
+	Pinned      bool     // pinned sessions sort first and survive cleanup
+	Effort      string   // reasoning effort for this session ("" = use the global default)
+	UsageIn     int      // cumulative input tokens across the session's API calls
+	UsageCached int      // of UsageIn, tokens served from the provider's prompt cache
+	UsageOut    int      // cumulative output tokens
+	UpdatedAt   time.Time
 }
 
 type Store struct{ db *sql.DB }
