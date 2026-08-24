@@ -1289,8 +1289,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.persist()
 		// codex-style follow-up: send queued messages one turn at a time;
-		// `!` shell escapes execute locally instead of starting a turn
-		for len(m.queue) > 0 && msg.err == nil {
+		// `!` shell escapes execute locally instead of starting a turn.
+		// A canceled turn also drains the queue: the empty-enter steer path
+		// cancels intentionally so the queued messages go out immediately.
+		for len(m.queue) > 0 && (msg.err == nil || msg.err == context.Canceled) {
 			next := m.queue[0]
 			m.queue = m.queue[1:]
 			m.queueSel = -1
@@ -1756,12 +1758,12 @@ func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.input.Reset()
 				m.menu = nil
 			case len(m.queue) > 0: // grok-style: empty enter force-steers the queue
-				sk := skills.Scan(skills.DefaultDirs()...)
-				for _, q := range m.queue {
-					m.agent.Steer(expandMentions(expandSkills(q, sk)))
+				// Interrupt the current generation so the queued messages
+				// go out as the next turn immediately, not after the model
+				// finishes whatever it's currently generating.
+				if m.cancel != nil {
+					m.cancel()
 				}
-				m.queue = nil
-				m.queueSel = -1
 			}
 			return m, nil
 		}

@@ -205,7 +205,6 @@ func (a *Agent) turn(ctx context.Context, input string, authored bool, ev Events
 			Model:           a.Model,
 			Messages:        a.Messages,
 			Tools:           tools.Defs(a.AllTools()),
-			MaxTokens:       a.MaxTokens,
 			ReasoningEffort: a.Effort,
 		}, ev.OnText, ev.OnThink)
 		a.AddUsage(usage)
