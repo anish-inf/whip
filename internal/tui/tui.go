@@ -1290,8 +1290,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.persist()
 		// codex-style follow-up: send queued messages one turn at a time;
-		// `!` shell escapes execute locally instead of starting a turn
-		for len(m.queue) > 0 && msg.err == nil {
+		// `!` shell escapes execute locally instead of starting a turn.
+		// A canceled turn also drains the queue: the empty-enter steer path
+		// cancels intentionally so the queued messages go out immediately.
+		for len(m.queue) > 0 && (msg.err == nil || msg.err == context.Canceled) {
 			next := m.queue[0]
 			m.queue = m.queue[1:]
 			m.queueSel = -1
@@ -1757,12 +1759,12 @@ func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.input.Reset()
 				m.menu = nil
 			case len(m.queue) > 0: // grok-style: empty enter force-steers the queue
-				sk := skills.Scan(skills.DefaultDirs()...)
-				for _, q := range m.queue {
-					m.agent.Steer(expandMentions(expandSkills(q, sk)))
+				// Interrupt the current generation so the queued messages
+				// go out as the next turn immediately, not after the model
+				// finishes whatever it's currently generating.
+				if m.cancel != nil {
+					m.cancel()
 				}
-				m.queue = nil
-				m.queueSel = -1
 			}
 			return m, nil
 		}
@@ -2314,6 +2316,11 @@ func (m *model) submitTurn(text string, authored bool) (tea.Model, tea.Cmd) {
 		}
 	}
 	m.discardFuture() // new activity while rewound kills the redo stack
+	// settled subagents already reported into the transcript; clear them off
+	// the dock strip so a new turn starts with only what's still running
+	if m.agent != nil {
+		m.agent.Tasks().ClearSettled()
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancel = cancel
 	p := m.prog
@@ -2531,10 +2538,10 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 				break
 			}
 			m.setEffort(lv)
+			m.append(dimStyle.Render("⚡ effort: " + effortLabel(m.agent.Effort)))
 		} else {
-			m.setEffort(nextEffort(levels, m.agent.Effort))
+			m.openPaletteOn("reasoning effort") // bare: open the level selector
 		}
-		m.append(dimStyle.Render("⚡ effort: " + effortLabel(m.agent.Effort)))
 	case "/goal-from-context":
 		if m.busy {
 			m.append(dimStyle.Render("(busy — /goal-from-context after this turn)"))
@@ -2661,7 +2668,7 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 		m.append(m.doctorReport())
 	case "/help":
 		m.append(dimStyle.Render(
-			"/model <name> [provider] — switch model\n/context-doctor — audit what a fresh session injects (skills, MCP, tool schemas) and its token cost\n/mcp [name] [reconnect|enable|disable] — MCP servers: status, reconnect, toggle\n/compact [model] [provider]|off — compact now, or pick the compaction model (off restores the default); compaction level: ctrl+p › Compaction level\n/mouse — toggle mouse capture (on = wheel scroll + clicks, drag to copy)\n/theme [light|dark|auto] — color scheme (bare toggles)\n/tasks [id] — background subagents: focus the dock, or open one subagent's live view (ctrl+t toggles dock focus)\n/resume [id] — resume a previous session\n/fork [name] — copy this conversation into a new session (pick a point in the rewind picker with f)\n/rename [title] — retitle this session\n/goal <text> — keep working until the goal is met (resume | clear | rounds <n>|default [--global])\n/goal-from-context [n] — formulate a goal from the last n messages (default 8) and work until it's met\n/clear — reset conversation\n/cd [dir] — change working directory (bare prints it)\n/pwd — print working directory\n!<cmd> — run a shell command locally; output lands in the transcript and the conversation\n/quit — exit\ntab — complete · ctrl+t — focus the subagents dock (↑/↓ select, enter opens, esc backs out) · ctrl+o — toggle thinking tokens · ctrl+e — expand the last tool result · ctrl+j / shift+enter — newline · ctrl+v — paste image · esc — interrupt the agent · esc esc (idle) — rewind the conversation (↑/↓ browse, enter rewinds, f forks) · while busy with queued messages: ↑/↓ select, del removes · PgUp/PgDn — scroll · wheel — scroll · drag — select/copy text · ctrl+c ctrl+c — quit"))
+			"/model <name> [provider] — switch model\n/context-doctor — audit what a fresh session injects (skills, MCP, tool schemas) and its token cost\n/mcp [name] [reconnect|enable|disable] — MCP servers: status, reconnect, toggle\n/compact [model] [provider]|off — compact now, or pick the compaction model (off restores the default); compaction level: ctrl+p › Compaction level\n/mouse — toggle mouse capture (on = wheel scroll + clicks, drag to copy)\n/theme [light|dark|auto] — color scheme (bare opens the switcher)\n/tasks [id] — background subagents: focus the dock, or open one subagent's live view (ctrl+t toggles dock focus)\n/resume [id] — resume a previous session\n/fork [name] — copy this conversation into a new session (pick a point in the rewind picker with f)\n/rename [title] — retitle this session\n/goal <text> — keep working until the goal is met (resume | clear | rounds <n>|default [--global])\n/goal-from-context [n] — formulate a goal from the last n messages (default 8) and work until it's met\n/clear — reset conversation\n/cd [dir] — change working directory (bare prints it)\n/pwd — print working directory\n!<cmd> — run a shell command locally; output lands in the transcript and the conversation\n/quit — exit\ntab — complete · ctrl+t — focus the subagents dock (↑/↓ select, enter opens, esc backs out) · ctrl+o — toggle thinking tokens · ctrl+e — expand the last tool result · ctrl+j / shift+enter — newline · ctrl+v — paste image · esc — interrupt the agent · esc esc (idle) — rewind the conversation (↑/↓ browse, enter rewinds, f forks) · while busy with queued messages: ↑/↓ select, del removes · PgUp/PgDn — scroll · wheel — scroll · drag — select/copy text · ctrl+c ctrl+c — quit"))
 	case "/model":
 		if len(fields) < 2 {
 			m.openModelPicker()
@@ -2865,8 +2872,41 @@ func (m *model) View() string {
 	if m.menu != nil {
 		b.WriteString("\n" + m.menuView())
 	}
-	b.WriteString("\n") // bottom padding
+	b.WriteString("\n\n" + m.statusView()) // persistent status line, with a blank line above
 	return b.String()
+}
+
+// statusView renders the always-on status line below the input: current
+// directory, model (effort), provider, and session token spend. It mirrors
+// the header's data but stays put while the transcript scrolls, so the four
+// facts are always visible no matter where the viewport sits.
+func (m *model) statusView() string {
+	model := m.modelName
+	if e := effortLabel(m.agent.Effort); e != "off" {
+		model += " (" + e + ")"
+	}
+	u := m.agent.Usage()
+	spend := fmt.Sprintf("%s/%s tok", fmtTok(u.PromptTokens), fmtTok(u.CompletionTokens))
+	if c := u.Cached(); c > 0 {
+		spend = fmt.Sprintf("%s(%s)/%s tok", fmtTok(u.PromptTokens), fmtTok(c), fmtTok(u.CompletionTokens))
+	}
+	line := fmt.Sprintf(" %s   %s   %s   %s", shortCWD(), model, m.provName, spend)
+	return dimStyle.Render(truncLine(line, max(m.width, 0)))
+}
+
+// shortCWD renders the working directory compactly for the status line: the
+// home directory collapses to ~ and only the last two path segments survive,
+// so a deep path doesn't crowd out the rest of the status.
+func shortCWD() string {
+	dir := cwd()
+	if home, err := os.UserHomeDir(); err == nil && strings.HasPrefix(dir, home) {
+		dir = "~" + strings.TrimPrefix(dir, home)
+	}
+	parts := strings.Split(strings.Trim(dir, "/"), "/")
+	if len(parts) > 3 {
+		return "…/" + strings.Join(parts[len(parts)-3:], "/")
+	}
+	return dir
 }
 
 const previewLines = 5

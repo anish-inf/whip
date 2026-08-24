@@ -3,6 +3,9 @@ package agent
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -100,13 +103,24 @@ func (r *taskRegistry) List() []BackgroundTask {
 	for _, t := range r.tasks {
 		out = append(out, *t)
 	}
-	// insertion order isn't tracked; sort by start time
-	for i := 1; i < len(out); i++ {
-		for j := i; j > 0 && out[j].StartedAt.Before(out[j-1].StartedAt); j-- {
-			out[j], out[j-1] = out[j-1], out[j]
+	// insertion order isn't tracked; sort by start time. Same-burst tasks
+	// share a StartedAt, so tiebreak on the id (task-N is monotonic) — a bare
+	// time sort leaves ties to map iteration order and the dock reshuffles on
+	// every redraw.
+	sort.SliceStable(out, func(i, j int) bool {
+		if !out[i].StartedAt.Equal(out[j].StartedAt) {
+			return out[i].StartedAt.Before(out[j].StartedAt)
 		}
-	}
+		return taskIDNum(out[i].ID) < taskIDNum(out[j].ID)
+	})
 	return out
+}
+
+// taskIDNum parses the monotonic counter out of a "task-N" id (0 on
+// malformed ids, which sort first — fine for a tiebreak).
+func taskIDNum(id string) int64 {
+	n, _ := strconv.ParseInt(strings.TrimPrefix(id, "task-"), 10, 64)
+	return n
 }
 
 // Get returns a snapshot of one task, or false if unknown.
@@ -118,6 +132,24 @@ func (r *taskRegistry) Get(id string) (BackgroundTask, bool) {
 		return BackgroundTask{}, false
 	}
 	return *t, true
+}
+
+// ClearSettled drops every done/error/cancelled task, keeping the running
+// ones. The TUI calls this when a new turn starts: settled tasks have already
+// reported into the transcript, so the dock strip makes room instead of
+// accumulating stale rows forever. Returns the number cleared.
+func (r *taskRegistry) ClearSettled() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	n := 0
+	for id, t := range r.tasks {
+		if t.Status != TaskRunning {
+			delete(r.tasks, id)
+			delete(r.subs, id)
+			n++
+		}
+	}
+	return n
 }
 
 // Cancel signals a running task's context. Returns false if not running.

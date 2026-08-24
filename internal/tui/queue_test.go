@@ -22,6 +22,9 @@ func busyQueueModel(queue ...string) *model {
 	}
 	m.width = 80
 	m.input.SetWidth(m.width - 2)
+	// a real busy model has a cancel func (set by submitTurn); the test
+	// fixture needs one too so the empty-enter steer path can call it
+	_, m.cancel = context.WithCancel(context.Background())
 	return m
 }
 
@@ -110,10 +113,13 @@ func TestQueueSelResetsOnSteer(t *testing.T) {
 	if m.queueSel < 0 {
 		t.Fatal("expected a selection")
 	}
-	// empty enter steers the whole queue and clears it
+	// empty enter cancels the turn; the queue drains in turnDoneMsg
 	m = press(t, m, tea.KeyMsg{Type: tea.KeyEnter})
-	if len(m.queue) != 0 || m.queueSel != -1 {
-		t.Fatalf("steer should clear queue and selection: %v sel=%d", m.queue, m.queueSel)
+	if m.cancel == nil {
+		t.Fatal("expected the turn to be canceled for immediate steering")
+	}
+	if len(m.queue) == 0 {
+		t.Fatal("queue should persist until turnDoneMsg drains it")
 	}
 }
 
