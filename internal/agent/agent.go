@@ -59,7 +59,11 @@ type Agent struct {
 
 	files *fileLocks // per-path mutation locks for parallel tool calls
 	bg    *taskRegistry
-	todos *todos // the todowrite plan store, injected per round
+
+	// Todos is the todowrite plan, rewritten in full by the model and
+	// injected per round. Like Messages, it is only mutated by the turn
+	// goroutine; the TUI reads it between turns via TodosJSON.
+	Todos []Todo
 
 	// toolsMu guards mcpTools: the MCP manager's OnChange can fire (server
 	// settled) while a Turn is streaming, and Turn reads the tool set per
@@ -181,7 +185,6 @@ func New(client *llm.Client, model string, maxTokens int, systemPrompt string) *
 	a.Tools = append(a.Tools, todoTool(a))
 	a.files = newFileLocks()
 	a.bg = newTaskRegistry()
-	a.todos = &todos{}
 	return a
 }
 
@@ -269,7 +272,7 @@ func (a *Agent) turn(ctx context.Context, input string, parts []llm.ContentPart,
 			return "", err
 		}
 		msgs := a.Messages
-		if block := a.todosFor().block(); block != "" {
+		if block := a.todoBlock(); block != "" {
 			// Open plan items ride along as an ephemeral system message each
 			// round: a.Messages stays clean, and the plan survives long tool
 			// loops and compaction because it is re-derived, not stored.

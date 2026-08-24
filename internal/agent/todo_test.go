@@ -34,7 +34,7 @@ func TestTodowriteFullRewriteAndInjection(t *testing.T) {
 		t.Fatalf("unexpected result: %s", out)
 	}
 
-	block := a.todos.block()
+	block := a.todoBlock()
 	if !strings.Contains(block, "add the tool") || !strings.Contains(block, "write tests") {
 		t.Fatalf("open items missing from injection:\n%s", block)
 	}
@@ -46,7 +46,7 @@ func TestTodowriteFullRewriteAndInjection(t *testing.T) {
 	callTodowrite(t, a, `{"todos":[
 		{"id":"t2","content":"add the tool","status":"completed"},
 		{"id":"t3","content":"write tests","status":"completed"}]}`)
-	if b := a.todos.block(); b != "" {
+	if b := a.todoBlock(); b != "" {
 		t.Fatalf("all-completed plan should inject nothing:\n%s", b)
 	}
 }
@@ -103,7 +103,8 @@ func TestTodowriteEndToEnd(t *testing.T) {
 	}
 }
 
-func TestTodosPersistenceRoundTrip(t *testing.T) {	a := New(nil, "m", 0, "sys")
+func TestTodosPersistenceRoundTrip(t *testing.T) {
+	a := New(nil, "m", 0, "sys")
 	callTodowrite(t, a, `{"todos":[{"content":"ship it","status":"in_progress"}]}`)
 
 	saved := a.TodosJSON()
@@ -113,8 +114,8 @@ func TestTodosPersistenceRoundTrip(t *testing.T) {	a := New(nil, "m", 0, "sys")
 
 	b := New(nil, "m", 0, "sys")
 	b.LoadTodosJSON(saved)
-	if !strings.Contains(b.todos.block(), "ship it") {
-		t.Fatalf("restored plan should inject open item:\n%s", b.todos.block())
+	if !strings.Contains(b.todoBlock(), "ship it") {
+		t.Fatalf("restored plan should inject open item:\n%s", b.todoBlock())
 	}
 
 	// Corrupt/empty blobs load as an empty plan, never a crash.
