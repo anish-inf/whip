@@ -57,6 +57,11 @@ func testPage(t *testing.T) string {
 		t.Fatal(err)
 	}
 	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/marker/") {
+			marker := strings.TrimPrefix(r.URL.Path, "/marker/")
+			fmt.Fprintf(w, `<!doctype html><title>marker-%s</title><h1>%s</h1>`, marker, marker)
+			return
+		}
 		switch r.URL.Path {
 		case "/set-cookie":
 			http.SetCookie(w, &http.Cookie{Name: "loopy-e2e", Value: "real-session-42", Path: "/"})
@@ -100,8 +105,8 @@ func TestE2EHeadless(t *testing.T) {
 		t.Fatalf("open headless: %v", err)
 	}
 	defer b.Close()
-	if b.mode != ModeHeadless {
-		t.Fatalf("mode: %v", b.mode)
+	if b.Mode() != ModeHeadless {
+		t.Fatalf("mode: %v", b.Mode())
 	}
 
 	if err := b.Navigate(ctx, url+"/set-cookie"); err != nil {
@@ -220,7 +225,7 @@ func TestE2ELiveAttach(t *testing.T) {
 	// see the cookie.
 	t.Setenv("LOOPY_CDP_URL", fmt.Sprintf("http://127.0.0.1:%d", port))
 	deadline := time.Now().Add(30 * time.Second)
-	var b *Browser
+	var b Backend
 	var err error
 	for time.Now().Before(deadline) {
 		b, err = Open(ctx, ModeLive)

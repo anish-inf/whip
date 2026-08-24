@@ -7,6 +7,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/context-labs/loopy/internal/browser"
 	"github.com/context-labs/loopy/internal/config"
 	"github.com/context-labs/loopy/internal/mcp"
 )
@@ -50,6 +51,7 @@ const (
 	panelGoal
 	panelCompact
 	panelTheme
+	panelBrowser
 )
 
 // ppanel is a palette sub-panel: the interactive editor behind a row. Key
@@ -282,6 +284,24 @@ func (m *model) paletteItems() []paletteItem {
 			},
 			stepBack: func(m *model) { m.setTheme("light") },
 			stepFwd:  func(m *model) { m.setTheme("dark") }},
+		{title: "Browser driver", category: "Display",
+			dynDesc: func(m *model) string {
+				return "current: " + browser.Driver + " — which automation engine drives Chrome"
+			},
+			dynHint: func(m *model) string { return "LOOPY_BROWSER_DRIVER" },
+			panel: func(m *model) *ppanel {
+				list := browser.Drivers
+				pp := &ppanel{kind: panelBrowser, title: "Browser driver", list: list}
+				for i, d := range list {
+					if d == browser.Driver {
+						pp.midx = i
+						break
+					}
+				}
+				return pp
+			},
+			stepBack: func(m *model) { m.switchBrowserDriver(browser.DriverRod) },
+			stepFwd:  func(m *model) { m.switchBrowserDriver(browser.DriverChromedp) }},
 		{title: "Mouse capture", category: "Display",
 			dynDesc: func(m *model) string { return "off = native terminal selection" },
 			dynHint: func(m *model) string { return "/mouse" },
@@ -583,6 +603,21 @@ func (m *model) panelKey(msg tea.KeyMsg, pp *ppanel) (tea.Model, tea.Cmd) {
 			}
 		}
 
+	case panelBrowser:
+		switch msg.Type {
+		case tea.KeyEsc, tea.KeyCtrlC:
+			pop()
+		case tea.KeyUp, tea.KeyCtrlP, tea.KeyShiftTab:
+			pp.midx = (pp.midx - 1 + len(pp.list)) % len(pp.list)
+		case tea.KeyDown, tea.KeyCtrlN, tea.KeyTab:
+			pp.midx = (pp.midx + 1) % len(pp.list)
+		case tea.KeyLeft, tea.KeyRight, tea.KeyEnter:
+			m.switchBrowserDriver(pp.list[pp.midx])
+			if msg.Type == tea.KeyEnter {
+				pop()
+			}
+		}
+
 	case panelGoal:
 		switch msg.Type {
 		case tea.KeyEsc, tea.KeyCtrlC:
@@ -802,6 +837,20 @@ func (m *model) panelView(pp *ppanel) string {
 		for i, name := range pp.list {
 			mark := ""
 			if name == cur {
+				mark = dimStyle.Render("  (current)")
+			}
+			if i == pp.midx {
+				b.WriteString(botStyle.Render(" → "+name) + mark + "\n")
+			} else {
+				b.WriteString("   " + name + mark + "\n")
+			}
+		}
+		b.WriteString("\n" + dimStyle.Render("  ↑/↓ select · enter/←/→ apply · esc back"))
+
+	case panelBrowser:
+		for i, name := range pp.list {
+			mark := ""
+			if name == browser.Driver {
 				mark = dimStyle.Render("  (current)")
 			}
 			if i == pp.midx {

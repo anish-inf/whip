@@ -40,7 +40,7 @@ type Session struct {
 	mode    Mode
 	sem     chan struct{}
 	mu      sync.Mutex
-	backend *Browser
+	backend Backend
 }
 
 // Session returns the named session (default name "default"), validating
@@ -77,7 +77,7 @@ func (m *Manager) Session(name string) (*Session, error) {
 // Do runs fn with the session's live backend, holding the session lock.
 // A dead backend is reopened once (stale-tab/browser-closed recovery);
 // reopen errors are returned for the caller to surface.
-func (s *Session) Do(ctx context.Context, fn func(b *Browser) (string, error)) (string, error) {
+func (s *Session) Do(ctx context.Context, fn func(b Backend) (string, error)) (string, error) {
 	s.sem <- struct{}{}
 	defer func() { <-s.sem }()
 	b, err := s.get(ctx)
@@ -96,13 +96,13 @@ func (s *Session) Do(ctx context.Context, fn func(b *Browser) (string, error)) (
 	return out, err
 }
 
-func (s *Session) get(ctx context.Context) (*Browser, error) {
+func (s *Session) get(ctx context.Context) (Backend, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.backend != nil {
 		return s.backend, nil
 	}
-	b, err := Open(ctx, s.mode)
+	b, err := OpenNamed(ctx, s.mode, s.name)
 	if err != nil {
 		return nil, err
 	}
@@ -117,6 +117,14 @@ func (s *Session) drop() {
 		s.backend.Close()
 		s.backend = nil
 	}
+}
+
+// SwitchDriver sets the active driver and closes every open session so the
+// next browser_exec reopens on the new driver. Live-mode sessions detach
+// (the user's Chrome is untouched); dedicated/headless sessions are killed.
+func (m *Manager) SwitchDriver(d string) {
+	SetDriver(d)
+	m.CloseAll()
 }
 
 // CloseAll closes every session's backend. Dedicated/headless sessions

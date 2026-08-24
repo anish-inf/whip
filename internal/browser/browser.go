@@ -33,7 +33,7 @@ const (
 	// scan; never launches or closes the browser.
 	ModeLive Mode = "live"
 	// ModeDedicated launches a separate Chrome instance with a loopy-owned
-	// user-data-dir (~/.loopy/browser/dedicated-profile) and remote
+	// user-data-dir (~/.loopy/browser/dedicated-profile[-<session>]) and remote
 	// debugging enabled from the start — no permission popups.
 	ModeDedicated Mode = "dedicated"
 	// ModeHeadless is ModeDedicated without a window.
@@ -98,6 +98,11 @@ type Backend interface {
 	// Close releases resources. Live mode detaches only (never closes the
 	// user's browser); dedicated/headless kill the launched process.
 	Close() error
+	// Mode returns the session's browser mode (for mode-dependent policy).
+	Mode() Mode
+	// HandleDialog accepts or dismisses the next pending native JS dialog,
+	// blocking briefly for one to appear.
+	HandleDialog(accept bool, promptText string) error
 }
 
 // PageInfo mirrors browser-harness's page_info() helper.
@@ -128,10 +133,57 @@ type Browser struct {
 	launcher *launcher.Launcher // non-nil only when we launched (dedicated/headless)
 }
 
+// Driver names for the browser subsystem's two implementations.
+const (
+	DriverRod      = "rod"      // default — battle-tested here
+	DriverChromedp = "chromedp" // the spike fallback (chromedp-spike branch)
+)
+
+// Drivers lists the selectable drivers for UI pickers.
+var Drivers = []string{DriverRod, DriverChromedp}
+
+// Driver selects the browser driver, read at Open time. The
+// LOOPY_BROWSER_DRIVER env wins; otherwise the value set by SetDriver
+// (default rod). A live switch invalidates open sessions via the Manager.
+var Driver = func() string {
+	if d := os.Getenv("LOOPY_BROWSER_DRIVER"); d != "" {
+		return d
+	}
+	return "rod"
+}()
+
+// SetDriver switches the active driver. When env overrides the driver,
+// SetDriver is a no-op (env is the operator's explicit pin).
+func SetDriver(d string) {
+	if os.Getenv("LOOPY_BROWSER_DRIVER") != "" {
+		return
+	}
+	switch d {
+	case DriverRod, DriverChromedp:
+		Driver = d
+	}
+}
+
 // Open connects (or launches) per mode and attaches to a controllable tab.
 // Attach mode discovery errors are actionable (ErrNoLiveBrowser,
 // ErrPermissionBlocked) — surface them to the user, not the model.
-func Open(ctx context.Context, mode Mode) (*Browser, error) {
+// Returns the Backend selected by Driver. Named sessions get isolated
+// dedicated/headless profiles (a shared profile dir deadlocks concurrent
+// sessions on SingletonLock — caught by TestConcurrentSessions).
+func Open(ctx context.Context, mode Mode) (Backend, error) {
+	return OpenNamed(ctx, mode, "default")
+}
+
+// OpenNamed is Open with a session name for profile isolation.
+func OpenNamed(ctx context.Context, mode Mode, sessionName string) (Backend, error) {
+	if Driver == "chromedp" {
+		return openChromedp(ctx, mode, sessionName)
+	}
+	return openRod(ctx, mode, sessionName)
+}
+
+// openRod is the rod-backed Open (the default driver).
+func openRod(ctx context.Context, mode Mode, sessionName string) (*Browser, error) {
 	b := &Browser{mode: mode}
 	switch mode {
 	case ModeLive:
@@ -152,7 +204,7 @@ func Open(ctx context.Context, mode Mode) (*Browser, error) {
 		if err != nil {
 			return nil, err
 		}
-		profileDir := filepath.Join(home, ".loopy", "browser", "dedicated-profile")
+		profileDir := dedicatedProfileDir(home, sessionName)
 		newLauncher := func() *launcher.Launcher {
 			l := launcher.New().
 				UserDataDir(profileDir).
@@ -633,4 +685,14 @@ func (b *Browser) UploadFiles(ctx context.Context, selector string, paths []stri
 		return fmt.Errorf("upload: element not found: %s", selector)
 	}
 	return el.SetFiles(paths)
+}
+
+// dedicatedProfileDir is the loopy-owned profile dir for dedicated/headless
+// sessions: one per named session (except "default", the shared one) so
+// parallel sessions never collide on SingletonLock.
+func dedicatedProfileDir(home, sessionName string) string {
+	if sessionName == "" || sessionName == "default" {
+		return filepath.Join(home, ".loopy", "browser", "dedicated-profile")
+	}
+	return filepath.Join(home, ".loopy", "browser", "dedicated-profile-"+sessionName)
 }
