@@ -1222,7 +1222,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 					m.tasksFocus = true
 					m.taskSel = min(sel, n-1)
-					m.openTask(m.dockTasks()[m.taskSel].ID)
+					// re-fetch: the list can change between the hitbox check
+					// above and this open (settled tasks age out)
+					if tasks := m.dockTasks(); len(tasks) > 0 {
+						m.openTask(tasks[min(m.taskSel, len(tasks)-1)].ID)
+					}
 					return m, nil
 				}
 			}
@@ -1855,7 +1859,12 @@ func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		if m.tasksFocus { // open the selected task's detail view
 			m.tasksFocus = false
-			m.openTask(m.dockTasks()[m.taskSel].ID)
+			// dockTasks is time-dependent (settled tasks age out after
+			// dockSettledGrace), so the strip can go empty — or shrink below
+			// taskSel — between the last paint and this keypress
+			if tasks := m.dockTasks(); len(tasks) > 0 {
+				m.openTask(tasks[min(m.taskSel, len(tasks)-1)].ID)
+			}
 			return m, nil
 		}
 		text := strings.TrimSpace(m.input.Value())
