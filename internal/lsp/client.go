@@ -83,6 +83,16 @@ func (c *client) shutdown() {
 	}
 }
 
+// isDead reports whether the connection has been torn down.
+func (c *client) isDead() bool {
+	select {
+	case <-c.dead:
+		return true
+	default:
+		return false
+	}
+}
+
 func (c *client) writeLoop() {
 	for {
 		select {
