@@ -89,6 +89,10 @@ existing setup:
 }
 ```
 
+`/doctor` audits what a fresh session injects (skills, MCP tool schemas,
+server instructions, built-in tool schemas) with per-source token estimates —
+useful when arriving from a heavier harness.
+
 Servers connect in the background at startup and lazily on first use — a
 slow or broken server never blocks the loop (calls fail fast with an
 actionable message, and dropped sessions auto-reconnect with backoff).

@@ -234,6 +234,14 @@ into the system prompt as an `<available_skills>` block. The model reads a
 SKILL.md with its own read tool when relevant. Skills re-index every turn, so
 new ones load without restarting.
 
+**`/doctor` (alias `/context-doctor`)** — fresh-session context audit: every
+automatic injection source with its estimated token cost (base system prompt,
+skills block with the 5 biggest offenders, per-server MCP tool schemas, server
+instructions, built-in tool schemas, conversation history, and actual session
+spend once requests have run), a TOTAL line, and trim pointers. Built for
+users arriving from heavier harnesses whose first call silently carries tens
+of thousands of tokens of skill/MCP bloat. Tests: `tui/doctor_test.go`.
+
 **Startup resource report** — first paint names what loopy loaded: `skills: N
 loaded`, one `⚠` line per degraded skill (description over maxDesc → truncated
 in the prompt) or unparseable SKILL.md (pi's [Skill conflicts] lesson — a
