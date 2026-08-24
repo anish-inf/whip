@@ -117,6 +117,14 @@ func (a *Agent) SetUsage(u llm.Usage) {
 	a.usageMu.Unlock()
 }
 
+// ResetUsage zeroes the session totals — /clear starts the spend counter
+// over along with the conversation.
+func (a *Agent) ResetUsage() {
+	a.usageMu.Lock()
+	a.usage = llm.Usage{}
+	a.usageMu.Unlock()
+}
+
 // Usage returns the session's cumulative token usage: input, output, and
 // cached-input tokens across every streamed call (plus compaction and
 // subagent calls on this agent).

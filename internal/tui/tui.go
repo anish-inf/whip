@@ -2595,6 +2595,7 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.agent.Messages = m.agent.Messages[:1] // keep system prompt
+		m.agent.ResetUsage()                    // zero the status line's spend counters
 		m.blocks = nil
 		m.msgBlock = nil
 		m.future = nil   // no redo across a cleared conversation
