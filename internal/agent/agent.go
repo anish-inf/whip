@@ -462,12 +462,18 @@ func writeTranscript(b *strings.Builder, msgs []llm.Message) {
 	}
 }
 
-// GoalFromContextMessages returns the last two conversation messages (the
-// window /goal-from-context distills), skipping the system prompt. Fewer
-// than two messages means there isn't enough context to formulate a goal.
-func GoalFromContextMessages(msgs []llm.Message) ([]llm.Message, error) {
-	// msgs[0] is the system prompt; goal-continuation messages count too —
-	// the last two rows are the freshest statement of what the user wants.
+// GoalFromContextDefaultWindow is how many tail messages /goal-from-context
+// distills when the user doesn't pass a count.
+const GoalFromContextDefaultWindow = 8
+
+// GoalFromContextMessages returns the last n conversation messages (the
+// window /goal-from-context distills), skipping the system prompt. n <= 0
+// means GoalFromContextDefaultWindow. Fewer than two messages in the window
+// means there isn't enough context to formulate a goal.
+func GoalFromContextMessages(msgs []llm.Message, n int) ([]llm.Message, error) {
+	if n <= 0 {
+		n = GoalFromContextDefaultWindow
+	}
 	if len(msgs) == 0 {
 		return nil, errors.New("not enough context to formulate a goal — chat a bit first")
 	}
@@ -475,17 +481,21 @@ func GoalFromContextMessages(msgs []llm.Message) ([]llm.Message, error) {
 	if len(conv) < 2 {
 		return nil, errors.New("not enough context to formulate a goal — chat a bit first")
 	}
-	return conv[len(conv)-2:], nil
+	if n > len(conv) {
+		n = len(conv)
+	}
+	return conv[len(conv)-n:], nil
 }
 
 // BuildGoalFromContextPrompt asks the model to distill the given tail
-// messages into one concrete, verifiable goal statement suitable for /goal.
+// messages into a concrete, verifiable goal statement suitable for /goal.
 // The reply must be the bare goal text — the TUI sets it verbatim.
 func BuildGoalFromContextPrompt(tail []llm.Message) string {
 	var b strings.Builder
-	b.WriteString("Distill the end of this conversation into a single concrete goal the assistant should keep working on until it is verifiably done. ")
-	b.WriteString("Reply with ONLY the goal statement: one or two sentences, specific enough that completion can be checked with tools (builds pass, tests pass, behavior confirmed). ")
-	b.WriteString("No preamble, no quotes, no explanation.\n\n---\n\n")
+	b.WriteString("Distill the end of this conversation into a detailed goal the assistant should keep working on until it is verifiably done.\n\n")
+	b.WriteString("Reply with ONLY the goal: a first line stating the concrete outcome, then a short bullet list of the specific, checkable completion criteria ")
+	b.WriteString("(files to change, commands that must pass, behavior to confirm). Include the key constraints, decisions, and identifiers (file paths, function names, ")
+	b.WriteString("error messages) from the conversation so the goal stands alone. No preamble, no quotes, no explanation.\n\n---\n\n")
 	writeTranscript(&b, tail)
 	b.WriteString("\n---\n\nWrite the goal now.")
 	return b.String()

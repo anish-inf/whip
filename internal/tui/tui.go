@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -123,9 +124,11 @@ type model struct {
 	sessionID string
 	saved     int // messages already persisted (index into agent.Messages)
 
-	hist    []string // submitted inputs, for up/down recall
-	histIdx int      // len(hist) == not navigating
-	draft   string   // in-progress input saved while navigating history
+	hist    []string         // submitted inputs, for up/down recall
+	histIdx int              // len(hist) == not navigating
+	draft   string           // in-progress input saved while navigating history
+	lastUp  time.Time        // last ↑ keypress; repeat detection for history rollover
+	now     func() time.Time // test seam; defaults to time.Now
 
 	queue      []string // messages typed while busy, sent after the turn ends
 	queueSel   int      // selected queued message, -1 = none (not navigating)
@@ -173,7 +176,7 @@ func newInput() textarea.Model {
 	ti.Placeholder = "Ask loopy anything… (/ for commands, tab completes)"
 	ti.Prompt = "┃ "
 	ti.SetHeight(1)
-	ti.MaxHeight = 12 // input grows with content up to this many lines
+	ti.MaxHeight = 24 // input grows with content up to this many lines
 	ti.ShowLineNumbers = false
 	ti.KeyMap.InsertNewline = key.NewBinding(
 		key.WithKeys("ctrl+j", "shift+enter", "alt+enter"),
@@ -224,7 +227,7 @@ func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string) (s
 	m := &model{
 		cfg: cfg, agent: ag, modelName: mn, provName: pn, sysPrompt: sysPrompt,
 		input: ti, spin: spinner.New(spinner.WithSpinner(spinner.Dot)), follow: true, saved: 1,
-		catalogs: config.LoadCatalogs(), mouseOn: mouseOn,
+		catalogs: config.LoadCatalogs(), mouseOn: mouseOn, now: time.Now,
 		compactModel: cfg.CompactModel, compactProv: cfg.CompactProvider,
 	}
 	m.applyCompactModel()
@@ -526,7 +529,7 @@ func (m *model) seedTranscript(msgs []llm.Message, base int) {
 		switch msg.Role {
 		case "user":
 			bi = len(m.blocks)
-			m.blocks = append(m.blocks, block{kind: blockText, text: youStyle.Render("❯ ") + msg.Content})
+			m.blocks = append(m.blocks, block{kind: blockText, text: youStyle.Render("❯ ") + linkifyFilePaths(msg.Content, realFileExists)})
 		case "assistant":
 			if strings.TrimSpace(msg.Content) != "" {
 				bi = len(m.blocks)
@@ -1191,7 +1194,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case steeredMsg:
 		m.flushThink()
 		m.flushCurrent()
-		m.append(youStyle.Render("❯ ") + string(msg) + dimStyle.Render("  (steered)"))
+		m.append(youStyle.Render("❯ ") + linkifyFilePaths(string(msg), realFileExists) + dimStyle.Render("  (steered)"))
 		return m, nil
 
 	case shellDoneMsg:
@@ -1414,8 +1417,18 @@ func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		(msg.Type == tea.KeyEnter && msg.Alt) ||
 		(msg.Type == tea.KeyRunes && msg.Alt && string(msg.Runes) == "\r") ||
 		isShiftEnterSeq(msg) {
+		// bubbles gates InsertNewline on MaxHeight, treating the visual cap as
+		// a content limit — after a paste reaches MaxHeight lines every ctrl+j
+		// would be silently swallowed. Lift the cap for this one call so the
+		// newline always lands (and the textarea's own repositionView scrolls
+		// the new line into view), then reapply the visual cap via SetHeight,
+		// which clamps rendering only, never content.
+		cap := m.input.MaxHeight
+		m.input.MaxHeight = 0
 		var cmd tea.Cmd
 		m.input, cmd = m.input.Update(tea.KeyMsg{Type: tea.KeyCtrlJ})
+		m.input.MaxHeight = cap
+		m.input.SetHeight(cap)
 		m.refreshMenu()
 		return m, cmd
 	}
@@ -1589,12 +1602,22 @@ func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		// move within the textarea unless the cursor already sits on the
-		// first (soft-wrapped) row, where ↑ falls through to history recall
+		// first (soft-wrapped) row, where ↑ falls through to history recall.
+		// Holding ↑ auto-repeats at 30–80ms; a user who keeps holding past
+		// the top is trying to reach the start of THIS message, not to
+		// machine-gun through history — suppress the rollover while repeats
+		// keep arriving, and only recall after a deliberate pause.
 		if msg.Type == tea.KeyUp && !m.cursorOnFirstLine() {
+			m.lastUp = m.nowFn()
 			var cmd tea.Cmd
 			m.input, cmd = m.input.Update(msg)
 			return m, cmd
 		}
+		if msg.Type == tea.KeyUp && m.nowFn().Sub(m.lastUp) < 300*time.Millisecond {
+			m.lastUp = m.nowFn()
+			return m, nil
+		}
+		m.lastUp = m.nowFn()
 		if msg.Type == tea.KeyCtrlP { // command palette (opencode-style modal)
 			m.openPalette()
 			return m, nil
@@ -1731,6 +1754,14 @@ var shiftEnterRe = regexp.MustCompile(
 func isShiftEnterSeq(msg tea.KeyMsg) bool {
 	s := msg.String()
 	return strings.HasPrefix(s, "unknown csi sequence:") && shiftEnterRe.MatchString(s)
+}
+
+// nowFn returns the current time, honoring the test seam when set.
+func (m *model) nowFn() time.Time {
+	if m.now != nil {
+		return m.now()
+	}
+	return time.Now()
 }
 
 // histPrev/histNext recall submitted inputs with the arrow keys.
@@ -2272,7 +2303,7 @@ func (m *model) submitTurn(text string, authored bool) (tea.Model, tea.Cmd) {
 		flush()
 		send(turnDoneMsg{final: final, err: err})
 	}()
-	m.append(youStyle.Render("❯ ") + text)
+	m.append(youStyle.Render("❯ ") + linkifyFilePaths(text, realFileExists))
 	if authored {
 		// map the message index to its block for rewind live-scroll
 		for len(m.msgBlock) <= userMsgIdx {
@@ -2418,7 +2449,16 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 			m.append(dimStyle.Render("(busy — /goal-from-context after this turn)"))
 			return m, nil
 		}
-		tail, err := agent.GoalFromContextMessages(m.agent.Messages)
+		window := agent.GoalFromContextDefaultWindow
+		if len(fields) > 1 {
+			n, err := strconv.Atoi(fields[1])
+			if err != nil || n < 2 {
+				m.append(errStyle.Render("usage: /goal-from-context [n] — n ≥ 2 messages of context (default " + strconv.Itoa(agent.GoalFromContextDefaultWindow) + ")"))
+				return m, nil
+			}
+			window = n
+		}
+		tail, err := agent.GoalFromContextMessages(m.agent.Messages, window)
 		if err != nil {
 			m.append(errStyle.Render(err.Error()))
 			return m, nil
@@ -2426,7 +2466,7 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 		// one non-streaming call on the CURRENT model (the compact-model
 		// override is deliberately ignored) distills the tail into a goal
 		m.busy = true
-		m.append(dimStyle.Render("◎ formulating goal from the last two messages…"))
+		m.append(dimStyle.Render(fmt.Sprintf("◎ formulating goal from the last %d messages…", len(tail))))
 		p := m.prog
 		// ag may drift from m.agent if the user /model-switches mid-formulation:
 		// usage lands on the old agent, the goal submits on the new one. The
@@ -2439,7 +2479,7 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 		formulate := func() (string, error) {
 			goal, usage, err := ag.Client.Complete(ctx, llm.Request{
 				Model:     ag.Model,
-				MaxTokens: 256,
+				MaxTokens: 8192,
 				Messages:  []llm.Message{{Role: "user", Content: prompt}},
 			})
 			ag.AddUsage(usage) // the formulation call is session spend too
@@ -2530,7 +2570,7 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 		m.append(m.doctorReport())
 	case "/help":
 		m.append(dimStyle.Render(
-			"/model <name> [provider] — switch model\n/context-doctor — audit what a fresh session injects (skills, MCP, tool schemas) and its token cost\n/mcp [name] [reconnect|enable|disable] — MCP servers: status, reconnect, toggle\n/compact [model] [provider]|off — compact now, or pick the compaction model (off restores the default); compaction level: ctrl+p › Compaction level\n/mouse — toggle mouse capture (on = wheel scroll + clicks, drag to copy)\n/theme [light|dark|auto] — color scheme (bare toggles)\n/tasks [id] — background subagents: focus the dock, or open one task's live view (ctrl+t toggles dock focus)\n/resume [id] — resume a previous session\n/fork [name] — copy this conversation into a new session (pick a point in the rewind picker with f)\n/rename [title] — retitle this session\n/goal <text> — keep working until the goal is met (resume | clear | rounds <n>|default [--global])\n/goal-from-context — formulate a goal from the last two messages and work until it's met\n/clear — reset conversation\n/cd [dir] — change working directory (bare prints it)\n/pwd — print working directory\n!<cmd> — run a shell command locally; output lands in the transcript and the conversation\n/quit — exit\ntab — complete · ctrl+t — focus the background-tasks dock (↑/↓ select, enter opens, esc backs out) · ctrl+o — toggle thinking tokens · ctrl+e — expand the last tool result · ctrl+j / shift+enter — newline · ctrl+v — paste image · esc — interrupt the agent · esc esc (idle) — rewind the conversation (↑/↓ browse, enter rewinds, f forks) · while busy with queued messages: ↑/↓ select, del removes · PgUp/PgDn — scroll · wheel — scroll · drag — select/copy text · ctrl+c ctrl+c — quit"))
+			"/model <name> [provider] — switch model\n/context-doctor — audit what a fresh session injects (skills, MCP, tool schemas) and its token cost\n/mcp [name] [reconnect|enable|disable] — MCP servers: status, reconnect, toggle\n/compact [model] [provider]|off — compact now, or pick the compaction model (off restores the default); compaction level: ctrl+p › Compaction level\n/mouse — toggle mouse capture (on = wheel scroll + clicks, drag to copy)\n/theme [light|dark|auto] — color scheme (bare toggles)\n/tasks [id] — background subagents: focus the dock, or open one task's live view (ctrl+t toggles dock focus)\n/resume [id] — resume a previous session\n/fork [name] — copy this conversation into a new session (pick a point in the rewind picker with f)\n/rename [title] — retitle this session\n/goal <text> — keep working until the goal is met (resume | clear | rounds <n>|default [--global])\n/goal-from-context [n] — formulate a goal from the last n messages (default 8) and work until it's met\n/clear — reset conversation\n/cd [dir] — change working directory (bare prints it)\n/pwd — print working directory\n!<cmd> — run a shell command locally; output lands in the transcript and the conversation\n/quit — exit\ntab — complete · ctrl+t — focus the background-tasks dock (↑/↓ select, enter opens, esc backs out) · ctrl+o — toggle thinking tokens · ctrl+e — expand the last tool result · ctrl+j / shift+enter — newline · ctrl+v — paste image · esc — interrupt the agent · esc esc (idle) — rewind the conversation (↑/↓ browse, enter rewinds, f forks) · while busy with queued messages: ↑/↓ select, del removes · PgUp/PgDn — scroll · wheel — scroll · drag — select/copy text · ctrl+c ctrl+c — quit"))
 	case "/model":
 		if len(fields) < 2 {
 			m.openModelPicker()

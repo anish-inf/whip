@@ -2,7 +2,9 @@ package tui
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -120,7 +122,18 @@ func TestGoalRoundsCommand(t *testing.T) {
 // poll m.goal / m.busy directly.
 func goalFromContextModel(t *testing.T, status int, body string) *model {
 	t.Helper()
+	return goalFromContextModelCapture(t, status, body, nil)
+}
+
+// goalFromContextModelCapture is goalFromContextModel plus a hook that
+// receives the raw request body of every call the command makes.
+func goalFromContextModelCapture(t *testing.T, status int, body string, capture func([]byte)) *model {
+	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if capture != nil {
+			b, _ := io.ReadAll(r.Body)
+			capture(b)
+		}
 		w.WriteHeader(status)
 		w.Write([]byte(body))
 	}))
@@ -145,7 +158,7 @@ func TestGoalFromContextPrompt(t *testing.T) {
 		}
 	}
 
-	// window selection: last two conversation messages, system excluded
+	// window selection: system excluded; n caps the tail, short history wins
 	msgs := []llm.Message{
 		{Role: "system", Content: "sys"},
 		{Role: "user", Content: "old"},
@@ -153,11 +166,21 @@ func TestGoalFromContextPrompt(t *testing.T) {
 		{Role: "user", Content: "recent ask"},
 		{Role: "assistant", Content: "recent reply"},
 	}
-	got, err := agent.GoalFromContextMessages(msgs)
+	got, err := agent.GoalFromContextMessages(msgs, 2)
 	if err != nil || len(got) != 2 || got[0].Content != "recent ask" || got[1].Content != "recent reply" {
 		t.Fatalf("window: %v %v", got, err)
 	}
-	if _, err := agent.GoalFromContextMessages(msgs[:2]); err == nil {
+	// n larger than the history clamps to everything after the system prompt
+	got, err = agent.GoalFromContextMessages(msgs, 50)
+	if err != nil || len(got) != 4 || got[0].Content != "old" {
+		t.Fatalf("clamped window: %v %v", got, err)
+	}
+	// n <= 0 means the default window
+	got, err = agent.GoalFromContextMessages(msgs, 0)
+	if err != nil || len(got) != 4 {
+		t.Fatalf("default window: %v %v", got, err)
+	}
+	if _, err := agent.GoalFromContextMessages(msgs[:2], 8); err == nil {
 		t.Fatal("two conversation messages required")
 	}
 }
@@ -175,6 +198,84 @@ func TestGoalFromContextSetsGoal(t *testing.T) {
 	}
 	if m.busy {
 		t.Fatal("busy must clear when the inline formulation returns")
+	}
+	// the transcript must say how many messages were distilled
+	found := false
+	for _, b := range m.blocks {
+		if strings.Contains(b.text, "formulating goal from the last 2 messages") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected the message count in the note, blocks: %v", m.blocks)
+	}
+}
+
+func TestGoalFromContextWindowArg(t *testing.T) {
+	var req []byte
+	m := goalFromContextModelCapture(t, 200,
+		`{"choices":[{"message":{"content":"the goal"}}]}`, func(b []byte) { req = b })
+	m.agent.Messages = []llm.Message{
+		{Role: "system", Content: "sys"},
+		{Role: "user", Content: "ancient context"},
+		{Role: "assistant", Content: "ancient reply"},
+		{Role: "user", Content: "recent ask"},
+		{Role: "assistant", Content: "recent reply"},
+	}
+	m.command("/goal-from-context 2")
+	if m.goal != "the goal" {
+		t.Fatalf("goal: %q", m.goal)
+	}
+	// the formulation prompt must contain only the last 2 messages
+	body := string(req)
+	if !strings.Contains(body, "recent ask") || strings.Contains(body, "ancient context") {
+		t.Fatalf("window not honored in the request:\n%s", body)
+	}
+	// and the note reports the distilled window
+	found := false
+	for _, b := range m.blocks {
+		if strings.Contains(b.text, "formulating goal from the last 2 messages") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected the message count in the note, blocks: %v", m.blocks)
+	}
+}
+
+func TestGoalFromContextMaxTokens(t *testing.T) {
+	var req struct {
+		MaxTokens int `json:"max_tokens"`
+	}
+	m := goalFromContextModelCapture(t, 200,
+		`{"choices":[{"message":{"content":"the goal"}}]}`,
+		func(b []byte) { json.Unmarshal(b, &req) })
+	m.agent.Messages = []llm.Message{
+		{Role: "system", Content: "sys"},
+		{Role: "user", Content: "u"},
+		{Role: "assistant", Content: "a"},
+	}
+	m.command("/goal-from-context")
+	if req.MaxTokens != 8192 {
+		t.Fatalf("the formulation call must allow detailed goals, max_tokens=%d", req.MaxTokens)
+	}
+}
+
+func TestGoalFromContextBadCount(t *testing.T) {
+	m := goalFromContextModel(t, 200, `{"choices":[{"message":{"content":"x"}}]}`)
+	m.agent.Messages = []llm.Message{
+		{Role: "system", Content: "sys"},
+		{Role: "user", Content: "u"},
+		{Role: "assistant", Content: "a"},
+	}
+	for _, cmd := range []string{"/goal-from-context nope", "/goal-from-context 1"} {
+		m.command(cmd)
+		if m.busy {
+			t.Fatalf("%s: no formulation call should start", cmd)
+		}
+		if out := lastBlock(m); !strings.Contains(out, "usage: /goal-from-context") {
+			t.Fatalf("%s: expected a usage note, got %q", cmd, out)
+		}
 	}
 }
 

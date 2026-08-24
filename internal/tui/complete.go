@@ -21,7 +21,7 @@ var commands = []cand{
 	{"/effort", "[level] — reasoning effort: off·low·medium·high (bare cycles)"},
 	{"/fork", "[name] — copy the conversation into a new named session"},
 	{"/goal", "<text> — work until done; also: resume, clear, rounds <n>|default [--global]"},
-	{"/goal-from-context", "Formulate a goal from the last two messages and work until it's done"},
+	{"/goal-from-context", "[n] — formulate a goal from the last n messages (default 8) and work until it's done"},
 	{"/help", "Show available commands"},
 	{"/mcp", "[name] [reconnect|enable|disable] — MCP servers: status, reconnect, toggle"},
 	{"/model", "<model> [provider] — switch model"},

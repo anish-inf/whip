@@ -139,6 +139,19 @@ errors for the compaction retry, `Stream` returns the message + usage, and
   terminal resize. Tests: `tool_expand_test.go`, `resize_test.go`.
 - **Markdown.** Assistant messages render through glamour; streamed in-flight
   text stays plain and renders on flush. `markdown.go`.
+- **Clickable links (OSC 8).** URLs and existing local file paths in the
+  transcript are terminal hyperlinks — cmd/ctrl-click opens them, no mouse
+  plumbing in loopy (the terminal owns the click). `links.go` runs two passes
+  over glamour's output: `hyperlinkGlamourLinks` rewires rendered
+  `[label](url)` links so the href atom becomes the OSC 8 target on the
+  label instead of a second visible copy (bare autolinks become clickable in
+  place), and `linkifyRenderedFilePaths` wraps bare `path/to/file[:N]` tokens
+  in `file://` links — gated on the file existing on disk, resolved against
+  the process CWD. User-input echoes (submit, resume replay, steer) get the
+  same file linkification on the raw text. Unsupported terminals ignore
+  OSC 8 and show the underlined text as before; copy/selection strips the
+  sequences. Tests: `links_test.go` (ref regex, target gating, glamour
+  rewiring incl. wrap-split links, end-to-end renderMarkdown, user echo).
 - **Command palette** (ctrl+p) with sub-panels for model/effort/goal/compaction
   and ←/→ steppers for the compaction level — `palette.go`.
 - **Mouse**: `/mouse` toggles capture; with capture off the terminal's native
@@ -175,11 +188,13 @@ errors for the compaction retry, `Stream` returns the message + usage, and
   see the `ponytail` note in `shell.go`.
   Tests: `shell_test.go` (output/message routing idle+busy, queue-drain,
   truncation, echo rules, cd/pwd incl. `~` and bad dirs).
-- **`/goal-from-context`** distills the last two conversation messages into a
-  goal statement with one non-streaming call on the current model (the
-  compact-model override is deliberately ignored), then sets it exactly like
-  `/goal <text>` and starts the goal loop. Prompt building is pure
-  (`agent.BuildGoalFromContextPrompt` over the window from
+- **`/goal-from-context [n]`** distills the last *n* conversation messages
+  (default 8, clamped to the available history) into a detailed goal — a
+  concrete outcome line plus a bullet list of checkable completion criteria —
+  with one non-streaming call on the current model (the compact-model override
+  is deliberately ignored), then sets it exactly like `/goal <text>` and starts
+  the goal loop. The transcript note states the exact window used. Prompt
+  building is pure (`agent.BuildGoalFromContextPrompt` over the window from
   `agent.GoalFromContextMessages`); the TUI command mirrors `/compact`'s
   goroutine + `goalFromContextMsg` pattern, refusing while busy and running
   inline when headless. Tests: `goal_test.go` (`TestGoalFromContext*`).
