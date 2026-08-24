@@ -133,17 +133,30 @@ Improvement plan with per-item checkboxes: [`.ai-docs/plans/mcp-polish/`](../.ai
 
 ## Autonomy & durability
 
-From [exo](learnings/other-harnesses/exo.md) — a long-running agent built for safe self-modification. The unifying idea: an **append-only event log** is the source of truth, the prompt is a derived view, and every durable mutation goes through a named tool so the audit trail is complete.
+From [exo](learnings/other-harnesses/exo.md). Triaged against loopy's actual code:
+compaction today is destructive (`session.go` `DELETE FROM messages`), resume of a
+crashed turn can orphan a tool_call, and there is no plan-tracking tool at all.
+Ordered by value-per-line for a single-binary TUI — the first four are the ones
+worth doing now.
 
-- [ ] Event-sourced session store: sessions.db becomes an append-only `events` table (typed kinds: message/tool_call/tool_result/lifecycle/**custom**) instead of a messages table; monotonic rowid gives cursor pagination for free; custom kinds are the extension point (compaction, host lifecycle) so new features don't need new tables (exo `crates/exoharness/src/types.rs` EventData; serde-alias discipline keeps old rows readable)
-- [ ] Compaction as a recorded event, not a destructive rewrite: the summary + cutoff land as a custom event; the raw log stays queryable so a bad compaction can be inspected and retried (exo spec.md: "the durable conversation does not have to equal the prompt")
-- [ ] `/events` introspection tool + `loopy events --tail`: let the model query its own history (lifecycle/host kinds by default, `kinds=["messages"]` sums usage for cost questions); the CLI tail is `SELECT … WHERE id > ?` polling (exo `list_conversation_events`, `pnpm events:tail`)
-- [ ] Synthesize error tool-results for dangling tool calls when materializing a crashed/interrupted turn on resume — keeps the API's tool-call pairing invariant (exo `flushDanglingToolResults`, `exoharness/typescript/harness/index.ts:786-804`)
-- [ ] `remember`/`forget` memory tools: one agent-global store (a KV row or `~/.loopy/memory.json`), injected as a developer message every turn with hard caps (exo: 200 entries × 600 chars, oldest dropped), corrupt store degrades loudly instead of bricking prompt assembly (exo `exo/tools/memory-tools.ts`)
-- [ ] `todowrite` planning tool: conversation-scoped, full-list rewrite each call, one item in_progress, injected back each round so the plan survives long tool loops (exo `exo/tools/todo-tools.ts`; the claude/opencode pattern)
-- [ ] Workspace rewind: git-snapshot the working tree per turn (or on demand) so file changes can be rolled back, and record the rollback as an event — the "rewind does not erase history" invariant: rolling back world state must not delete the memory of what was tried (exo `rewind_sandbox` + append `SandboxStarted{snapshot_id}`; opencode `revert.ts` is the same idea)
-- [ ] `rebuild_and_restart_loopy` self-update tool: queue an outcome record with a mandatory free-text `reason`, spawn a detached deferred rebuild, return immediately so the turn finishes; drain-marker file claimed between turns + Unix `exec()` to swap the binary; outcome appended to the event log so the model can verify its own update landed (exo `guardian-tools.ts` + `exo-service-guardian`)
-- [ ] Minimal scheduler: `@every 10m` / `@at <rfc3339>` / `*/N * * * *` tasks firing machine-authored user-message turns; grid-anchored fires (slow runs don't drift), missed-fire policy skip/once/all-cap-100, per-task `reportPrompt` instructing the future wakeup how to report, record-then-deliver outbox so a crash between run and wakeup redelivers on startup (exo `scheduler_runtime.rs` — the grammar is ~70 lines, an in-process goroutine ticker is enough)
-- [ ] Generic wakeup turn source: one internal `Wakeup{source, prompt}` channel consumed by the agent loop — scheduler, webhooks, post-restart notices all become the same mechanism; render with a distinct gutter marker (exo `conversation_wakeup.rs`: wakeups are just user messages)
-- [ ] SELF.md self-map: a checked-in navigational map of loopy's own source (important paths, common commands, diagnosis procedure); inject its *path* each turn, not contents — reading it is an agent action (exo `exo/SELF.md` + `EXO_SELF_MAP`)
+**Do now:**
+
+- [ ] `todowrite` planning tool (the biggest gap): conversation-scoped store, full-list rewrite each call, exactly one item in_progress, injected back each round so the plan survives long tool loops and compactions; caps ~50 items × 300 chars (exo `exo/tools/todo-tools.ts` is ~100 lines; the claude/opencode pattern)
+- [ ] Synthesize error tool-results for dangling tool calls when materializing a crashed/interrupted turn on resume — correctness fix, not a feature: one interrupted turn can otherwise produce an API-rejected history (exo `flushDanglingToolResults`, `exoharness/typescript/harness/index.ts:786-804`)
+- [ ] Compaction as a recorded event, not `DELETE FROM messages`: store summary + cutoff seq and derive the prompt view; the raw log stays queryable so a bad compaction is inspectable and retryable. The thin end of the event-sourcing wedge without a store rewrite (exo spec.md: "the durable conversation does not have to equal the prompt")
+- [ ] Workspace rewind: git-snapshot the working tree per turn (or on demand) so file changes can be rolled back, and record the rollback in the session — "rewind does not erase history": rolling back the world must not delete the memory of what was tried (exo `rewind_sandbox` appends `SandboxStarted{snapshot_id}`; opencode `revert.ts` is the same idea)
+
+**High value, cheap:**
+
+- [ ] `remember`/`forget` memory tools: one agent-global store (`~/.loopy/memory.json` or a KV row), injected as a developer message every turn with hard caps (exo: 200 entries × 600 chars, oldest dropped), corrupt store degrades loudly instead of bricking prompt assembly (exo `exo/tools/memory-tools.ts`)
 - [ ] Stealable `me.md` operating rules for the system prompt: "the tool set changes turn to turn — never assume a tool exists because it did earlier"; "after ~3 failed attempts on the same blocker, escalate plainly instead of looping"; git hygiene ("never `git add .`, review staged diff for secrets, never force-push") (exo `exo/prompts/me.md`)
+
+**Later (needs `/goal` usage to justify the always-on turn):**
+
+- [ ] Minimal scheduler + generic wakeup channel: `@every 10m` / `@at <rfc3339>` / `*/N * * * *` tasks firing machine-authored user-message turns; grid-anchored fires, missed-fire policy skip/once/all-cap-100, per-task `reportPrompt`, record-then-deliver outbox so a crash between run and wakeup redelivers on startup. One internal `Wakeup{source, prompt}` channel serves cron, webhooks, and post-restart notices alike (exo `scheduler_runtime.rs`, `conversation_wakeup.rs` — the grammar is ~70 lines, an in-process goroutine ticker is enough)
+
+**Deliberately cut** (exo needs them because it's long-running and edits itself in production; a coding TUI doesn't):
+
+- ~~Full event-sourced store rewrite~~ — too big once compaction-as-event lands; keep custom-kind discipline inside the messages-table world instead
+- ~~`/events` introspection tool~~ — pays off with adapters/restarts loopy doesn't have; cost already lives in the status line
+- ~~`rebuild_and_restart_loopy` + SELF.md self-map~~ — a harness rebuilt by hand between sessions doesn't need to restart itself mid-conversation
