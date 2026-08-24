@@ -156,6 +156,7 @@ type model struct {
 
 	rew    *rewindState  // open rewind picker (double-esc while idle)
 	esc1   bool          // first idle esc pressed; second opens the rewind picker
+	escClr bool          // first esc pressed with a draft; second clears it to history
 	future []llm.Message // clipped tail kept for forward travel after a rewind
 
 	namePrompt *namePrompt // inline text prompt (fork naming, /rename)
@@ -1300,7 +1301,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case escArmMsg:
-		m.esc1 = false // the double-esc window closed
+		m.esc1 = false   // the double-esc rewind window closed
+		m.escClr = false // the double-esc draft-clear window closed
 		return m, nil
 
 	case taskUpdateMsg:
@@ -1473,13 +1475,14 @@ func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case tea.KeyEsc:
-		// esc interrupts the agent mid-response; otherwise it dismisses UI
-		if m.busy && m.cancel != nil {
+		// esc interrupts the agent mid-response — UNLESS there's a draft in
+		// the input box: clearing the draft takes priority so esc stays
+		// predictable (it always edits YOUR text first), and the agent keeps
+		// running untouched.
+		if m.busy && m.cancel != nil && strings.TrimSpace(m.input.Value()) == "" {
 			m.cancel()
 			return m, nil
 		}
-		// idle: a second esc within a second opens the rewind picker —
-		// scroll the history, jump back (or forward again after a rewind).
 		// Dismissing UI takes priority and only arms the window.
 		dismissed := true
 		switch {
@@ -1498,6 +1501,23 @@ func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			dismissed = false
 		}
 		if !dismissed {
+			// A typed draft: double-esc clears it into the input history (not
+			// the chat history — it's recallable with ↑ in case it was an
+			// accident). The rewind picker never arms while a draft exists.
+			if strings.TrimSpace(m.input.Value()) != "" {
+				if m.escClr {
+					m.escClr = false
+					m.hist = append(m.hist, strings.TrimSpace(m.input.Value()))
+					m.histIdx = len(m.hist)
+					m.input.Reset()
+					m.append(dimStyle.Render("draft cleared — ↑ recalls it"))
+					return m, nil
+				}
+				m.escClr = true
+				return m, tea.Tick(time.Second, func(time.Time) tea.Msg { return escArmMsg{} })
+			}
+			// No draft: a second esc within a second opens the rewind picker —
+			// scroll the history, jump back (or forward again after a rewind).
 			if m.esc1 {
 				m.esc1 = false
 				m.openRewind()
@@ -1506,7 +1526,8 @@ func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.esc1 = true
 			return m, tea.Tick(time.Second, func(time.Time) tea.Msg { return escArmMsg{} })
 		}
-		m.esc1 = false // a dismissal consumed the press; no stale arm carries over
+		m.esc1 = false   // a dismissal consumed the press; no stale arm carries over
+		m.escClr = false // same for the draft-clear arm
 		return m, nil
 
 	case tea.KeyCtrlV:
@@ -2766,7 +2787,9 @@ func (m *model) View() string {
 		// first idle ctrl+c armed the quit; make the second press discoverable
 		b.WriteString("\n" + errStyle.Render("press ctrl+c again to quit"))
 	}
-	if m.esc1 && m.rew == nil && m.namePrompt == nil {
+	if m.escClr {
+		b.WriteString("\n" + errStyle.Render("esc again: clear the input (↑ recalls it)"))
+	} else if m.esc1 && m.rew == nil && m.namePrompt == nil {
 		b.WriteString("\n" + dimStyle.Render("esc again: rewind the conversation"))
 	}
 	if m.menu != nil {

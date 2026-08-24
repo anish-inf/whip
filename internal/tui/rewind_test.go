@@ -85,6 +85,121 @@ func TestBusyEscStillInterrupts(t *testing.T) {
 	}
 }
 
+// Regression: esc with a draft typed while the agent is running must clear
+// the DRAFT (double-esc, into input history), not interrupt the agent.
+func TestBusyEscWithDraftClearsInputNotAgent(t *testing.T) {
+	m := rewindModel(t, llm.Message{Role: "user", Content: "q1", Authored: true})
+	m.busy = true
+	called := false
+	m.cancel = func() { called = true }
+	m.input.SetValue("half-written follow-up")
+
+	press(t, m, esc(m)) // first: arms the clear, warning shows
+	if called {
+		t.Fatal("esc with a draft must not interrupt the agent")
+	}
+	if !m.escClr {
+		t.Fatal("first esc with a draft should arm the clear")
+	}
+	if m.input.Value() == "" {
+		t.Fatal("first esc must not clear the draft yet")
+	}
+
+	press(t, m, esc(m)) // second: clears the draft into input history
+	if called {
+		t.Fatal("double-esc with a draft must never interrupt the agent")
+	}
+	if m.input.Value() != "" {
+		t.Fatalf("double-esc should clear the draft, got %q", m.input.Value())
+	}
+	if got := m.hist[len(m.hist)-1]; got != "half-written follow-up" {
+		t.Fatalf("cleared draft should land in input history, got %q", got)
+	}
+	if m.histIdx != len(m.hist) {
+		t.Fatalf("histIdx should sit at the newest edge, got %d of %d", m.histIdx, len(m.hist))
+	}
+	if m.rew != nil {
+		t.Fatal("clearing a draft must not open the rewind picker")
+	}
+	// chat history untouched: agent messages are exactly what we seeded
+	if len(m.agent.Messages) != 2 { // system + q1
+		t.Fatalf("chat history must be untouched, got %d messages", len(m.agent.Messages))
+	}
+}
+
+// The cleared draft is recallable with ↑, in case the clear was an accident.
+func TestClearedDraftRecallsWithUp(t *testing.T) {
+	m := rewindModel(t, llm.Message{Role: "user", Content: "q1", Authored: true})
+	m.input.SetValue("oops i cleared it")
+	press(t, m, esc(m))
+	press(t, m, esc(m))
+	if m.input.Value() != "" {
+		t.Fatal("double-esc should clear the draft")
+	}
+	tm, _ := m.key(tea.KeyMsg{Type: tea.KeyUp})
+	m = tm.(*model)
+	if m.input.Value() != "oops i cleared it" {
+		t.Fatalf("↑ should recall the cleared draft, got %q", m.input.Value())
+	}
+}
+
+// A single esc with a draft, then a pause past the arming window, leaves the
+// draft intact and requires a fresh double-esc.
+func TestSingleEscKeepsDraft(t *testing.T) {
+	m := rewindModel(t, llm.Message{Role: "user", Content: "q1", Authored: true})
+	m.input.SetValue("still thinking")
+	press(t, m, esc(m))
+	if !m.escClr {
+		t.Fatal("first esc should arm the clear")
+	}
+	// the arming window closes on escArmMsg (the tea.Tick firing)
+	tm, _ := m.Update(escArmMsg{})
+	m = tm.(*model)
+	if m.escClr {
+		t.Fatal("arming window should have closed")
+	}
+	if m.input.Value() != "still thinking" {
+		t.Fatalf("draft must survive a lone esc, got %q", m.input.Value())
+	}
+}
+
+// Idle with NO draft: double-esc still opens the rewind picker (unchanged).
+func TestDoubleEscWithoutDraftStillRewinds(t *testing.T) {
+	m := rewindModel(t,
+		llm.Message{Role: "user", Content: "q1", Authored: true},
+		llm.Message{Role: "assistant", Content: "a1"},
+	)
+	press(t, m, esc(m))
+	if m.escClr {
+		t.Fatal("no draft: the draft-clear arm must stay off")
+	}
+	if !m.esc1 {
+		t.Fatal("first idle esc should arm the rewind")
+	}
+	press(t, m, esc(m))
+	if m.rew == nil {
+		t.Fatal("double esc with no draft should open the rewind picker")
+	}
+}
+
+// Dismissing UI (e.g. an open completion menu) consumes the esc and must not
+// arm either the clear or the rewind.
+func TestEscDismissalDoesNotArm(t *testing.T) {
+	m := rewindModel(t, llm.Message{Role: "user", Content: "q1", Authored: true})
+	m.input.SetValue("/mo")
+	m.menu = &menu{head: "/", cands: []cand{{Text: "/model"}}}
+	press(t, m, esc(m))
+	if m.menu != nil {
+		t.Fatal("esc should dismiss the menu")
+	}
+	if m.escClr || m.esc1 {
+		t.Fatal("a dismissal must not arm clear or rewind")
+	}
+	if m.input.Value() != "/mo" {
+		t.Fatalf("dismissing the menu keeps the draft, got %q", m.input.Value())
+	}
+}
+
 func TestRewindTruncatesAndRestoresInput(t *testing.T) {
 	m := rewindModel(t,
 		llm.Message{Role: "user", Content: "q1", Authored: true},
