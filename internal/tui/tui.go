@@ -861,7 +861,20 @@ func (m *model) viewportView() string {
 	for last >= 0 && strings.TrimSpace(ansi.Strip(lines[last])) == "" {
 		last--
 	}
-	return strings.Join(lines[:last+1], "\n")
+	lines = lines[:last+1]
+	// Also drop the top padding rows so the transcript bottom-anchors: when
+	// the input box grows (ctrl+j), the tail of the buffer — input rows,
+	// status line — must stay on the SAME screen rows. bubbletea's inline
+	// renderer skips re-painting a row whose text matches the previous frame,
+	// and that cache is only correct for rows that never shift; padding on
+	// top makes the whole transcript shift, but the interactive tail stays
+	// put (its own height didn't change), so a blank pad row can no longer
+	// alias onto an input row and eat its content.
+	first := 0
+	for first < len(lines) && strings.TrimSpace(ansi.Strip(lines[first])) == "" {
+		first++
+	}
+	return strings.Join(lines[first:], "\n")
 }
 
 func (m *model) Init() tea.Cmd {
@@ -1069,6 +1082,10 @@ func (m *model) dockTop() int {
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	defer m.layout()
 
+	if vp, ok := msg.(viewProbe); ok { // tests read model state race-safely
+		vp.fn(m)
+		return m, nil
+	}
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		resized := msg.Width != m.width // width change → re-wrap the whole transcript
@@ -1480,6 +1497,14 @@ func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.input, cmd = m.input.Update(tea.KeyMsg{Type: tea.KeyCtrlJ})
 		m.input.MaxHeight = cap
 		m.input.SetHeight(cap)
+		// bubbles' InsertNewline scrolls the internal viewport to follow the
+		// cursor while the box is still 1 line high (YOffset=1); the deferred
+		// growInput rebuild inherits that stale offset and the first line
+		// scrolls out of view. SetValue resets the scroll (Reset inside), and
+		// CursorEnd keeps the caret at the end of the input.
+		v := m.input.Value()
+		m.input.SetValue(v)
+		m.input.CursorEnd()
 		m.refreshMenu()
 		return m, cmd
 	}
