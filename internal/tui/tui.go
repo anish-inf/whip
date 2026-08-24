@@ -49,6 +49,14 @@ type textMsg string
 type toolStartMsg struct{ name, args string }
 type toolEndMsg struct{ name, result string }
 type steeredMsg string
+
+// goalFromContextMsg carries the model-formulated goal back from the
+// /goal-from-context goroutine to the Update loop.
+type goalFromContextMsg struct {
+	goal string
+	err  error
+}
+
 type compactMsg struct {
 	took, kept int // messages removed / kept after compaction
 	err        error
@@ -90,9 +98,12 @@ type model struct {
 	spin   spinner.Model
 	vp     viewport.Model
 	blocks []block // finalized transcript (raw; rendered at the current width)
-	follow bool    // auto-scroll to bottom on new content
-	width  int
-	height int
+	// msgBlock[i] is the block index rendering agent.Messages[i] (-1: none) —
+	// rewind live-scroll uses it to jump to a message's transcript position.
+	msgBlock []int
+	follow   bool // auto-scroll to bottom on new content
+	width    int
+	height   int
 
 	busy    bool
 	current string // in-flight partial assistant line
@@ -139,6 +150,12 @@ type model struct {
 	taskSel    int       // selected row in the dock (index into newest-first tasks)
 	taskVP     *taskView // open per-task detail view; nil when on the main thread
 	dockRows   int       // rendered dock height; layout() maintains it for click math
+
+	rew    *rewindState  // open rewind picker (double-esc while idle)
+	esc1   bool          // first idle esc pressed; second opens the rewind picker
+	future []llm.Message // clipped tail kept for forward travel after a rewind
+
+	namePrompt *namePrompt // inline text prompt (fork naming, /rename)
 }
 
 // picker is the /resume session browser. metas is newest-first; the list is
@@ -483,32 +500,44 @@ func (m *model) resume(id string) error {
 	}
 	m.histIdx = len(m.hist)
 	m.blocks = nil
+	m.msgBlock = nil
+	m.future = nil // a different session's tail isn't this session's redo
 	m.goal = meta.Goal
 	m.goalRounds = 0
 	m.append(dimStyle.Render(fmt.Sprintf("resumed %s · %s · %s @ %s", meta.ID, meta.Title, m.modelName, m.provName)))
 	if m.goal != "" {
 		m.append(dimStyle.Render("◎ goal restored — /goal resume to keep working on it"))
 	}
-	m.seedTranscript(msgs)
+	m.seedTranscript(msgs, 1)
 	return nil
 }
 
 // seedTranscript re-renders stored messages into the viewport. Blocks are
 // appended in one batch with a single refreshVP at the end: a resumed
-// session costs one render pass, not one per message.
-func (m *model) seedTranscript(msgs []llm.Message) {
-	for _, msg := range msgs {
+// session costs one render pass, not one per message. base is the
+// conversation index of msgs[0] (1 for full transcripts — the system prompt
+// is never rendered); msgBlock is extended so rewind can map messages to
+// their blocks.
+func (m *model) seedTranscript(msgs []llm.Message, base int) {
+	for i, msg := range msgs {
+		bi := -1
 		switch msg.Role {
 		case "user":
+			bi = len(m.blocks)
 			m.blocks = append(m.blocks, block{kind: blockText, text: youStyle.Render("❯ ") + msg.Content})
 		case "assistant":
 			if strings.TrimSpace(msg.Content) != "" {
+				bi = len(m.blocks)
 				m.blocks = append(m.blocks, block{kind: blockAssistant, text: strings.TrimRight(msg.Content, "\n")})
 			}
 			for _, tc := range msg.ToolCalls {
 				m.blocks = append(m.blocks, block{kind: blockText, text: toolStyle.Render("⚒ "+tc.Function.Name+" ") + dimStyle.Render(tc.Function.Arguments)})
 			}
 		}
+		for len(m.msgBlock) <= base+i {
+			m.msgBlock = append(m.msgBlock, -1)
+		}
+		m.msgBlock[base+i] = bi
 	}
 	m.follow = true
 	m.refreshVP()
@@ -1163,6 +1192,39 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.append(youStyle.Render("❯ ") + string(msg) + dimStyle.Render("  (steered)"))
 		return m, nil
 
+	case shellDoneMsg:
+		// a `!` escape finished; its output lands behind any in-flight text
+		m.flushThink()
+		m.flushCurrent()
+		m.applyShellDone(msg)
+		return m, nil
+
+	case goalFromContextMsg:
+		// the formulation call finished between turns; on success set the
+		// goal and kick off the goal loop exactly like /goal <text>
+		m.flushThink()
+		m.flushCurrent()
+		switch {
+		case msg.err == context.Canceled:
+			m.busy = false
+			m.cancel = nil
+			m.append(dimStyle.Render("(interrupted)"))
+		case msg.err != nil:
+			m.busy = false
+			m.cancel = nil
+			m.append(errStyle.Render("goal-from-context failed: " + msg.err.Error()))
+		case strings.TrimSpace(msg.goal) == "":
+			m.busy = false
+			m.cancel = nil
+			m.append(errStyle.Render("goal-from-context: model returned an empty goal"))
+		default:
+			goal := strings.TrimSpace(msg.goal)
+			m.setGoal(goal)
+			m.append(dimStyle.Render("◎ goal set: " + goal))
+			return m.submit(goal)
+		}
+		return m, nil
+
 	case compactMsg:
 		// compaction lands between turns: append an inline note and rewrite
 		// the session record so the stored history matches the memory
@@ -1173,6 +1235,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.append(errStyle.Render("compact failed: " + msg.err.Error()))
 		default:
 			m.append(dimStyle.Render(fmt.Sprintf("◎ compacted — summarized %d msgs, %d kept", msg.took, msg.kept)))
+			m.future = nil     // compaction rewrote history; stale redo entries would resurrect it
+			m.msgBlock = nil   // indices no longer match; rebuilt as blocks stream in
 			m.persistRewrite() // reset the stored history to the compacted form
 		}
 		return m, nil
@@ -1189,11 +1253,16 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.append(dimStyle.Render("(interrupted)"))
 		}
 		m.persist()
-		// codex-style follow-up: send queued messages one turn at a time
-		if len(m.queue) > 0 && msg.err == nil {
+		// codex-style follow-up: send queued messages one turn at a time;
+		// `!` shell escapes execute locally instead of starting a turn
+		for len(m.queue) > 0 && msg.err == nil {
 			next := m.queue[0]
 			m.queue = m.queue[1:]
 			m.queueSel = -1
+			if strings.HasPrefix(next, "!") {
+				m.runShellQueued(next)
+				continue
+			}
 			return m.submit(next)
 		}
 		// goal loop: keep working until the model explicitly declares GOAL_MET
@@ -1223,6 +1292,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case quitArmMsg:
 		m.quit1 = false // the arm window closed; next ctrl+c starts fresh
+		return m, nil
+
+	case escArmMsg:
+		m.esc1 = false // the double-esc window closed
 		return m, nil
 
 	case taskUpdateMsg:
@@ -1321,6 +1394,9 @@ func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.palette != nil {
 		return m.paletteKey(msg)
 	}
+	if m.rew != nil {
+		return m.rewindKey(msg)
+	}
 	if m.picker != nil {
 		return m.pickerKey(msg)
 	}
@@ -1387,21 +1463,35 @@ func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.cancel()
 			return m, nil
 		}
-		if m.menu != nil {
+		// idle: a second esc within a second opens the rewind picker —
+		// scroll the history, jump back (or forward again after a rewind).
+		// Dismissing UI takes priority and only arms the window.
+		dismissed := true
+		switch {
+		case m.namePrompt != nil: // cancel the inline fork/rename prompt
+			m.closeNamePrompt()
+		case m.menu != nil:
 			if m.menu.cyc { // tab cycling previewed candidates: revert the input
 				m.input.SetValue(m.menu.base)
 			}
 			m.menu = nil
-			return m, nil
-		}
-		if m.queueSel >= 0 { // leave queue navigation
+		case m.queueSel >= 0: // leave queue navigation
 			m.queueSel = -1
-			return m, nil
-		}
-		if m.tasksFocus { // leave dock navigation, back to the main thread
+		case m.tasksFocus: // leave dock navigation, back to the main thread
 			m.tasksFocus = false
-			return m, nil
+		default:
+			dismissed = false
 		}
+		if !dismissed {
+			if m.esc1 {
+				m.esc1 = false
+				m.openRewind()
+				return m, nil
+			}
+			m.esc1 = true
+			return m, tea.Tick(time.Second, func(time.Time) tea.Msg { return escArmMsg{} })
+		}
+		m.esc1 = false // a dismissal consumed the press; no stale arm carries over
 		return m, nil
 
 	case tea.KeyCtrlV:
@@ -1529,6 +1619,13 @@ func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case tea.KeyEnter:
+		if m.namePrompt != nil { // inline prompt (fork naming, /rename) commits
+			onOK := m.namePrompt.onOK
+			value := strings.TrimSpace(m.input.Value())
+			m.closeNamePrompt() // restores the draft before onOK appends blocks
+			onOK(value)
+			return m, nil
+		}
 		if m.menu != nil {
 			c := m.menu.cands[m.menu.idx]
 			// a bare command previewed by tab cycling runs immediately, same
@@ -1563,6 +1660,20 @@ func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		text := strings.TrimSpace(m.input.Value())
 		if m.busy {
 			switch {
+			// settings commands don't touch the turn — run them now instead of
+			// queueing them as messages for the model
+			case text != "" && busyCmd(text):
+				m.hist = append(m.hist, text)
+				m.histIdx = len(m.hist)
+				m.input.Reset()
+				m.menu = nil
+				return m.command(text)
+			case strings.HasPrefix(text, "!"): // shell escape runs now, not queued
+				m.hist = append(m.hist, text)
+				m.histIdx = len(m.hist)
+				m.input.Reset()
+				m.menu = nil
+				m.runShell(text)
 			case text != "": // codex-style: queue it (multiple allowed)
 				m.queue = append(m.queue, text)
 				m.hist = append(m.hist, text)
@@ -1589,6 +1700,10 @@ func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.draft = ""
 		if strings.HasPrefix(text, "/") {
 			return m.command(text)
+		}
+		if strings.HasPrefix(text, "!") {
+			m.runShell(text)
+			return m, nil
 		}
 		return m.submit(text)
 	}
@@ -2062,9 +2177,18 @@ func (m *model) submitGoal(text string) (tea.Model, tea.Cmd) {
 func (m *model) submitTurn(text string, authored bool) (tea.Model, tea.Cmd) {
 	m.busy = true
 	prepared := m.prepareTurn(text)
+	userMsgIdx := len(m.agent.Messages) // where Turn will append this message
+	m.discardFuture()                   // new activity while rewound kills the redo stack
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancel = cancel
 	p := m.prog
+	// send is nil-safe: headless tests drive Update directly, so turn
+	// callbacks drop their messages instead of panicking on a nil program
+	send := func(msg tea.Msg) {
+		if p != nil {
+			p.Send(msg)
+		}
+	}
 
 	// Coalesce streaming deltas (~25fps) so each SSE chunk doesn't cost a
 	// full Update/View cycle. Reasoning tokens get their own buffer so
@@ -2083,10 +2207,10 @@ func (m *model) submitTurn(text string, authored bool) (tea.Model, tea.Cmd) {
 		pend, thinkPend = "", ""
 		mu.Unlock()
 		if think != "" {
-			p.Send(thinkMsg(think))
+			send(thinkMsg(think))
 		}
 		if text != "" {
-			p.Send(textMsg(text))
+			send(textMsg(text))
 		}
 	}
 	schedule := func() {
@@ -2117,21 +2241,47 @@ func (m *model) submitTurn(text string, authored bool) (tea.Model, tea.Cmd) {
 			OnThink: onThink,
 			OnToolStart: func(n, a string) {
 				flush()
-				p.Send(toolStartMsg{n, a})
+				send(toolStartMsg{n, a})
 			},
-			OnToolEnd: func(n, r string) { p.Send(toolEndMsg{n, r}) },
+			OnToolEnd: func(n, r string) { send(toolEndMsg{n, r}) },
 			OnSteer: func(s string) {
 				flush()
-				p.Send(steeredMsg(s))
+				send(steeredMsg(s))
 			},
-			OnCompact: func(took, kept int) { p.Send(compactMsg{took: took, kept: kept}) },
-			OnUsage:   func(u llm.Usage) { p.Send(usageMsg(u)) },
+			OnCompact: func(took, kept int) { send(compactMsg{took: took, kept: kept}) },
+			OnUsage:   func(u llm.Usage) { send(usageMsg(u)) },
 		})
 		flush()
-		p.Send(turnDoneMsg{final: final, err: err})
+		send(turnDoneMsg{final: final, err: err})
 	}()
 	m.append(youStyle.Render("❯ ") + text)
+	if authored {
+		// map the message index to its block for rewind live-scroll
+		for len(m.msgBlock) <= userMsgIdx {
+			m.msgBlock = append(m.msgBlock, -1)
+		}
+		m.msgBlock[userMsgIdx] = len(m.blocks) - 1
+	}
 	return m, m.spin.Tick
+}
+
+// busyCmd reports whether a slash command is safe to run while a turn is in
+// flight. These adjust settings or views only — they never touch
+// Agent.Messages, busy, or the session — so they run immediately instead of
+// being queued as messages (queued text is submitted to the model verbatim
+// after the turn ends).
+func busyCmd(text string) bool {
+	fields := strings.Fields(text)
+	if len(fields) == 0 {
+		return false
+	}
+	switch fields[0] {
+	case "/help", "/theme", "/mouse", "/effort", "/tasks", "/cd", "/pwd":
+		return true
+	case "/goal": // status, clear, and rounds are settings; resume/<text> submit turns
+		return len(fields) == 1 || fields[1] == "clear" || fields[1] == "rounds"
+	}
+	return false
 }
 
 func (m *model) command(text string) (tea.Model, tea.Cmd) {
@@ -2140,8 +2290,14 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 	case "/quit", "/exit", "/q":
 		return m, tea.Quit
 	case "/clear":
+		if m.busy {
+			m.append(dimStyle.Render("(busy — /clear after this turn)"))
+			return m, nil
+		}
 		m.agent.Messages = m.agent.Messages[:1] // keep system prompt
 		m.blocks = nil
+		m.msgBlock = nil
+		m.future = nil   // no redo across a cleared conversation
 		m.setGoal("")    // clear before detaching so the old session's goal is dropped too
 		m.sessionID = "" // next turn starts a fresh session
 		m.saved = 1
@@ -2172,6 +2328,12 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 		return m, m.spin.Tick
 	case "/mcp":
 		return m.mcpCommand(fields)
+	case "/cd":
+		m.cdCommand(strings.TrimSpace(strings.TrimPrefix(text, "/cd")))
+		return m, nil
+	case "/pwd":
+		m.append(dimStyle.Render(cwd()))
+		return m, nil
 	case "/tasks":
 		if len(fields) > 1 { // /tasks <id>: jump straight into the detail view
 			m.openTask(fields[1])
@@ -2233,6 +2395,66 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 			m.setEffort(nextEffort(levels, m.agent.Effort))
 		}
 		m.append(dimStyle.Render("⚡ effort: " + effortLabel(m.agent.Effort)))
+	case "/goal-from-context":
+		if m.busy {
+			m.append(dimStyle.Render("(busy — /goal-from-context after this turn)"))
+			return m, nil
+		}
+		tail, err := agent.GoalFromContextMessages(m.agent.Messages)
+		if err != nil {
+			m.append(errStyle.Render(err.Error()))
+			return m, nil
+		}
+		// one non-streaming call on the CURRENT model (the compact-model
+		// override is deliberately ignored) distills the tail into a goal
+		m.busy = true
+		m.append(dimStyle.Render("◎ formulating goal from the last two messages…"))
+		p := m.prog
+		// ag may drift from m.agent if the user /model-switches mid-formulation:
+		// usage lands on the old agent, the goal submits on the new one. The
+		// call itself is safe (Complete touches no Agent state, AddUsage is
+		// mutex-protected) and the window is seconds — not worth a guard.
+		ag := m.agent
+		ctx, cancel := context.WithCancel(context.Background())
+		m.cancel = cancel
+		prompt := agent.BuildGoalFromContextPrompt(tail)
+		formulate := func() (string, error) {
+			goal, usage, err := ag.Client.Complete(ctx, llm.Request{
+				Model:     ag.Model,
+				MaxTokens: 256,
+				Messages:  []llm.Message{{Role: "user", Content: prompt}},
+			})
+			ag.AddUsage(usage) // the formulation call is session spend too
+			return goal, err
+		}
+		if p == nil {
+			// headless (tests): run inline on the caller's goroutine — with
+			// no program to pump messages the Update handler can't run, so
+			// apply the same notes/goal here; the goal loop itself never
+			// starts without a running program
+			goal, err := formulate()
+			m.busy = false
+			m.cancel = nil
+			switch {
+			case err != nil && err != context.Canceled:
+				m.append(errStyle.Render("goal-from-context failed: " + err.Error()))
+			case err == nil && strings.TrimSpace(goal) == "":
+				m.append(errStyle.Render("goal-from-context: model returned an empty goal"))
+			case err == nil:
+				m.setGoal(strings.TrimSpace(goal))
+				m.append(dimStyle.Render("◎ goal set: " + m.goal))
+			}
+			return m, nil
+		}
+		go func() {
+			goal, err := formulate()
+			// the msg handler owns busy/cancel: on success it submits (busy
+			// belongs to the new turn), on failure it clears them directly —
+			// a turnDoneMsg{} here would either cancel-proof the fresh turn
+			// (success) or re-engage a paused goal's loop (failure)
+			p.Send(goalFromContextMsg{goal: goal, err: err})
+		}()
+		return m, m.spin.Tick
 	case "/goal":
 		switch {
 		case len(fields) == 1:
@@ -2260,7 +2482,25 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 			m.append(dimStyle.Render("◎ goal set: " + goal))
 			return m.submit(goal)
 		}
+	case "/fork":
+		if m.busy {
+			m.append(dimStyle.Render("(busy — /fork after this turn)"))
+			return m, nil
+		}
+		m.forkCommand(strings.TrimSpace(strings.TrimPrefix(text, "/fork")))
+		return m, nil
+	case "/rename":
+		if m.busy {
+			m.append(dimStyle.Render("(busy — /rename after this turn)"))
+			return m, nil
+		}
+		m.renameCommand(strings.TrimSpace(strings.TrimPrefix(text, "/rename")))
+		return m, nil
 	case "/resume":
+		if m.busy {
+			m.append(dimStyle.Render("(busy — /resume after this turn)"))
+			return m, nil
+		}
 		if len(fields) > 1 {
 			if err := m.resume(fields[1]); err != nil {
 				m.append(errStyle.Render(err.Error()))
@@ -2272,7 +2512,7 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 		m.append(m.doctorReport())
 	case "/help":
 		m.append(dimStyle.Render(
-			"/model <name> [provider] — switch model\n/context-doctor — audit what a fresh session injects (skills, MCP, tool schemas) and its token cost\n/mcp [name] [reconnect|enable|disable] — MCP servers: status, reconnect, toggle\n/compact [model] [provider]|off — compact now at 90% context, or pick the compaction model\n/mouse — toggle mouse capture (on = wheel scroll + clicks, drag to copy)\n/theme [light|dark|auto] — color scheme (bare toggles)\n/tasks [id] — background subagents: focus the dock, or open one task's live view (ctrl+t toggles dock focus)\n/resume [id] — resume a previous session\n/goal <text> — keep working until the goal is met (resume | clear | rounds <n>|default [--global])\n/clear — reset conversation\n/quit — exit\ntab — complete · ctrl+t — focus the background-tasks dock (↑/↓ select, enter opens, esc backs out) · ctrl+o — toggle thinking tokens · ctrl+e — expand the last tool result · ctrl+j / shift+enter — newline · ctrl+v — paste image · esc — interrupt the agent · while busy with queued messages: ↑/↓ select, del removes · PgUp/PgDn — scroll · wheel — scroll · drag — select/copy text · ctrl+c ctrl+c — quit"))
+			"/model <name> [provider] — switch model\n/context-doctor — audit what a fresh session injects (skills, MCP, tool schemas) and its token cost\n/mcp [name] [reconnect|enable|disable] — MCP servers: status, reconnect, toggle\n/compact [model] [provider]|off — compact now at 90% context, or pick the compaction model\n/mouse — toggle mouse capture (on = wheel scroll + clicks, drag to copy)\n/theme [light|dark|auto] — color scheme (bare toggles)\n/tasks [id] — background subagents: focus the dock, or open one task's live view (ctrl+t toggles dock focus)\n/resume [id] — resume a previous session\n/fork [name] — copy this conversation into a new session (pick a point in the rewind picker with f)\n/rename [title] — retitle this session\n/goal <text> — keep working until the goal is met (resume | clear | rounds <n>|default [--global])\n/goal-from-context — formulate a goal from the last two messages and work until it's met\n/clear — reset conversation\n/cd [dir] — change working directory (bare prints it)\n/pwd — print working directory\n!<cmd> — run a shell command locally; output lands in the transcript and the conversation\n/quit — exit\ntab — complete · ctrl+t — focus the background-tasks dock (↑/↓ select, enter opens, esc backs out) · ctrl+o — toggle thinking tokens · ctrl+e — expand the last tool result · ctrl+j / shift+enter — newline · ctrl+v — paste image · esc — interrupt the agent · esc esc (idle) — rewind the conversation (↑/↓ browse, enter rewinds, f forks) · while busy with queued messages: ↑/↓ select, del removes · PgUp/PgDn — scroll · wheel — scroll · drag — select/copy text · ctrl+c ctrl+c — quit"))
 	case "/model":
 		if len(fields) < 2 {
 			m.openModelPicker()
@@ -2405,7 +2645,7 @@ func (m *model) View() string {
 		b.WriteString("\n" + m.interactiveView() + "\n")
 	}
 	if m.busy {
-		hint := " thinking… (enter queues · esc interrupts · ctrl+c ctrl+c interrupts)"
+		hint := " thinking… (enter queues · /theme /mouse /effort run now · esc interrupts · ctrl+c ctrl+c interrupts)"
 		if m.iactive != nil {
 			hint = " bash (interactive) — type to respond · ctrl+c ctrl+c to cancel"
 		} else if m.interrupt1 {
@@ -2432,12 +2672,21 @@ func (m *model) View() string {
 	if dock := m.tasksDock(); dock != "" {
 		b.WriteString(dock + "\n")
 	}
+	if m.rew != nil {
+		b.WriteString(m.rewindView() + "\n\n")
+	}
 	if m.iactive == nil {
+		if m.namePrompt != nil {
+			b.WriteString(m.namePrompt.label + " ")
+		}
 		b.WriteString(m.input.View())
 	}
 	if m.quit1 {
 		// first idle ctrl+c armed the quit; make the second press discoverable
 		b.WriteString("\n" + errStyle.Render("press ctrl+c again to quit"))
+	}
+	if m.esc1 && m.rew == nil && m.namePrompt == nil {
+		b.WriteString("\n" + dimStyle.Render("esc again: rewind the conversation"))
 	}
 	if m.menu != nil {
 		b.WriteString("\n" + m.menuView())

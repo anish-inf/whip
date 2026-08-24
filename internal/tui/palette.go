@@ -128,6 +128,50 @@ func (m *model) paletteItems() []paletteItem {
 				m.openPicker()
 				return m, nil
 			}},
+		{title: "Rewind conversation", category: "Session", suggested: true,
+			dynDesc: func(m *model) string {
+				if len(m.future) > 0 {
+					return "rewound — browse to go back further or forward again"
+				}
+				return "jump back (or forward) to any earlier message"
+			},
+			dynHint: func(m *model) string { return "esc esc" },
+			run: func(m *model) (tea.Model, tea.Cmd) {
+				m.palette = nil
+				if m.busy {
+					return m, nil
+				}
+				m.openRewind()
+				return m, nil
+			}},
+		{title: "Fork session", category: "Session",
+			dynDesc: func(m *model) string { return "copy the conversation into a new named session" },
+			dynHint: func(m *model) string { return "/fork" },
+			run: func(m *model) (tea.Model, tea.Cmd) {
+				m.palette = nil
+				if !m.busy {
+					m.forkCommand("")
+				}
+				return m, nil
+			}},
+		{title: "Rename session", category: "Session",
+			dynDesc: func(m *model) string {
+				if m.sessionID == "" || m.store == nil {
+					return "retitle this session"
+				}
+				if meta, _, err := m.store.Load(m.sessionID); err == nil && meta.Title != "" {
+					return meta.Title
+				}
+				return "retitle this session"
+			},
+			dynHint: func(m *model) string { return "/rename" },
+			run: func(m *model) (tea.Model, tea.Cmd) {
+				m.palette = nil
+				if !m.busy {
+					m.renameCommand("")
+				}
+				return m, nil
+			}},
 		{title: "New session", category: "Session",
 			dynDesc: func(m *model) string { return "reset the conversation and start fresh" },
 			dynHint: func(m *model) string { return "/clear" },

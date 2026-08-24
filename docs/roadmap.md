@@ -26,7 +26,7 @@ parallel tool calls and background subagents).
 - [x] Explicit interruption: double ctrl+c while busy (cf. opencode's triple-escape with 5s reset — `packages/tui/src/routes/session/index.tsx:1388`)
 - [ ] Queue management: edit/remove queued messages before they send (opencode `<leader>q`, `runtime.queue.ts`)
 - [ ] Multiline input (grow textarea; opencode binds newline to `shift+enter,ctrl+enter,alt+enter,ctrl+j` because terminals disagree — `keybind.ts:161`)
-- [ ] `!` prefix shell mode: only triggers at cursor offset 0, backspace-at-0 exits, output lands in transcript as a tool result the model can see (opencode `prompt/index.tsx:815`)
+- [x] `!` prefix shell escape: output lands in transcript (tool-style block) and in the conversation as a non-authored `$ <cmd>` user message the model sees next turn (opencode `prompt/index.tsx:815`, `:1059`). Shipped as a submit-time prefix, not a mode — remaining delta: mode chrome (border/placeholder swap, cursor-at-0-only trigger, backspace-at-0 exits), and a real tool-role result instead of a user message
 - [x] `@` file mentions, pointer-style: tag any file, any path (relative/absolute/`~`), `@file#10-40` line ranges, tab-completion — a pointer note is appended to the user message, contents never inlined; the model probes with its own tools (Abe's design; alternative documented in [learnings/other-harnesses/opencode/at-mentions.md](learnings/other-harnesses/opencode/at-mentions.md))
 - [ ] `@` mention fuzzy picker + frecency ranking (opencode `prompt/frecency.tsx`, `prompt/autocomplete.tsx`)
 - [ ] External editor for long prompts: `$VISUAL || $EDITOR`, suspend renderer → edit temp .md → resume (opencode `editor.ts:26-53`; pi setting `externalEditor`)
@@ -47,10 +47,10 @@ parallel tool calls and background subagents).
 
 - [x] SQLite session store with `--resume` / `/resume` picker
 - [ ] Session titles: auto-generate a short title from the first exchange
-- [ ] `/rename` a session (opencode: ctrl+r prompt dialog)
-- [ ] `/fork` a session (pi: tree-structured JSONL entries with `parentId` — `docs/session-format.md`; opencode forks from any message via a per-message action menu)
-- [ ] Timeline: jump-to-message picker that live-scrolls the transcript as you browse (opencode `dialog-timeline.tsx`)
-- [ ] Undo last message: abort turn, revert file changes, restore the prompt text into the input for editing (opencode `routes/session/index.tsx:615` — the input restore is what makes it feel good)
+- [x] `/rename` a session (opencode: ctrl+r prompt dialog) — `/rename [title]`, bare opens an inline prompt prefilled with the current title, draft preserved
+- [x] `/fork` a session (pi: tree-structured JSONL entries with `parentId` — `docs/session-format.md`; opencode forks from any message via a per-message action menu) — `/fork [name]` copies the conversation to a new session with an auto-suggested `(fork #N)` name; `f` in the rewind picker forks from any message
+- [x] Timeline: jump-to-message picker that live-scrolls the transcript as you browse (opencode `dialog-timeline.tsx`) — the rewind picker (idle esc esc) does this and rewinds/forwards too
+- [x] Undo last message (conversation half): rewind restores the prompt text into the input for editing (opencode `routes/session/index.tsx:615`); file-change revert (opencode `revert.ts` git snapshots) is NOT done — conversation-only by design
 - [x] Compaction: summarize old turns when context fills (pi settings: `compaction: {reserveTokens, keepRecentTokens}`; opencode `/compact`) — `/compact` manually; auto-compacts proactively at 90% of the provider-advertised context_length (GET /models, cached in ~/.loopy/models.json) plus retries once when the provider errors with context_length_exceeded; `/compact <model> [provider]` picks the summarizer (else the current model); kept tail never orphans a tool_call from its result
 - [ ] Token/cost tracking per session (pi models.json carries `cost: {input, output, cacheRead, cacheWrite}`)
 - [ ] Export transcript to markdown with include-options dialog (opencode `/export`, `ui/dialog-export-options.tsx`)

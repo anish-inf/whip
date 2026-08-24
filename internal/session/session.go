@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
@@ -247,6 +248,98 @@ func (s *Store) LastExchange(id string) (user, assistant string) {
 func (s *Store) ClearMessages(id string) error {
 	_, err := s.db.Exec(`DELETE FROM messages WHERE session_id=?`, id)
 	return err
+}
+
+// DeleteFrom drops every stored message with seq >= from. seq equals the
+// conversation index (Save persists msgs[i] at seq i; the system prompt is
+// never persisted). Used by rewind: the clipped tail is deleted from disk
+// but kept in memory for forward travel.
+func (s *Store) DeleteFrom(id string, from int) error {
+	_, err := s.db.Exec(`DELETE FROM messages WHERE session_id=? AND seq>=?`, id, from)
+	return err
+}
+
+// SetTitle retitles a session (/rename).
+func (s *Store) SetTitle(id, title string) error {
+	_, err := s.db.Exec(`UPDATE sessions SET title=? WHERE id=?`, title, id)
+	return err
+}
+
+// Fork copies a session's stored rows with seq <= uptoSeq (pass len(msgs)
+// for a full copy — one past the last row) into a new session titled title,
+// carrying over cwd/model/provider/goal, and returns the new id. seq equals
+// the conversation index (the system prompt is never persisted). The source
+// session is untouched. The rows are cloned in one INSERT…SELECT, so the DB
+// does the copy; nothing round-trips through Go.
+func (s *Store) Fork(srcID string, uptoSeq int, title string) (string, error) {
+	b := make([]byte, 4)
+	rand.Read(b)
+	newID := hex.EncodeToString(b)
+	tx, err := s.db.Begin()
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`INSERT INTO sessions (id, created_at, updated_at, cwd, model, provider, title, goal)
+		SELECT ?, ?, ?, cwd, model, provider, ?, goal FROM sessions WHERE id=?`,
+		newID, now(), now(), title, srcID); err != nil {
+		return "", err
+	}
+	if uptoSeq > 0 {
+		if _, err := tx.Exec(`INSERT INTO messages (session_id, seq, role, content)
+			SELECT ?, seq, role, content FROM messages WHERE session_id=? AND seq <= ?`,
+			newID, srcID, uptoSeq); err != nil {
+			return "", err
+		}
+	}
+	return newID, tx.Commit()
+}
+
+// ForkTitle derives the default fork name: "<title> (fork #N)" with N
+// incremented past any existing fork of the same base (opencode's
+// getForkedTitle — packages/opencode/src/session/session.ts:162). Falls back
+// to "session (fork #1)" for untitled sessions.
+func (s *Store) ForkTitle(base string) (string, error) {
+	if base == "" {
+		base = "session"
+	}
+	// unwrap an existing "(fork #N)" suffix so forks of forks increment
+	// instead of nesting: "x (fork #2)" → "x (fork #3)", not "x (fork #2) (fork #1)"
+	base = strings.TrimSpace(base)
+	if i := strings.LastIndex(base, " (fork #"); i > 0 {
+		var n0 int
+		var rest string
+		n, err := fmt.Sscanf(base[i:], " (fork #%d)%s", &n0, &rest)
+		if n0 > 0 && rest == "" && (err == nil || err == io.EOF) && n >= 1 {
+			base = base[:i]
+		}
+	}
+	rows, err := s.db.Query(`SELECT title FROM sessions WHERE title = ? OR title LIKE ? ESCAPE '\'`,
+		base, likeEscape(base)+` (fork #%)`)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+	n := 0
+	for rows.Next() {
+		var t string
+		if err := rows.Scan(&t); err != nil {
+			return "", err
+		}
+		var num int
+		var rest string
+		// exact suffix match only: a manually renamed "x (fork #9) notes"
+		// must not inflate the numbering
+		if nf, err := fmt.Sscanf(t, base+" (fork #%d)%s", &num, &rest); num > n && rest == "" && nf >= 1 && (err == nil || err == io.EOF) {
+			n = num
+		}
+	}
+	return fmt.Sprintf("%s (fork #%d)", base, n+1), rows.Err()
+}
+
+func likeEscape(s string) string {
+	r := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+	return r.Replace(s)
 }
 
 func scanMetas(rows *sql.Rows) ([]Meta, error) {

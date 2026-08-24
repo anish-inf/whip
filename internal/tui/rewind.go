@@ -1,0 +1,200 @@
+package tui
+
+import (
+	"fmt"
+	"strings"
+
+	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/context-labs/loopy/internal/llm"
+)
+
+// Rewind: double-esc while idle opens a picker over the conversation's
+// authored user messages. Browsing live-scrolls the transcript (opencode's
+// dialog-timeline onMove). enter rewinds the conversation to just before the
+// selected message — Agent.Messages and the DB are truncated, the transcript
+// is rebuilt, and the message text lands back in the input for editing
+// (opencode's undo: "the input restore is what makes it feel good"). The
+// clipped tail is kept in memory as a redo stack: reopening the picker while
+// rewound lists the clipped messages dimmed below the live ones, and enter on
+// one moves forward again. Submitting anything new discards the future.
+// Fork from any entry with f.
+
+// rewindEntry is one row of the rewind picker. cut is the conversation index
+// the entry points at: for a live message it is its index in agent.Messages,
+// for a clipped "future" message it is its original conversation index
+// (base + position in the redo stack, where base = len(agent.Messages)).
+// enter rewinds to just before cut; f forks the history through cut.
+type rewindEntry struct {
+	cut    int
+	text   string // single-line preview
+	future bool   // clipped by the active rewind; selecting moves forward
+}
+
+type rewindState struct {
+	entries []rewindEntry // chronological
+	sel     int           // newest-first navigation: 0 = last entry
+	savedVP int           // viewport offset on open, restored on cancel
+}
+
+// rewindBase is where the conversation was cut. future is kept ordered by
+// original conversation index (oldest first), so the boundary is simply
+// len(agent.Messages); future[i] holds original index base+i.
+
+// Cuts never split a tool_call from its results: entries sit at user
+// messages and an assistant message's tool calls/results always follow it,
+// so moving the cut to "before the user message" is boundary-safe.
+type escArmMsg struct{} // disarms the idle double-esc window
+
+func (m *model) rewindEntries() []rewindEntry {
+	var out []rewindEntry
+	for i, msg := range m.agent.Messages {
+		if msg.Role == "user" && msg.Authored {
+			out = append(out, rewindEntry{cut: i, text: oneLine(msg.Content)})
+		}
+	}
+	for i, msg := range m.future {
+		if msg.Role == "user" && msg.Authored {
+			out = append(out, rewindEntry{
+				cut: len(m.agent.Messages) + i, text: oneLine(msg.Content), future: true,
+			})
+		}
+	}
+	return out
+}
+
+func oneLine(s string) string { return truncLine(strings.Join(strings.Fields(s), " "), 100) }
+
+// scrollToMsg live-scrolls the viewport so the block rendering
+// agent.Messages[msgIdx] is near the top.
+func (m *model) scrollToMsg(msgIdx int) {
+	if msgIdx < 0 || msgIdx >= len(m.msgBlock) {
+		return
+	}
+	bi := m.msgBlock[msgIdx]
+	if bi < 0 || bi >= len(m.blocks) {
+		return
+	}
+	m.follow = false
+	m.vp.SetYOffset(max(m.blocks[bi].y0-1, 0))
+}
+
+func (m *model) openRewind() {
+	entries := m.rewindEntries()
+	if len(entries) == 0 {
+		m.append(dimStyle.Render("(nothing to rewind to yet)"))
+		return
+	}
+	m.rew = &rewindState{entries: entries, savedVP: m.vp.YOffset}
+	m.scrollToMsg(entries[len(entries)-1].cut) // selection starts on the newest
+}
+
+func (m *model) rewindKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	r := m.rew
+	sel := func() rewindEntry { return r.entries[len(r.entries)-1-r.sel] }
+	switch msg.Type {
+	case tea.KeyEsc:
+		m.vp.SetYOffset(r.savedVP) // put the scroll back where the user had it
+		m.rew = nil
+	case tea.KeyUp:
+		r.sel = min(r.sel+1, len(r.entries)-1)
+		m.scrollToMsg(sel().cut)
+	case tea.KeyDown:
+		r.sel = max(r.sel-1, 0)
+		m.scrollToMsg(sel().cut)
+	case tea.KeyEnter:
+		e := sel()
+		text := m.applyRewind(e.cut)
+		m.rew = nil
+		if !e.future {
+			m.input.SetValue(text) // restore the rewound message for editing
+			m.input.CursorEnd()
+			m.growInput()
+		}
+	case tea.KeyRunes:
+		if string(msg.Runes) == "f" {
+			e := sel()
+			m.rew = nil
+			m.openForkPrompt(e.cut, true) // the copy keeps the selected message
+			return m, nil
+		}
+	}
+	return m, nil
+}
+
+// applyRewind moves the conversation boundary to cut (an index into
+// agent.Messages, clamped to the system prompt). Anything beyond it becomes
+// the redo stack; the DB and transcript follow. Returns the authored user
+// text at the cut, if any, for restoring into the input.
+func (m *model) applyRewind(cut int) string {
+	cut = max(cut, 1) // keep the system prompt
+	base := len(m.agent.Messages)
+	switch {
+	case cut > base: // forward: pull clipped messages back in
+		m.agent.Messages = append(m.agent.Messages, m.future[:cut-base]...)
+		m.future = append([]llm.Message(nil), m.future[cut-base:]...)
+	case cut < base: // back: clip the tail into the redo stack (oldest first)
+		clipped := append([]llm.Message(nil), m.agent.Messages[cut:]...)
+		m.future = append(clipped, m.future...)
+		m.agent.Messages = m.agent.Messages[:cut]
+		m.saved = min(m.saved, cut)
+		if m.store != nil && m.sessionID != "" {
+			if err := m.store.DeleteFrom(m.sessionID, cut); err != nil {
+				m.append(errStyle.Render("session save failed: " + err.Error()))
+			}
+		}
+	}
+	m.persist() // re-save any rows pulled back in; no-op otherwise
+	m.rebuildTranscript()
+	text := ""
+	if cut < len(m.agent.Messages)+len(m.future) {
+		if msg := m.messageAt(cut); msg.Role == "user" && msg.Authored {
+			text = msg.Content
+		}
+	}
+	return text
+}
+
+// messageAt reads conversation index i across the live/redo boundary.
+func (m *model) messageAt(i int) llm.Message {
+	if i < len(m.agent.Messages) {
+		return m.agent.Messages[i]
+	}
+	return m.future[i-len(m.agent.Messages)]
+}
+
+// rebuildTranscript resets the block list from agent.Messages (rewind moves
+// the boundary, so blocks beyond the cut must go).
+func (m *model) rebuildTranscript() {
+	m.blocks = nil
+	m.msgBlock = nil
+	m.seedTranscript(m.agent.Messages[1:], 1) // skip the system prompt
+}
+
+// rewindView renders the picker strip above the input.
+func (m *model) rewindView() string {
+	r := m.rew
+	const maxRows = 8
+	start := max(0, min(r.sel-maxRows/2, len(r.entries)-maxRows))
+	end := min(start+maxRows, len(r.entries))
+	var b strings.Builder
+	b.WriteString(dimStyle.Render("⏪ rewind — enter: rewind here · f: fork from here · esc: cancel"))
+	for row := start; row < end; row++ {
+		e := r.entries[len(r.entries)-1-row]
+		b.WriteString("\n")
+		line := "❯ " + e.text
+		if row == r.sel {
+			b.WriteString(youStyle.Render(line))
+		} else if e.future {
+			b.WriteString(dimStyle.Render(line + " (rewound)"))
+		} else {
+			b.WriteString("  " + line)
+		}
+	}
+	fmt.Fprintf(&b, "\n%s", dimStyle.Render(fmt.Sprintf("  (%d/%d) ↑ older · ↓ newer", r.sel+1, len(r.entries))))
+	return b.String()
+}
+
+// discardFuture drops the redo stack: any new activity while rewound makes
+// the clipped tail unreachable (branch-point semantics).
+func (m *model) discardFuture() { m.future = nil }

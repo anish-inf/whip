@@ -70,6 +70,17 @@ func (a *Agent) Steer(text string) {
 	a.mu.Unlock()
 }
 
+// AppendUser adds a non-authored user message to the conversation outside a
+// turn — the `!` shell escape shares its output with the model this way. It
+// must only be called while no turn is running (the TUI routes mid-turn
+// output through Steer instead); the mutex exists so a raced caller trips
+// -race on the same word rather than silently tearing the slice.
+func (a *Agent) AppendUser(content string) {
+	a.mu.Lock()
+	a.Messages = append(a.Messages, llm.Message{Role: "user", Content: content})
+	a.mu.Unlock()
+}
+
 func (a *Agent) drainPending() []string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -413,22 +424,58 @@ func buildSummaryPrompt(msgs []llm.Message) string {
 	b.WriteString("Do not include verbatim tool output. End with a single line: ")
 	b.WriteString("\"Open task: <what the assistant was doing last, or none>\".\n\n")
 	b.WriteString("---\n\n")
+	writeTranscript(&b, msgs)
+	b.WriteString("\n---\n\nWrite the summary now.")
+	return b.String()
+}
+
+// writeTranscript renders messages as a role-tagged transcript for a
+// meta-prompt (compaction summary, goal formulation). Tool results are
+// truncated so a giant file read doesn't blow up the request.
+func writeTranscript(b *strings.Builder, msgs []llm.Message) {
 	for _, m := range msgs {
 		switch m.Role {
 		case "user":
-			fmt.Fprintf(&b, "user: %s\n", truncateField(m.Content, 2000))
+			fmt.Fprintf(b, "user: %s\n", truncateField(m.Content, 2000))
 		case "assistant":
 			if c := strings.TrimSpace(m.Content); c != "" {
-				fmt.Fprintf(&b, "assistant: %s\n", truncateField(c, 2000))
+				fmt.Fprintf(b, "assistant: %s\n", truncateField(c, 2000))
 			}
 			for _, tc := range m.ToolCalls {
-				fmt.Fprintf(&b, "assistant called %s(%s)\n", tc.Function.Name, truncateField(tc.Function.Arguments, 500))
+				fmt.Fprintf(b, "assistant called %s(%s)\n", tc.Function.Name, truncateField(tc.Function.Arguments, 500))
 			}
 		case "tool":
-			fmt.Fprintf(&b, "tool result: %s\n", truncateField(m.Content, 500))
+			fmt.Fprintf(b, "tool result: %s\n", truncateField(m.Content, 500))
 		}
 	}
-	b.WriteString("\n---\n\nWrite the summary now.")
+}
+
+// GoalFromContextMessages returns the last two conversation messages (the
+// window /goal-from-context distills), skipping the system prompt. Fewer
+// than two messages means there isn't enough context to formulate a goal.
+func GoalFromContextMessages(msgs []llm.Message) ([]llm.Message, error) {
+	// msgs[0] is the system prompt; goal-continuation messages count too —
+	// the last two rows are the freshest statement of what the user wants.
+	if len(msgs) == 0 {
+		return nil, errors.New("not enough context to formulate a goal — chat a bit first")
+	}
+	conv := msgs[1:]
+	if len(conv) < 2 {
+		return nil, errors.New("not enough context to formulate a goal — chat a bit first")
+	}
+	return conv[len(conv)-2:], nil
+}
+
+// BuildGoalFromContextPrompt asks the model to distill the given tail
+// messages into one concrete, verifiable goal statement suitable for /goal.
+// The reply must be the bare goal text — the TUI sets it verbatim.
+func BuildGoalFromContextPrompt(tail []llm.Message) string {
+	var b strings.Builder
+	b.WriteString("Distill the end of this conversation into a single concrete goal the assistant should keep working on until it is verifiably done. ")
+	b.WriteString("Reply with ONLY the goal statement: one or two sentences, specific enough that completion can be checked with tools (builds pass, tests pass, behavior confirmed). ")
+	b.WriteString("No preamble, no quotes, no explanation.\n\n---\n\n")
+	writeTranscript(&b, tail)
+	b.WriteString("\n---\n\nWrite the goal now.")
 	return b.String()
 }
 

@@ -59,11 +59,11 @@ func TestHelpersAndEdgeCases(t *testing.T) {
 	if out := truncate(long); !strings.Contains(out, "truncated 10 bytes") {
 		t.Fatalf("truncate: %q", out[len(out)-40:])
 	}
-	if out := truncateTail(long); !strings.HasPrefix(out, "[... first 10 bytes truncated]") {
+	if out := TruncateTail(long); !strings.HasPrefix(out, "[... first 10 bytes truncated]") {
 		t.Fatalf("truncateTail: %q", out[:40])
 	}
 	// short strings pass through untouched
-	if truncate("ok") != "ok" || truncateTail("ok") != "ok" {
+	if truncate("ok") != "ok" || TruncateTail("ok") != "ok" {
 		t.Fatal("short strings must not be modified")
 	}
 
