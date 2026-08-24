@@ -39,10 +39,10 @@ func TestTabCompletesSkillName(t *testing.T) {
 
 // Tab cycles through candidates with preview: each press inserts the next
 // candidate, wrapping at both ends. ("/e" matches /effort only, so use /m:
-// /model, /mouse.)
+// /mcp, /model, /mouse.)
 func TestTabCyclesWithPreview(t *testing.T) {
 	m := modelCmdModel()
-	m = typeStr(t, m, "/m")
+	m = typeStr(t, m, "/mo") // /model, /mouse — two candidates, deterministic order
 	m = pressKey(m, tea.KeyTab)
 	first := m.input.Value()
 	if first != "/model" && first != "/mouse" {
@@ -67,7 +67,7 @@ func TestTabCyclesWithPreview(t *testing.T) {
 // prefix the cycle started from (readline-style; it does not un-complete).
 func TestEscRevertsTabCycle(t *testing.T) {
 	m := modelCmdModel()
-	m = typeStr(t, m, "/m")
+	m = typeStr(t, m, "/mo")
 	m = pressKey(m, tea.KeyTab) // previews /model
 	m = pressKey(m, tea.KeyTab) // previews /mouse
 	m = pressKey(m, tea.KeyEsc)
@@ -83,7 +83,7 @@ func TestEscRevertsTabCycle(t *testing.T) {
 // enter on a non-execNow candidate commits the preview with a trailing space.
 func TestEnterCommitsTabCycle(t *testing.T) {
 	m := modelCmdModel()
-	m = typeStr(t, m, "/m") // candidates in order: /model, /mouse
+	m = typeStr(t, m, "/mo") // candidates in order: /model, /mouse
 	m = pressKey(m, tea.KeyTab)
 	if m.input.Value() != "/model" {
 		t.Fatalf("tab should preview /model first, got %q", m.input.Value())
