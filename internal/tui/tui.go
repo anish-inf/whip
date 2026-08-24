@@ -2310,6 +2310,11 @@ func (m *model) submitTurn(text string, authored bool) (tea.Model, tea.Cmd) {
 		}
 	}
 	m.discardFuture() // new activity while rewound kills the redo stack
+	// settled subagents already reported into the transcript; clear them off
+	// the dock strip so a new turn starts with only what's still running
+	if m.agent != nil {
+		m.agent.Tasks().ClearSettled()
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancel = cancel
 	p := m.prog

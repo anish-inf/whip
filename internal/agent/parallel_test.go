@@ -211,6 +211,63 @@ func TestBackgroundTaskCancel(t *testing.T) {
 }
 
 // Per-path keys canonicalize so ./x.go and x.go share one lock.
+// Same-burst tasks share a StartedAt; List must order them deterministically
+// (by the monotonic id) instead of reshuffling on map iteration each redraw.
+func TestTaskListStableOrder(t *testing.T) {
+	r := newTaskRegistry()
+	now := time.Now()
+	// insert out of id order with identical timestamps to stress the tiebreak
+	for _, id := range []string{"task-3", "task-1", "task-4", "task-2"} {
+		t := BackgroundTask{ID: id, Status: TaskRunning, StartedAt: now}
+		r.tasks[id] = &t
+	}
+	first := r.List()
+	var ids []string
+	for _, tk := range first {
+		ids = append(ids, tk.ID)
+	}
+	want := []string{"task-1", "task-2", "task-3", "task-4"}
+	for i := range want {
+		if ids[i] != want[i] {
+			t.Fatalf("stable order: got %v want %v", ids, want)
+		}
+	}
+	// repeated calls never reshuffle
+	for i := 0; i < 20; i++ {
+		got := r.List()
+		for j := range want {
+			if got[j].ID != want[j] {
+				t.Fatalf("call %d reshuffled: %v", i, got)
+			}
+		}
+	}
+}
+
+// ClearSettled drops done/error/cancelled tasks and keeps the running ones.
+func TestClearSettledKeepsRunning(t *testing.T) {
+	r := newTaskRegistry()
+	now := time.Now()
+	add := func(id string, st TaskStatus) {
+		tk := BackgroundTask{ID: id, Status: st, StartedAt: now}
+		r.tasks[id] = &tk
+	}
+	add("task-1", TaskDone)
+	add("task-2", TaskError)
+	add("task-3", TaskRunning)
+	add("task-4", TaskCancelled)
+
+	if n := r.ClearSettled(); n != 3 {
+		t.Fatalf("cleared %d, want 3", n)
+	}
+	got := r.List()
+	if len(got) != 1 || got[0].ID != "task-3" {
+		t.Fatalf("only the running task should remain: %+v", got)
+	}
+	if _, ok := r.Get("task-1"); ok {
+		t.Fatal("settled task should be gone")
+	}
+}
+
 func TestCanonicalPathKey(t *testing.T) {
 	a := canonicalPathKey("foo/../bar/baz.go")
 	b := canonicalPathKey("bar/baz.go")
