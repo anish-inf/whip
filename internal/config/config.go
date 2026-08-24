@@ -84,13 +84,25 @@ func (m Model) ContextWindow() int {
 	return m.MaxTokens
 }
 
+// DefaultCompactModel is the built-in compaction-model default: the
+// deepseek-v4-flash route wired into the default inference.net config. An
+// empty compactModel resolves to this at apply time, falling back to the
+// conversation's model when it's not in the user's config.
+const DefaultCompactModel = "deepseek-v4-flash-0731"
+
+// DefaultCompactPct is the built-in compaction threshold: compact once the
+// estimated context use crosses this percent of the model's context window.
+// 50% keeps compaction deterministic instead of letting the context bloat.
+const DefaultCompactPct = 50
+
 // Config is the root of ~/.loopy/config.json (JSONC: comments allowed).
 type Config struct {
 	DefaultModel    string              `json:"defaultModel"`
 	DefaultProvider string              `json:"defaultProvider,omitempty"` // override the model's first provider
 	DefaultEffort   string              `json:"defaultEffort,omitempty"`   // reasoning effort for new sessions: "", "low", "medium", "high"
-	CompactModel    string              `json:"compactModel,omitempty"`    // model for compaction summaries; "" = the conversation's model
-	CompactProvider string              `json:"compactProvider,omitempty"` // provider for the compaction model; "" = the conversation's provider
+	CompactModel    string              `json:"compactModel,omitempty"`    // model for compaction summaries; "" = the built-in default
+	CompactProvider string              `json:"compactProvider,omitempty"` // provider for the compaction model; "" = the model's default routing
+	CompactPct      int                 `json:"compactPct,omitempty"`      // compact at this % of the context window; 0 = DefaultCompactPct
 	Theme           string              `json:"theme,omitempty"`           // "light", "dark", or "" (auto-detect at startup)
 	Mouse           *bool               `json:"mouse,omitempty"`           // false disables capture so native terminal selection works
 	GoalMaxRounds   int                 `json:"goalMaxRounds,omitempty"`   // global goal-loop round cap; 0 = DefaultGoalMaxRounds; projects.json may override per folder
@@ -298,6 +310,7 @@ func keys[V any](m map[string]V) string {
 func Default() *Config {
 	return &Config{
 		DefaultModel: "kimi-k3-fast",
+		CompactModel: DefaultCompactModel,
 		Providers: map[string]Provider{
 			"inference": {
 				Name:      "Inference.net",

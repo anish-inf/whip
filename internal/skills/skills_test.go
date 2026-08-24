@@ -37,16 +37,17 @@ func TestScanAndPromptBlock(t *testing.T) {
 	}
 
 	block := PromptBlock(sk)
-	if !strings.Contains(block, "<available_skills>") || !strings.Contains(block, "go-style: Go style rules") {
+	if !strings.Contains(block, "<available_skills>") || !strings.Contains(block, "<name>go-style</name>") || !strings.Contains(block, "<description>Go style rules</description>") {
 		t.Fatalf("prompt block: %q", block)
 	}
 	if PromptBlock(nil) != "" {
 		t.Fatal("empty scan must produce no block")
 	}
 
-	// long descriptions get truncated
+	// descriptions up to the spec's 1024 pass through intact (no truncation —
+	// the spec limit is a validity ceiling, not a prompt budget)
 	long := Skill{Name: "x", Description: strings.Repeat("d", 400), Path: "p"}
-	if b := PromptBlock([]Skill{long}); !strings.Contains(b, "…") || strings.Contains(b, strings.Repeat("d", 301)) {
-		t.Fatalf("description not truncated: %d chars", len(b))
+	if b := PromptBlock([]Skill{long}); !strings.Contains(b, strings.Repeat("d", 400)) {
+		t.Fatalf("spec-legal description must not be truncated")
 	}
 }

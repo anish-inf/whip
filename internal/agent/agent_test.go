@@ -408,7 +408,7 @@ func TestEstimateTokens(t *testing.T) {
 	}
 }
 
-func TestProactiveCompactAtNinetyPercent(t *testing.T) {
+func TestProactiveCompactAtFiftyPercent(t *testing.T) {
 	// the first stream request should already carry the compacted history —
 	// no context_length_exceeded round-trip needed
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -430,23 +430,54 @@ func TestProactiveCompactAtNinetyPercent(t *testing.T) {
 	defer srv.Close()
 
 	ag := New(llm.New(srv.URL, "k"), "m", 100, "sys")
-	ag.ContextLimit = 1000 // 90% = 900 estimated tokens
+	ag.ContextLimit = 1000 // default 50% = 500 estimated tokens
 	// 8 user messages × 120 chars ≈ 272 estimated tokens: under the threshold
 	for i := 0; i < 8; i++ {
 		ag.Messages = append(ag.Messages, llm.Message{Role: "user", Content: strings.Repeat("x", 120)})
 	}
 	var compacted bool
-	final, err := ag.Turn(context.Background(), strings.Repeat("z", 2600), Events{
+	final, err := ag.Turn(context.Background(), strings.Repeat("z", 900), Events{
 		OnCompact: func(took, kept int) { compacted = true },
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !compacted {
-		t.Fatal("expected proactive compaction above 90% of the context limit")
+		t.Fatal("expected proactive compaction above 50% of the context limit")
 	}
 	if final != "ok" {
 		t.Fatalf("first request should have used compacted history, got %q", final)
+	}
+}
+
+func TestCompactThresholdExplicitOverride(t *testing.T) {
+	srv := textServer(t, func(n int, req llm.Request) string { return "done" })
+	defer srv.Close()
+
+	// ~74% of the limit: over the 50% default, under an explicit 80% — no
+	// compaction, and the estimate stays deterministic
+	ag := New(llm.New(srv.URL, "m"), "m", 100, "sys")
+	ag.ContextLimit = 1000
+	ag.CompactThreshold = 0.8
+	for i := 0; i < 8; i++ {
+		ag.Messages = append(ag.Messages, llm.Message{Role: "user", Content: strings.Repeat("x", 360)})
+	}
+	if _, err := ag.Turn(context.Background(), "hi", Events{}); err != nil {
+		t.Fatal(err)
+	}
+	if len(ag.Messages) != 11 { // system + 8 seeded + user + assistant: untouched
+		t.Fatalf("history should not compact below the explicit threshold, got %d msgs", len(ag.Messages))
+	}
+
+	// CompactThreshold wins over the default: same history at the default 50%
+	// would have compacted
+	ag2 := New(llm.New(srv.URL, "m"), "m", 100, "sys")
+	ag2.ContextLimit = 1000
+	for i := 0; i < 8; i++ {
+		ag2.Messages = append(ag2.Messages, llm.Message{Role: "user", Content: strings.Repeat("x", 360)})
+	}
+	if err := ag2.maybeCompact(context.Background(), Events{}); err == nil {
+		t.Fatal("the same history should compact at the default 50% threshold")
 	}
 }
 
@@ -454,7 +485,7 @@ func TestNoProactiveCompactBelowThresholdOrWithoutLimit(t *testing.T) {
 	srv := textServer(t, func(n int, req llm.Request) string { return "done" })
 	defer srv.Close()
 
-	// below threshold: estimate well under 90% of the limit
+	// below threshold: estimate well under 50% of the limit
 	ag := New(llm.New(srv.URL, "k"), "m", 100, "sys")
 	ag.ContextLimit = 100000
 	if _, err := ag.Turn(context.Background(), "hi", Events{}); err != nil {

@@ -7,6 +7,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/context-labs/loopy/internal/config"
 	"github.com/context-labs/loopy/internal/mcp"
 )
 
@@ -67,8 +68,8 @@ type ppanel struct {
 	prepare string // panelGoal: text submitted when the editor closes
 
 	cands []string // panelCompact: model names from config
-	list  []string // panelCompact: "current" + cands; panelTheme: {"auto","light","dark"}
-	midx  int      // panelCompact: selection, 0 = current model; panelTheme: selection
+	list  []string // panelCompact: "default (…)" + cands; panelTheme: {"auto","light","dark"}
+	midx  int      // panelCompact: selection, 0 = the built-in default; panelTheme: selection
 
 	err string // inline error from a failed apply (bad compact model, …)
 }
@@ -208,7 +209,7 @@ func (m *model) paletteItems() []paletteItem {
 		{title: "Compaction model", category: "Session",
 			dynDesc: func(m *model) string {
 				if m.compactModel == "" {
-					return "summaries use the current model"
+					return "default (" + config.DefaultCompactModel + ")"
 				}
 				return m.compactModel
 			},
@@ -223,7 +224,7 @@ func (m *model) paletteItems() []paletteItem {
 					kind:  panelCompact,
 					title: "Compaction model",
 					cands: names,
-					list:  append([]string{"current"}, names...),
+					list:  append([]string{"default (" + config.DefaultCompactModel + ")"}, names...),
 				}
 				for i, name := range pp.list {
 					if name == m.compactModel {
@@ -233,6 +234,13 @@ func (m *model) paletteItems() []paletteItem {
 				}
 				return pp
 			}},
+		{title: "Compaction level", category: "Session",
+			dynDesc: func(m *model) string {
+				return "auto-compact at this share of the context window"
+			},
+			dynHint:  func(m *model) string { return "←/→" },
+			stepBack: func(m *model) { m.setCompactPct(m.compactPct() - 10) },
+			stepFwd:  func(m *model) { m.setCompactPct(m.compactPct() + 10) }},
 		{title: "Goal", category: "Session",
 			dynDesc: func(m *model) string {
 				if m.goal == "" {
@@ -610,6 +618,7 @@ func (m *model) previewModel(it modelItem) {
 	ag.Effort = m.agent.Effort
 	ag.Messages = append(ag.Messages, m.agent.Messages[1:]...) // carry history
 	ag.CompactClient, ag.CompactModel = m.agent.CompactClient, m.agent.CompactModel
+	ag.CompactThreshold = m.agent.CompactThreshold
 	m.agent, m.modelName, m.provName = ag, mn, pn
 	if !contains(m.effortsFor(), ag.Effort) {
 		m.setEffort("") // the previewed model doesn't support the current level
@@ -727,6 +736,8 @@ func paletteState(m *model, it paletteItem) string {
 		if m.goal != "" {
 			return dimStyle.Render("  [on]")
 		}
+	case "Compaction level":
+		return dimStyle.Render(fmt.Sprintf("  [%d%%]", m.compactPct()))
 	}
 	return ""
 }
@@ -772,7 +783,7 @@ func (m *model) panelView(pp *ppanel) string {
 	case panelCompact:
 		for i, name := range pp.list {
 			cur := ""
-			if i == 0 && m.compactModel == "" || name == m.compactModel && name != "current" {
+			if (i == 0 && m.compactModel == "") || (i > 0 && name == m.compactModel) {
 				cur = dimStyle.Render("  (current)")
 			}
 			if i == pp.midx {

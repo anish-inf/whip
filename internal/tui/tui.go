@@ -136,7 +136,7 @@ type model struct {
 	goalRounds int    // continuation turns spent on the current goal
 
 	mouseOn      bool   // runtime mouse-capture state (toggle with /mouse)
-	compactModel string // config model name for compaction summaries; "" = current model
+	compactModel string // config model name for compaction summaries; "" = the built-in default
 	compactProv  string
 	effortX      int                       // screen column where the clickable ⚡ effort control starts
 	catalogs     map[string]config.Catalog // provider model lists (capabilities)
@@ -228,6 +228,7 @@ func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string) (s
 		compactModel: cfg.CompactModel, compactProv: cfg.CompactProvider,
 	}
 	m.applyCompactModel()
+	m.agent.CompactThreshold = compactThresholdFor(cfg)
 	m.wireTasks() // redraw the UI when background subagents start/settle
 
 	// MCP: merge loopy's own config with imported claude (.mcp.json) and codex
@@ -479,6 +480,7 @@ func (m *model) resume(id string) error {
 		m.agent.ContextLimit = m.contextLimitFor(m.provName, m.agent.Model)
 	}
 	m.applyCompactModel()
+	m.agent.CompactThreshold = compactThresholdFor(m.cfg)
 	m.wireTasks()
 	m.agent.Messages = append(m.agent.Messages, msgs...)
 	if contains(m.effortsFor(), effort) {
@@ -1784,24 +1786,39 @@ func (m *model) contextLimitFor(provName, apiID string) int {
 	return 0
 }
 
+// compactThresholdFor converts the config's compactPct preference into the
+// agent's threshold fraction. Out-of-range values clamp to [10, 90]; 0 (unset)
+// means the built-in default.
+func compactThresholdFor(cfg *config.Config) float64 {
+	pct := cfg.CompactPct
+	if pct == 0 {
+		pct = config.DefaultCompactPct
+	}
+	return float64(min(max(pct, 10), 90)) / 100
+}
+
 // applyCompactModel points the agent's compaction summary call at the
-// configured compaction model/provider (nil client = compact with the
-// conversation's own model). Best-effort: a bad or unreachable entry just
-// clears the override so compaction falls back to the current model.
+// configured compaction model/provider. An empty m.compactModel means the
+// built-in default (config.DefaultCompactModel); when it isn't in the user's
+// config — or a picked entry is bad or unreachable — the override clears and
+// compaction falls back to the conversation's own model.
 func (m *model) applyCompactModel() {
 	m.agent.CompactClient, m.agent.CompactModel = nil, ""
-	if m.compactModel == "" {
-		return
+	cm := m.compactModel
+	if cm == "" {
+		cm = config.DefaultCompactModel
 	}
-	prov, _, apiID, err := m.cfg.Resolve(m.compactModel, m.compactProv)
+	prov, _, apiID, err := m.cfg.Resolve(cm, m.compactProv)
 	if err != nil {
-		m.append(errStyle.Render("compaction model: " + err.Error() + " — using current model"))
+		if m.compactModel != "" { // a picked model failing is worth a note; a missing default isn't
+			m.append(errStyle.Render("compaction model: " + err.Error() + " — using current model"))
+		}
 		return
 	}
 	if key := prov.Key(); key != "" {
 		m.agent.CompactClient = llm.New(prov.BaseURL, key)
 		m.agent.CompactModel = apiID
-	} else {
+	} else if m.compactModel != "" {
 		m.append(errStyle.Render("compaction model: no API key — using current model"))
 	}
 }
@@ -1877,6 +1894,7 @@ func (m *model) switchModel(name, prov string) {
 	ag.Effort = m.agent.Effort
 	ag.Messages = append(ag.Messages, m.agent.Messages[1:]...) // carry history
 	ag.CompactClient, ag.CompactModel = m.agent.CompactClient, m.agent.CompactModel
+	ag.CompactThreshold = m.agent.CompactThreshold
 	m.agent, m.modelName, m.provName = ag, mn, pn
 	m.wireTasks()
 	if !contains(m.effortsFor(), ag.Effort) {
@@ -2512,7 +2530,7 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 		m.append(m.doctorReport())
 	case "/help":
 		m.append(dimStyle.Render(
-			"/model <name> [provider] — switch model\n/context-doctor — audit what a fresh session injects (skills, MCP, tool schemas) and its token cost\n/mcp [name] [reconnect|enable|disable] — MCP servers: status, reconnect, toggle\n/compact [model] [provider]|off — compact now at 90% context, or pick the compaction model\n/mouse — toggle mouse capture (on = wheel scroll + clicks, drag to copy)\n/theme [light|dark|auto] — color scheme (bare toggles)\n/tasks [id] — background subagents: focus the dock, or open one task's live view (ctrl+t toggles dock focus)\n/resume [id] — resume a previous session\n/fork [name] — copy this conversation into a new session (pick a point in the rewind picker with f)\n/rename [title] — retitle this session\n/goal <text> — keep working until the goal is met (resume | clear | rounds <n>|default [--global])\n/goal-from-context — formulate a goal from the last two messages and work until it's met\n/clear — reset conversation\n/cd [dir] — change working directory (bare prints it)\n/pwd — print working directory\n!<cmd> — run a shell command locally; output lands in the transcript and the conversation\n/quit — exit\ntab — complete · ctrl+t — focus the background-tasks dock (↑/↓ select, enter opens, esc backs out) · ctrl+o — toggle thinking tokens · ctrl+e — expand the last tool result · ctrl+j / shift+enter — newline · ctrl+v — paste image · esc — interrupt the agent · esc esc (idle) — rewind the conversation (↑/↓ browse, enter rewinds, f forks) · while busy with queued messages: ↑/↓ select, del removes · PgUp/PgDn — scroll · wheel — scroll · drag — select/copy text · ctrl+c ctrl+c — quit"))
+			"/model <name> [provider] — switch model\n/context-doctor — audit what a fresh session injects (skills, MCP, tool schemas) and its token cost\n/mcp [name] [reconnect|enable|disable] — MCP servers: status, reconnect, toggle\n/compact [model] [provider]|off — compact now, or pick the compaction model (off restores the default); compaction level: ctrl+p › Compaction level\n/mouse — toggle mouse capture (on = wheel scroll + clicks, drag to copy)\n/theme [light|dark|auto] — color scheme (bare toggles)\n/tasks [id] — background subagents: focus the dock, or open one task's live view (ctrl+t toggles dock focus)\n/resume [id] — resume a previous session\n/fork [name] — copy this conversation into a new session (pick a point in the rewind picker with f)\n/rename [title] — retitle this session\n/goal <text> — keep working until the goal is met (resume | clear | rounds <n>|default [--global])\n/goal-from-context — formulate a goal from the last two messages and work until it's met\n/clear — reset conversation\n/cd [dir] — change working directory (bare prints it)\n/pwd — print working directory\n!<cmd> — run a shell command locally; output lands in the transcript and the conversation\n/quit — exit\ntab — complete · ctrl+t — focus the background-tasks dock (↑/↓ select, enter opens, esc backs out) · ctrl+o — toggle thinking tokens · ctrl+e — expand the last tool result · ctrl+j / shift+enter — newline · ctrl+v — paste image · esc — interrupt the agent · esc esc (idle) — rewind the conversation (↑/↓ browse, enter rewinds, f forks) · while busy with queued messages: ↑/↓ select, del removes · PgUp/PgDn — scroll · wheel — scroll · drag — select/copy text · ctrl+c ctrl+c — quit"))
 	case "/model":
 		if len(fields) < 2 {
 			m.openModelPicker()
@@ -2529,8 +2547,8 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// compactCommand handles "/compact <args…>": off clears the compaction model,
-// "<model> [provider]" selects it (persisted as the new default).
+// compactCommand handles "/compact <args…>": off restores the built-in
+// default compaction model, "<model> [provider]" selects one (persisted).
 func (m *model) compactCommand(args []string) {
 	if args[0] == "off" {
 		m.compactModel, m.compactProv = "", ""
@@ -2539,7 +2557,7 @@ func (m *model) compactCommand(args []string) {
 		if err := m.cfg.Save(); err != nil {
 			m.append(errStyle.Render("config save failed: " + err.Error()))
 		}
-		m.append(dimStyle.Render("◎ compaction model: current model"))
+		m.append(dimStyle.Render("◎ compaction model: default (" + config.DefaultCompactModel + ")"))
 		return
 	}
 	if _, ok := m.cfg.Models[args[0]]; !ok {
@@ -2567,6 +2585,29 @@ func (m *model) compactCommand(args []string) {
 		}
 	}
 	m.append(dimStyle.Render("◎ compaction model: " + m.compactModel + " @ " + prov))
+}
+
+// compactPct returns the live threshold percent (the default when unset).
+// cfg.CompactPct is the authoritative value; the agent's float is derived.
+func (m *model) compactPct() int {
+	pct := m.cfg.CompactPct
+	if pct == 0 {
+		pct = config.DefaultCompactPct
+	}
+	return min(max(pct, 10), 90)
+}
+
+// setCompactPct applies a compaction-threshold percent (clamped 10–90): the
+// agent compacts proactively once the estimated context use crosses it.
+// Persisted as the new default. Palette-driven, so no transcript note — the
+// row's [NN%] badge is the feedback (same as the effort/theme steppers).
+func (m *model) setCompactPct(pct int) {
+	pct = min(max(pct, 10), 90)
+	m.agent.CompactThreshold = float64(pct) / 100
+	m.cfg.CompactPct = pct
+	if err := m.cfg.Save(); err != nil {
+		m.append(errStyle.Render("config save failed: " + err.Error()))
+	}
 }
 
 const menuRows = 8

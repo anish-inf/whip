@@ -20,7 +20,7 @@ func TestStartupReportSkillsAndWarnings(t *testing.T) {
 		os.WriteFile(filepath.Join(d, "SKILL.md"), []byte("---\nname: "+name+"\ndescription: "+desc+"\n---\n"), 0o644)
 	}
 	mkSkill("good", "fine")
-	mkSkill("wordy", strings.Repeat("x", 400))
+	mkSkill("wordy", strings.Repeat("x", 1100)) // over the spec's 1024
 	// A SKILL.md with no frontmatter = parse problem.
 	bad := filepath.Join(dir, ".agents", "skills", "broken")
 	os.MkdirAll(bad, 0o755)
@@ -39,7 +39,7 @@ func TestStartupReportSkillsAndWarnings(t *testing.T) {
 	if !strings.Contains(out, "skills: 2 loaded") {
 		t.Errorf("missing loaded count:\n%s", out)
 	}
-	if !strings.Contains(out, "wordy") || !strings.Contains(out, "truncated") {
+	if !strings.Contains(out, "wordy") || !strings.Contains(out, "exceeds 1024") {
 		t.Errorf("missing truncation warning:\n%s", out)
 	}
 	if !strings.Contains(out, "broken") {

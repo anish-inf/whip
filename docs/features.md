@@ -40,7 +40,10 @@ When the conversation fills the context window, old turns fold into an
 LLM-generated summary. Two triggers:
 
 - **Proactive**: `maybeCompact` runs before each request once the estimated
-  token count crosses 90% of the advertised context window.
+  token count crosses the compaction threshold — a percent of the advertised
+  context window, default 50% (`compactPct` in config, clamped 10–90;
+  `Agent.CompactThreshold` holds the fraction). Slide it in the palette's
+  "Compaction level" row (←/→ steps ±10%).
 - **Reactive**: if the provider still rejects a request with a context-limit
   error (`context_length_exceeded`, `prompt_too_long`, HTTP 413), `Turn`
   compacts once and retries. A `compacted` guard prevents retry loops.
@@ -48,19 +51,30 @@ LLM-generated summary. Two triggers:
 `compact()` keeps the system prompt and a recent tail, and is **orphan-safe**:
 a kept tail that begins with a `tool`-role message walks back to its owning
 assistant message so no tool result references an erased call ID. The summary
-runs as a non-streaming `Complete` on the conversation's model, or on a
-dedicated compaction model if configured (`compactModel` / `compactProvider`).
+runs as a non-streaming `Complete` on the compaction model — the built-in
+default `deepseek-v4-flash-0731` (`config.DefaultCompactModel`, resolved from
+the user's config when `compactModel` is empty), a configured
+`compactModel` / `compactProvider`, or the conversation's own model when the
+default isn't in the config.
 
 Token bookkeeping: `llm.Usage` (prompt/completion/cached) is read off the
 terminal stream chunk (`stream_options: include_usage`) and folded into session
 totals via `AddUsage`. Compaction and subagent calls count too.
 
 Commands: `/compact` (compact now), `/compact <model> [provider]` (pick the
-summarizer), `/compact off` (clear the override).
+summarizer), `/compact off` (restore the built-in default). The palette's
+"Compaction model" panel lists every configured model behind a
+"default (…)" row that restores the default; "Compaction level" steps the
+threshold ←/→.
 
 Tests: `agent_test.go` — `TestTurnAutoCompactsOnContextLimit`,
 `TestCompactDoesNotLoopOnRepeatedContextLimit`, `TestCompactKeepsToolCallPair`,
-`TestProactiveCompactAtNinetyPercent`, `TestUsageAccumulates`.
+`TestProactiveCompactAtFiftyPercent`, `TestCompactThresholdExplicitOverride`,
+`TestUsageAccumulates`; `compact_cmd_test.go` —
+`TestCompactModelEmptyResolvesDefault`, `TestCompactModelDefaultFallsBack`,
+`TestCompactThresholdFor`, `TestSetCompactPct`; `palette_test.go` —
+`TestPaletteCompactPanelAppliesInPlace`,
+`TestPaletteCompactPanelDefaultRowRestores`, `TestPaletteCompactionLevelSteps`.
 
 ### Background subagents
 
@@ -126,7 +140,7 @@ errors for the compaction retry, `Stream` returns the message + usage, and
 - **Markdown.** Assistant messages render through glamour; streamed in-flight
   text stays plain and renders on flush. `markdown.go`.
 - **Command palette** (ctrl+p) with sub-panels for model/effort/goal/compaction
-  — `palette.go`.
+  and ←/→ steppers for the compaction level — `palette.go`.
 - **Mouse**: `/mouse` toggles capture; with capture off the terminal's native
   selection works, with it on shift-drag selects. `"mouse": false` in config
   disables capture at startup.
@@ -308,9 +322,17 @@ Tests: `killall_test.go` — `TestKillAllReapsChildren` (kills a live `sleep 60`
 
 `internal/skills/skills.go` — scans `.agents/skills/*/SKILL.md` (project) and
 `~/.loopy/skills/` (user) for a name+description frontmatter block, injected
-into the system prompt as an `<available_skills>` block. The model reads a
-SKILL.md with its own read tool when relevant. Skills re-index every turn, so
-new ones load without restarting.
+into the system prompt as an `<available_skills>` catalog in the Agent Skills
+spec format (`<skill><name>/<description>/<location>`, XML-escaped). The model
+reads a SKILL.md with its own read tool when relevant. Skills re-index every
+turn, so new ones load without restarting.
+
+**Spec compliance** (agentskills.io, matching pi's `core/skills.ts`): name
+validated (≤64 chars, lowercase a-z/0-9/hyphens, no leading/trailing/double
+hyphens), description ≤1024 chars (a *validity* ceiling, not a prompt budget),
+`disable-model-invocation: true` skills excluded from the catalog but still
+invocable via `$name`. Violations load with a `Warning` (surfaced in the
+startup report), never silently disappear. Tests: `skills/spec_test.go`.
 
 **`/context-doctor` (alias `/context-doctor`)** — fresh-session context audit: every
 automatic injection source with its estimated token cost (base system prompt,

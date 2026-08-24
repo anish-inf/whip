@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -14,9 +15,13 @@ type Skill struct {
 	Name        string
 	Description string
 	Path        string // path to the SKILL.md
-	// Warning is non-empty when the skill loaded but is degraded — e.g. the
-	// description exceeds maxDesc and is truncated in the system prompt.
-	// Surfaced in the startup report so a broken skill is never silent.
+	// DisableModelInvocation excludes the skill from the system-prompt
+	// catalog: it can only be invoked explicitly ($name). Per the Agent
+	// Skills spec frontmatter field disable-model-invocation.
+	DisableModelInvocation bool
+	// Warning is non-empty when the skill loaded but violates the Agent
+	// Skills spec (bad name, over-long description) — surfaced in the
+	// startup report so a broken skill is never silent.
 	Warning string
 }
 
@@ -77,8 +82,8 @@ func ScanDetailed(dirs ...string) ([]Skill, []ScanProblem) {
 			if s.Name == "" {
 				s.Name = e.Name()
 			}
-			if len(s.Description) > maxDesc {
-				s.Warning = fmt.Sprintf("description exceeds %d characters (%d) — truncated in the system prompt", maxDesc, len(s.Description))
+			if w := validate(s); w != "" {
+				s.Warning = w
 			}
 			out = append(out, s)
 		}
@@ -109,6 +114,8 @@ func parse(path string) (Skill, error) {
 			s.Name = unquote(v)
 		} else if v, ok := strings.CutPrefix(line, "description:"); ok {
 			s.Description = unquote(v)
+		} else if v, ok := strings.CutPrefix(line, "disable-model-invocation:"); ok {
+			s.DisableModelInvocation = strings.TrimSpace(v) == "true"
 		}
 	}
 	return s, sc.Err()
@@ -124,22 +131,75 @@ func unquote(v string) string {
 	return v
 }
 
-const maxDesc = 300 // keep the system prompt sane with wordy skills
+// Agent Skills spec limits (agentskills.io/specification — the cross-harness
+// SKILL.md standard pi/claude-code/codex enforce). These are validity
+// ceilings, not prompt-economy budgets: a skill is only "wrong" when it
+// breaks portability. Prompt economy is guarded at the block level (see
+// TestSkillBlockBudget).
+const (
+	specMaxName = 64
+	specMaxDesc = 1024
+)
 
-// PromptBlock renders skills for the system prompt ("" when none).
+var specNameRe = regexp.MustCompile(`^[a-z0-9-]+$`)
+
+// validate checks a loaded skill against the Agent Skills spec. Returns a
+// warning string ("" when spec-clean). Skills with warnings still load —
+// portability problems degrade, never disappear (pi does the same).
+func validate(s Skill) string {
+	var problems []string
+	if len(s.Name) > specMaxName {
+		problems = append(problems, fmt.Sprintf("name exceeds %d characters (%d)", specMaxName, len(s.Name)))
+	}
+	if !specNameRe.MatchString(s.Name) {
+		problems = append(problems, "name must be lowercase a-z, 0-9, hyphens only")
+	}
+	if strings.HasPrefix(s.Name, "-") || strings.HasSuffix(s.Name, "-") {
+		problems = append(problems, "name must not start or end with a hyphen")
+	}
+	if strings.Contains(s.Name, "--") {
+		problems = append(problems, "name must not contain consecutive hyphens")
+	}
+	if len(s.Description) > specMaxDesc {
+		problems = append(problems, fmt.Sprintf("description exceeds %d characters (%d)", specMaxDesc, len(s.Description)))
+	}
+	return strings.Join(problems, "; ")
+}
+
+// PromptBlock renders the skill catalog for the system prompt in the Agent
+// Skills spec format (agentskills.io/integrate-skills): <available_skills>
+// of <skill><name>/<description>/<location> entries, XML-escaped. Skills
+// with disable-model-invocation are excluded (explicit $name invocation
+// only). "" when none.
 func PromptBlock(sk []Skill) string {
-	if len(sk) == 0 {
+	var visible []Skill
+	for _, s := range sk {
+		if !s.DisableModelInvocation {
+			visible = append(visible, s)
+		}
+	}
+	if len(visible) == 0 {
 		return ""
 	}
 	var b strings.Builder
-	b.WriteString("\n\n<available_skills>\nThese skills hold task-specific instructions. When one is relevant, read its SKILL.md with the read tool and follow it.\n")
-	for _, s := range sk {
-		d := s.Description
-		if len(d) > maxDesc {
-			d = d[:maxDesc] + "…"
-		}
-		fmt.Fprintf(&b, "- %s: %s (%s)\n", s.Name, d, s.Path)
+	b.WriteString("\n\n<available_skills>\nThese skills hold task-specific instructions. When one is relevant, read its SKILL.md with the read tool and follow it. Relative paths in a skill resolve against the skill's directory (the parent of its SKILL.md).\n")
+	for _, s := range visible {
+		b.WriteString("  <skill>\n")
+		fmt.Fprintf(&b, "    <name>%s</name>\n", xmlEscape(s.Name))
+		fmt.Fprintf(&b, "    <description>%s</description>\n", xmlEscape(s.Description))
+		fmt.Fprintf(&b, "    <location>%s</location>\n", xmlEscape(s.Path))
+		b.WriteString("  </skill>\n")
 	}
 	b.WriteString("</available_skills>")
 	return b.String()
+}
+
+func xmlEscape(s string) string {
+	return strings.NewReplacer(
+		"&", "&amp;",
+		"<", "&lt;",
+		">", "&gt;",
+		`"`, "&quot;",
+		"'", "&apos;",
+	).Replace(s)
 }

@@ -43,6 +43,9 @@ type Agent struct {
 	// the conversation's own client and model.
 	CompactClient *llm.Client
 	CompactModel  string
+	// CompactThreshold is the fraction of ContextLimit at which Turn compacts
+	// proactively; 0 uses defaultCompactThreshold.
+	CompactThreshold float64
 
 	mu        sync.Mutex
 	pending   []string // steered user messages awaiting injection
@@ -168,7 +171,8 @@ func (a *Agent) AllTools() []tools.Tool {
 
 // Turn sends user input and loops until the model stops calling tools.
 // It returns the final assistant text. When the estimated conversation size
-// reaches 90% of the provider-advertised context limit, Turn compacts
+// crosses CompactThreshold (default 50%) of the provider-advertised context
+// limit, Turn compacts
 // proactively before the next request; if the provider still rejects the
 // request because the conversation exceeded its context window, Turn
 // auto-compacts (summarizing old turns) and retries once before surfacing
@@ -316,17 +320,25 @@ func (a *Agent) runTools(ctx context.Context, calls []llm.ToolCall, ev Events) [
 // and we never leave an orphaned tool_call whose result the summary dropped.
 const compactKeepBack = 6
 
-// compactThreshold is the fraction of the provider-advertised context window
-// at which Turn compacts proactively. 90% leaves headroom for the response
-// and for the estimate's inaccuracy on non-English content.
-const compactThreshold = 0.9
+// defaultCompactThreshold is the fraction of the provider-advertised context
+// window at which Turn compacts proactively when CompactThreshold is unset.
+// 50% keeps compaction deterministic instead of letting the context bloat.
+const defaultCompactThreshold = 0.5
+
+// threshold is the proactive-compaction fraction of ContextLimit.
+func (a *Agent) threshold() float64 {
+	if a.CompactThreshold > 0 {
+		return a.CompactThreshold
+	}
+	return defaultCompactThreshold
+}
 
 // maybeCompact folds old turns into a summary once the estimated token count
-// crosses compactThreshold of ContextLimit. It no-ops when the provider
+// crosses the threshold fraction of ContextLimit. It no-ops when the provider
 // didn't advertise a limit (ContextLimit == 0) — the reactive context-limit
 // retry in Turn still covers that case.
 func (a *Agent) maybeCompact(ctx context.Context, ev Events) error {
-	if a.ContextLimit == 0 || EstimateTokens(a.Messages) < int(compactThreshold*float64(a.ContextLimit)) {
+	if a.ContextLimit == 0 || EstimateTokens(a.Messages) < int(a.threshold()*float64(a.ContextLimit)) {
 		return nil
 	}
 	took := len(a.Messages)

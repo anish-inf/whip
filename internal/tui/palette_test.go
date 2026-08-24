@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/context-labs/loopy/internal/config"
 )
 
 func TestPaletteOpensAndClosesOnEsc(t *testing.T) {
@@ -239,12 +241,12 @@ func TestPaletteModelPanelPreviewsLive(t *testing.T) {
 	if pp == nil || pp.kind != panelModel {
 		t.Fatal("enter should push the model panel")
 	}
-	if len(pp.items) != 2 {
-		t.Fatalf("expected 2 routes, got %d", len(pp.items))
+	if len(pp.items) != 3 { // kimi + glm + the compaction default route
+		t.Fatalf("expected 3 routes, got %d", len(pp.items))
 	}
 	tm, _ = m.paletteKey(tea.KeyMsg{Type: tea.KeyDown})
 	m = tm.(*model)
-	if m.modelName != "glm-5.2-fast" {
+	if m.modelName != config.DefaultCompactModel { // routes sort alphabetically: deepseek is next after kimi
 		t.Fatalf("browsing should live-preview the switch, got %q", m.modelName)
 	}
 	if m.cfg.DefaultModel != "kimi-k3-fast" {
@@ -305,8 +307,8 @@ func TestPaletteCompactPanelAppliesInPlace(t *testing.T) {
 	if pp == nil || pp.kind != panelCompact {
 		t.Fatal("enter should push the compaction panel")
 	}
-	if pp.midx != 0 { // no override configured → "current" selected
-		t.Fatalf("should start on 'current', got %d", pp.midx)
+	if pp.midx != 0 { // no override configured → the default row selected
+		t.Fatalf("should start on the default row, got %d", pp.midx)
 	}
 	tm, _ = m.paletteKey(tea.KeyMsg{Type: tea.KeyDown})
 	m = tm.(*model)
@@ -317,5 +319,64 @@ func TestPaletteCompactPanelAppliesInPlace(t *testing.T) {
 	}
 	if m.palette.top() == nil {
 		t.Fatal("→ must keep the panel open")
+	}
+}
+
+// The panel's first row restores the built-in default (""), not "current
+// model": picking a model then selecting the default row resets the override.
+func TestPaletteCompactPanelDefaultRowRestores(t *testing.T) {
+	m := compactCmdModel()
+	m.compactCommand([]string{"glm-5.2-fast"}) // pick an override first
+	m.openPaletteOn("Compaction model")
+	pp := m.palette.top()
+	if pp == nil || pp.kind != panelCompact {
+		t.Fatal("openPaletteOn should land in the compaction panel")
+	}
+	if !strings.Contains(pp.list[0], "default (") {
+		t.Fatalf("first row should read default (…), got %q", pp.list[0])
+	}
+	for pp.midx != 0 { // navigate to the default row
+		tm, _ := m.paletteKey(tea.KeyMsg{Type: tea.KeyUp})
+		m = tm.(*model)
+	}
+	tm, _ := m.paletteKey(tea.KeyMsg{Type: tea.KeyEnter})
+	m = tm.(*model)
+	if m.compactModel != "" || m.agent.CompactModel != config.DefaultCompactModel {
+		t.Fatalf("the default row should restore the built-in default: %q / %q", m.compactModel, m.agent.CompactModel)
+	}
+	if m.palette.top() != nil {
+		t.Fatal("enter should pop the panel")
+	}
+}
+
+// The Compaction level row steps the threshold ±10% in place and shows it.
+func TestPaletteCompactionLevelSteps(t *testing.T) {
+	m := compactCmdModel()
+	m.agent.CompactThreshold = compactThresholdFor(m.cfg) // default 50%
+	m.openPalette()
+	var it *paletteItem
+	for i := range m.palette.items {
+		if m.palette.items[i].title == "Compaction level" {
+			it = &m.palette.items[i]
+			break
+		}
+	}
+	if it == nil {
+		t.Fatal("palette should have a Compaction level row")
+	}
+	if it.stepFwd == nil || it.stepBack == nil {
+		t.Fatal("Compaction level should be ←/→ steppable")
+	}
+	it.stepFwd(m)
+	if m.agent.CompactThreshold != 0.6 {
+		t.Fatalf("→ should step to 60%%, got %v", m.agent.CompactThreshold)
+	}
+	it.stepBack(m)
+	it.stepBack(m)
+	if m.agent.CompactThreshold != 0.4 {
+		t.Fatalf("← ← should step to 40%%, got %v", m.agent.CompactThreshold)
+	}
+	if state := paletteState(m, *it); !strings.Contains(state, "40%") {
+		t.Fatalf("the row badge should show the live level, got %q", state)
 	}
 }

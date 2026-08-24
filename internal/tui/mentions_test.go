@@ -94,7 +94,7 @@ func TestPrepareTurnReloadsSkillsEveryTurn(t *testing.T) {
 	m := &model{agent: agent.New(llm.New("http://unused", "k"), "m", 1, "overwritten"), sysPrompt: "BASE"}
 	out := m.prepareTurn("use $demo now")
 	sys := m.agent.Messages[0].Content
-	if !strings.HasPrefix(sys, "BASE") || !strings.Contains(sys, "demo: live demo skill") {
+	if !strings.HasPrefix(sys, "BASE") || !strings.Contains(sys, "<name>demo</name>") || !strings.Contains(sys, "<description>live demo skill</description>") {
 		t.Fatalf("system prompt: %q", sys)
 	}
 	if !strings.Contains(out, "invoked skill(s): demo") {
@@ -106,7 +106,7 @@ func TestPrepareTurnReloadsSkillsEveryTurn(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, ".agents/skills/fresh/SKILL.md"),
 		[]byte("---\nname: fresh\ndescription: added mid-session\n---\n"), 0o644)
 	m.prepareTurn("hello")
-	if !strings.Contains(m.agent.Messages[0].Content, "fresh: added mid-session") {
+	if !strings.Contains(m.agent.Messages[0].Content, "<name>fresh</name>") {
 		t.Fatalf("new skill not picked up: %q", m.agent.Messages[0].Content)
 	}
 }
