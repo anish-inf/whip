@@ -124,9 +124,11 @@ type model struct {
 	sessionID string
 	saved     int // messages already persisted (index into agent.Messages)
 
-	hist    []string // submitted inputs, for up/down recall
-	histIdx int      // len(hist) == not navigating
-	draft   string   // in-progress input saved while navigating history
+	hist    []string         // submitted inputs, for up/down recall
+	histIdx int              // len(hist) == not navigating
+	draft   string           // in-progress input saved while navigating history
+	lastUp  time.Time        // last ↑ keypress; repeat detection for history rollover
+	now     func() time.Time // test seam; defaults to time.Now
 
 	queue      []string // messages typed while busy, sent after the turn ends
 	queueSel   int      // selected queued message, -1 = none (not navigating)
@@ -225,7 +227,7 @@ func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string) (s
 	m := &model{
 		cfg: cfg, agent: ag, modelName: mn, provName: pn, sysPrompt: sysPrompt,
 		input: ti, spin: spinner.New(spinner.WithSpinner(spinner.Dot)), follow: true, saved: 1,
-		catalogs: config.LoadCatalogs(), mouseOn: mouseOn,
+		catalogs: config.LoadCatalogs(), mouseOn: mouseOn, now: time.Now,
 		compactModel: cfg.CompactModel, compactProv: cfg.CompactProvider,
 	}
 	m.applyCompactModel()
@@ -1598,12 +1600,22 @@ func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		// move within the textarea unless the cursor already sits on the
-		// first (soft-wrapped) row, where ↑ falls through to history recall
+		// first (soft-wrapped) row, where ↑ falls through to history recall.
+		// Holding ↑ auto-repeats at 30–80ms; a user who keeps holding past
+		// the top is trying to reach the start of THIS message, not to
+		// machine-gun through history — suppress the rollover while repeats
+		// keep arriving, and only recall after a deliberate pause.
 		if msg.Type == tea.KeyUp && !m.cursorOnFirstLine() {
+			m.lastUp = m.nowFn()
 			var cmd tea.Cmd
 			m.input, cmd = m.input.Update(msg)
 			return m, cmd
 		}
+		if msg.Type == tea.KeyUp && m.nowFn().Sub(m.lastUp) < 300*time.Millisecond {
+			m.lastUp = m.nowFn()
+			return m, nil
+		}
+		m.lastUp = m.nowFn()
 		if msg.Type == tea.KeyCtrlP { // command palette (opencode-style modal)
 			m.openPalette()
 			return m, nil
@@ -1740,6 +1752,14 @@ var shiftEnterRe = regexp.MustCompile(
 func isShiftEnterSeq(msg tea.KeyMsg) bool {
 	s := msg.String()
 	return strings.HasPrefix(s, "unknown csi sequence:") && shiftEnterRe.MatchString(s)
+}
+
+// nowFn returns the current time, honoring the test seam when set.
+func (m *model) nowFn() time.Time {
+	if m.now != nil {
+		return m.now()
+	}
+	return time.Now()
 }
 
 // histPrev/histNext recall submitted inputs with the arrow keys.

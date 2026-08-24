@@ -4,14 +4,16 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
 
 // newGrowModel builds a model with the real input and a known width, as Run
-// does after the first WindowSizeMsg.
+// does after the first WindowSizeMsg. now defaults to the real clock; tests
+// swap in a fake to simulate key-repeat timing.
 func newGrowModel() *model {
-	m := &model{input: newInput()}
+	m := &model{input: newInput(), now: time.Now}
 	m.width = 80
 	m.input.SetWidth(m.width - 2) // matches Update's WindowSizeMsg handling
 	m.layout()
