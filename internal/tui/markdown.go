@@ -72,13 +72,14 @@ func stripLinePadding(s string) string {
 }
 
 var (
-	mdMu           sync.Mutex
-	mdAtWidth      int
-	mdAtLight      bool // theme the cached renderer was built for
-	mdRendererC    *glamour.TermRenderer
-	mdRendererErr  bool // style init failed once: don't retry per message
-	mdLight        bool // light terminal background detected (set at startup)
-	mdStyleChecked bool
+	mdMu          sync.Mutex
+	mdAtWidth     int
+	mdAtLight     bool // theme the cached renderer was built for
+	mdAtKnown     bool // whether the cached renderer was built with a known bg
+	mdRendererC   *glamour.TermRenderer
+	mdRendererErr bool // style init failed once: don't retry per message
+	mdLight       bool // light terminal background detected (set at startup)
+	mdKnown       bool // background was actually determined; false = no good signal
 )
 
 // SetLightTheme records the terminal's background and drops the cached
@@ -86,15 +87,32 @@ var (
 // Run once the background is known (OSC query result or heuristic).
 func SetLightTheme(light bool) {
 	mdMu.Lock()
-	mdLight, mdStyleChecked = light, true
+	mdLight, mdKnown = light, true
 	mdRendererC, mdAtWidth = nil, 0
 	mdMu.Unlock()
 }
 
-// CurrentTheme reports the active scheme ("light"/"dark") for the UI.
+// SetUnknownTheme records that the terminal background could NOT be determined
+// (auto mode with no reliable signal: tmux without passthrough, a terminal that
+// ignores OSC 11). Markdown then renders in the neutral default style — no
+// forced dark/light guess — so text stays at the terminal's own default colors
+// instead of being inverted by a wrong assumption.
+func SetUnknownTheme() {
+	mdMu.Lock()
+	mdKnown = false
+	mdRendererC, mdAtWidth = nil, 0
+	mdMu.Unlock()
+}
+
+// CurrentTheme reports the active scheme ("light"/"dark"/"auto") for the UI.
+// "auto" means the background wasn't determined and markdown is rendering in
+// the neutral default style.
 func CurrentTheme() string {
 	mdMu.Lock()
 	defer mdMu.Unlock()
+	if !mdKnown {
+		return "auto"
+	}
 	if mdLight {
 		return "light"
 	}
@@ -114,8 +132,14 @@ func unregisterChromaStyle() {
 // mdStyle picks the glamour style for the detected background. The light
 // variant gets a higher-contrast inline-code treatment: stock Light uses
 // salmon (203) on near-white (254), which is nearly unreadable — dark red on
-// a light-gray chip instead.
+// a light-gray chip instead. When the background is unknown (mdKnown false —
+// auto mode with no reliable signal), it uses the neutral ASCII style so text
+// stays at the terminal's own default colors rather than being inverted by a
+// wrong dark/light guess.
 func mdStyle() glamouransi.StyleConfig {
+	if !mdKnown {
+		return styles.ASCIIStyleConfig
+	}
 	if mdLight {
 		st := styles.LightStyleConfig
 		st.Code.Color = strPtr("124")           // dark red
@@ -141,7 +165,7 @@ func mdRenderer(width int) *glamour.TermRenderer {
 	// other theme. The registry entry is keyed by name, not theme: drop it
 	// whenever the cached renderer's theme isn't the current one, and also
 	// when the entry's origin is unknown (first call after a theme flip).
-	if mdRendererC != nil && mdAtWidth == width && mdAtLight == mdLight {
+	if mdRendererC != nil && mdAtWidth == width && mdAtLight == mdLight && mdAtKnown == mdKnown {
 		return mdRendererC
 	}
 	unregisterChromaStyle()
@@ -157,7 +181,7 @@ func mdRenderer(width int) *glamour.TermRenderer {
 		mdRendererErr = true
 		return nil
 	}
-	mdRendererC, mdAtWidth, mdAtLight = r, width, mdLight
+	mdRendererC, mdAtWidth, mdAtLight, mdAtKnown = r, width, mdLight, mdKnown
 	return r
 }
 
