@@ -2,13 +2,18 @@ package tui
 
 import (
 	"context"
+	"fmt"
+	"io"
+	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/context-labs/loopy/internal/agent"
 	"github.com/context-labs/loopy/internal/config"
+	"github.com/context-labs/loopy/internal/llm"
 )
 
 // busyQueueModel builds a model that is busy with a populated queue.
@@ -234,6 +239,118 @@ func TestEscDoesNotInterruptWhenIdle(t *testing.T) {
 	m = tm.(*model)
 	if ctx.Err() == context.Canceled {
 		t.Fatal("esc while idle should not cancel")
+	}
+}
+
+// stubLLM answers chat completions with an immediate empty SSE stream so a
+// drained queue can submit without touching the network.
+func stubLLM() *llm.Client {
+	return &llm.Client{
+		HTTP: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": {"text/event-stream"}},
+				Body:       io.NopCloser(strings.NewReader("data: [DONE]\n\n")),
+			}, nil
+		})},
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// TestEmptyEnterSteerDrainsQueue proves the reported regression end to end:
+// queue a message while busy, empty-enter to steer (cancels the turn), then
+// the turn ends with the wrapped cancellation error an http client actually
+// returns ("Post ...: context canceled"). The queue must still drain — the
+// queued message submits as the next turn.
+func TestEmptyEnterSteerDrainsQueue(t *testing.T) {
+	m := busyQueueModel()
+	m.agent.Client = stubLLM()
+	m.agent.Messages = []llm.Message{{Role: "system", Content: "sys"}}
+
+	// first enter while busy: the typed message queues
+	m.input.SetValue("thanks we're all done")
+	m = press(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	if len(m.queue) != 1 || m.queue[0] != "thanks we're all done" {
+		t.Fatalf("typed text should queue while busy: %v", m.queue)
+	}
+
+	// second enter on the empty input: force-steer cancels the in-flight turn
+	m = press(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+
+	// the canceled http request reports a *url.Error wrapping context.Canceled,
+	// not the sentinel itself
+	wrapped := fmt.Errorf("Post %q: %w", "https://api.example/v1/chat/completions", context.Canceled)
+	tm, _ := m.Update(turnDoneMsg{err: wrapped})
+	m = tm.(*model)
+
+	if len(m.queue) != 0 {
+		t.Fatalf("the canceled turn should drain the queue, still queued: %v", m.queue)
+	}
+	if !m.busy {
+		t.Fatal("the queued message should have submitted as the next turn (busy)")
+	}
+	if !hasUserMsg(t, m, "thanks we're all done") {
+		t.Fatalf("the queued message should be submitted to the model, got %+v", m.agent.Messages)
+	}
+}
+
+// hasUserMsg reports whether the conversation holds the given user message.
+// submitTurn appends it from a goroutine, so poll briefly rather than assert
+// on the first read.
+func hasUserMsg(t *testing.T, m *model, content string) bool {
+	t.Helper()
+	for range 100 {
+		for _, msg := range m.agent.Messages {
+			if msg.Role == "user" && msg.Content == content {
+				return true
+			}
+		}
+		time.Sleep(time.Millisecond)
+	}
+	return false
+}
+
+// TestEmptyEnterSteerDrainsQueueOnSentinel covers the unwrapped sentinel too
+// (agent.go's post-tool `return ctx.Err()` path).
+func TestEmptyEnterSteerDrainsQueueOnSentinel(t *testing.T) {
+	m := busyQueueModel()
+	m.agent.Client = stubLLM()
+	m.agent.Messages = []llm.Message{{Role: "system", Content: "sys"}}
+	m.queue = []string{"follow up"}
+
+	tm, _ := m.Update(turnDoneMsg{err: context.Canceled})
+	m = tm.(*model)
+
+	if len(m.queue) != 0 {
+		t.Fatalf("the canceled turn should drain the queue, still queued: %v", m.queue)
+	}
+	if !m.busy {
+		t.Fatal("the queued message should have submitted as the next turn (busy)")
+	}
+}
+
+// TestEmptyEnterIdleDrainsStuckQueue is the recovery path for the stuck state
+// the bug left sessions in: idle with a stranded queue, empty enter does
+// nothing. It must submit the head of the queue.
+func TestEmptyEnterIdleDrainsStuckQueue(t *testing.T) {
+	m := busyQueueModel("stranded")
+	m.busy = false // idle — the turn already ended without draining
+	m.agent.Client = stubLLM()
+	m.agent.Messages = []llm.Message{{Role: "system", Content: "sys"}}
+
+	m = press(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+
+	if len(m.queue) != 0 {
+		t.Fatalf("empty enter while idle should drain the stuck queue: %v", m.queue)
+	}
+	if !m.busy {
+		t.Fatal("the stranded message should have submitted (busy)")
+	}
+	if !hasUserMsg(t, m, "stranded") {
+		t.Fatalf("the stranded message should be submitted, got %+v", m.agent.Messages)
 	}
 }
 

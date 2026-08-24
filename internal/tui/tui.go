@@ -3,6 +3,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -1397,9 +1398,13 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.busy = false
 		m.cancel = nil
 		m.interrupt1 = false
-		if msg.err != nil && msg.err != context.Canceled {
+		// Cancellation arrives wrapped from the in-flight http request
+		// ("Post ...: context canceled"), so identity comparison misses it —
+		// which would strand the queue instead of draining it.
+		canceled := errors.Is(msg.err, context.Canceled)
+		if msg.err != nil && !canceled {
 			m.append(errStyle.Render("error: " + msg.err.Error()))
-		} else if msg.err == context.Canceled {
+		} else if canceled {
 			m.append(dimStyle.Render("(interrupted)"))
 		}
 		m.persist()
@@ -1407,15 +1412,15 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// `!` shell escapes execute locally instead of starting a turn.
 		// A canceled turn also drains the queue: the empty-enter steer path
 		// cancels intentionally so the queued messages go out immediately.
-		for len(m.queue) > 0 && (msg.err == nil || msg.err == context.Canceled) {
+		for len(m.queue) > 0 && (msg.err == nil || canceled) {
 			next := m.queue[0]
-			m.queue = m.queue[1:]
-			m.queueSel = -1
 			if strings.HasPrefix(next, "!") {
+				m.queue = m.queue[1:]
+				m.queueSel = -1
 				m.runShellQueued(next)
 				continue
 			}
-			return m.submit(next)
+			return m.drainQueueHead()
 		}
 		// goal loop: keep working until the model explicitly declares GOAL_MET
 		if m.goal != "" && msg.err == nil {
@@ -1885,6 +1890,12 @@ func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				}
 			}
 			return m, nil
+		}
+		if text == "" && len(m.queue) > 0 {
+			// recovery: a turn that ended without draining (e.g. a wrapped
+			// cancellation slipping past turnDoneMsg's check) leaves the
+			// queue stranded; empty enter while idle sends the head now
+			return m.drainQueueHead()
 		}
 		if text == "" {
 			return m, nil
@@ -2443,6 +2454,20 @@ func (m *model) flushCurrent() {
 }
 
 // submit sends a message the human typed; it counts for input-history recall.
+// drainQueueHead pops the oldest queued message and submits it as the next
+// turn — the exact submission path of a typed message (system-prompt rebuild,
+// history, transcript echo). Used by turnDoneMsg's queue drain and by the
+// idle empty-enter recovery for a stranded queue. Callers handle `!` shell
+// escapes before calling (they execute locally, not as a turn).
+func (m *model) drainQueueHead() (tea.Model, tea.Cmd) {
+	next := m.queue[0]
+	m.queue = m.queue[1:]
+	m.queueSel = -1
+	m.hist = append(m.hist, next)
+	m.histIdx = len(m.hist)
+	return m.submit(next)
+}
+
 func (m *model) submit(text string) (tea.Model, tea.Cmd) {
 	return m.submitTurn(text, true)
 }
