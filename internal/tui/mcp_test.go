@@ -118,6 +118,30 @@ func TestMCPSurvivesAgentSwap(t *testing.T) {
 	}
 }
 
+// TestMCPBlockedViewAndEnableGuard: a policy-blocked server shows in /mcp as
+// disabled with the blocking note, and enabling it points at the config
+// instead of silently writing a shadow entry.
+func TestMCPBlockedViewAndEnableGuard(t *testing.T) {
+	m := mcpModel(t, map[string]mcp.ServerConfig{"docs": {Command: []string{"docs"}}})
+	off := false
+	m.mcpMgr.SetBlocked(map[string]mcp.ServerConfig{
+		"node_repl": {Command: []string{"/app/bin/node_repl"}, Enabled: &off, Note: "blocked by mcpImport config"},
+	})
+	m.command("/mcp")
+	out := m.blocks[len(m.blocks)-1].text
+	if !strings.Contains(out, "node_repl") || !strings.Contains(out, "blocked by mcpImport config") {
+		t.Errorf("blocked server must stay visible with its note:\n%s", out)
+	}
+	m.command("/mcp node_repl enable")
+	last := m.blocks[len(m.blocks)-1].text
+	if !strings.Contains(last, "blocked by the mcpImport config") || !strings.Contains(last, "config.json") {
+		t.Errorf("enable on a blocked server should point at the config, got %q", last)
+	}
+	if _, written := m.cfg.MCPServers["node_repl"]; written {
+		t.Error("enabling a blocked server must not write a config entry")
+	}
+}
+
 func agHasTool(a *agent.Agent, name string) bool {
 	for _, t := range a.AllTools() {
 		if t.Def.Function.Name == name {

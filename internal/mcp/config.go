@@ -141,12 +141,86 @@ func Merge(loopy, codex, claude map[string]ServerConfig) map[string]ServerConfig
 	return out
 }
 
-// LoadMerged discovers MCP server configs from all supported sources and
-// merges them: the project .mcp.json in cwd (claude-style), the codex config,
-// then loopy's own config on top. cwd is the project directory; loopyCfg may
-// be nil. Discovery failures (unreadable/unparseable files) are reported in
-// errs, keyed by source path, and never abort the merge.
-func LoadMerged(cwd string, loopyCfg map[string]ServerConfig) (map[string]ServerConfig, map[string]error) {
+// ImportPolicy selects which imported (non-loopy) server definitions loopy
+// picks up. The zero value imports both sources with no name filtering —
+// the pre-gating behavior. ImportPolicyFrom converts the config-file block.
+type ImportPolicy struct {
+	Claude ImportSourcePolicy
+	Codex  ImportSourcePolicy
+}
+
+// ImportSourcePolicy gates one import source. Enabled=false drops the source
+// entirely; Only (non-empty) is a name allowlist; Exclude is a denylist and
+// wins over Only when both are set.
+type ImportSourcePolicy struct {
+	Enabled bool
+	Only    map[string]bool
+	Exclude map[string]bool
+}
+
+// ImportPolicyFrom converts the config-file mcpImport block into the merge
+// policy. imp may be nil (import everything).
+func ImportPolicyFrom(imp *config.MCPImport) ImportPolicy {
+	convert := func(s *config.MCPImportSource) ImportSourcePolicy {
+		p := ImportSourcePolicy{Enabled: true}
+		if s == nil {
+			return p
+		}
+		if s.Enabled != nil {
+			p.Enabled = *s.Enabled
+		}
+		if len(s.Only) > 0 {
+			p.Only = make(map[string]bool, len(s.Only))
+			for _, n := range s.Only {
+				p.Only[n] = true
+			}
+		}
+		if len(s.Exclude) > 0 {
+			p.Exclude = make(map[string]bool, len(s.Exclude))
+			for _, n := range s.Exclude {
+				p.Exclude[n] = true
+			}
+		}
+		return p
+	}
+	if imp == nil {
+		return ImportPolicy{Claude: convert(nil), Codex: convert(nil)}
+	}
+	return ImportPolicy{Claude: convert(imp.Claude), Codex: convert(imp.Codex)}
+}
+
+// Admits reports whether a server name passes the source's gate.
+func (p ImportSourcePolicy) Admits(name string) bool {
+	if !p.Enabled {
+		return false
+	}
+	if p.Exclude[name] {
+		return false // denylist wins over allowlist
+	}
+	if len(p.Only) > 0 && !p.Only[name] {
+		return false
+	}
+	return true
+}
+
+// Filtered is the discovery result when an ImportPolicy is applied: Merged is
+// what the manager connects to; Blocked holds the servers the policy filtered
+// out, forced disabled with a note so they stay visible (/mcp, loopy mcp
+// list) instead of vanishing silently. Blocked never shadows a loopy entry of
+// the same name. Sources attributes every discovered name (merged or
+// blocked) to the file that contributes/would contribute it ("loopy",
+// ".mcp.json", or "codex") — codex wins over claude, loopy over both.
+type Filtered struct {
+	Merged  map[string]ServerConfig
+	Blocked map[string]ServerConfig
+	Sources map[string]string
+	Errs    map[string]error
+}
+
+// LoadMergedFiltered discovers server configs like LoadMerged, then applies
+// the import policy: filtered-out claude/codex entries land in Blocked as
+// disabled+noted copies. loopyCfg entries always pass through.
+func LoadMergedFiltered(cwd string, loopyCfg map[string]ServerConfig, policy ImportPolicy) Filtered {
 	errs := map[string]error{}
 	claude, err := LoadClaude(filepath.Join(cwd, ".mcp.json"))
 	if err != nil && !os.IsNotExist(err) {
@@ -156,7 +230,56 @@ func LoadMerged(cwd string, loopyCfg map[string]ServerConfig) (map[string]Server
 	if err != nil && !os.IsNotExist(err) {
 		errs[CodexPath()] = err
 	}
-	return Merge(loopyCfg, codex, claude), errs
+	blocked := map[string]ServerConfig{}
+	split := func(src map[string]ServerConfig, p ImportSourcePolicy) map[string]ServerConfig {
+		kept := make(map[string]ServerConfig, len(src))
+		for name, c := range src {
+			if !p.Admits(name) {
+				if _, owned := loopyCfg[name]; !owned { // loopy always wins; no ghost row
+					off := false
+					c.Enabled = &off
+					if c.Note != "" { // keep an existing import note (e.g. legacy sse)
+						c.Note = "blocked by mcpImport config — " + c.Note
+					} else {
+						c.Note = "blocked by mcpImport config"
+					}
+					blocked[name] = c
+				}
+				continue
+			}
+			kept[name] = c
+		}
+		return kept
+	}
+	claudeKept := split(claude, policy.Claude)
+	codexKept := split(codex, policy.Codex)
+	sources := make(map[string]string, len(loopyCfg)+len(codex)+len(claude))
+	for name := range loopyCfg {
+		sources[name] = "loopy"
+	}
+	for name := range claude {
+		sources[name] = ".mcp.json"
+	}
+	for name := range codex { // codex wins over claude in Merge
+		sources[name] = "codex"
+	}
+	return Filtered{
+		Merged:  Merge(loopyCfg, codexKept, claudeKept),
+		Blocked: blocked,
+		Sources: sources,
+		Errs:    errs,
+	}
+}
+
+// LoadMerged discovers MCP server configs from all supported sources and
+// merges them: the project .mcp.json in cwd (claude-style), the codex config,
+// then loopy's own config on top. cwd is the project directory; loopyCfg may
+// be nil. Discovery failures (unreadable/unparseable files) are reported in
+// errs, keyed by source path, and never abort the merge. No import policy is
+// applied — both sources are imported wholesale.
+func LoadMerged(cwd string, loopyCfg map[string]ServerConfig) (map[string]ServerConfig, map[string]error) {
+	f := LoadMergedFiltered(cwd, loopyCfg, ImportPolicyFrom(nil))
+	return f.Merged, f.Errs
 }
 
 // CodexPath is the codex CLI's config file location (~/.codex/config.toml).

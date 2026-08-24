@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"sort"
@@ -12,20 +13,21 @@ import (
 	"github.com/context-labs/loopy/internal/mcp"
 )
 
-// mcpCLI implements `loopy mcp <list|add|remove|serve>`.
+// mcpCLI implements `loopy mcp <list|add|remove|serve|test|import>`.
 //
-//	list                        merged view of every configured server and where it came from
+//	list                        merged view of every configured server, its source, and blocked state
 //	add <name> -- <cmd...>      register a stdio server
 //	add <name> --url <url>      register a remote (streamable HTTP) server
 //	remove <name>               drop a server from loopy's own config
+//	import [--dry-run]          materialize imported (claude/codex) servers into loopy's config
 //	serve                       run loopy's tools as an MCP server over stdio
 //
-// add/remove write through config.Save (atomic, clobber-guarded). Servers
-// imported from .mcp.json or codex can't be removed here (edit the source
-// file); remove on an imported name explains that.
+// add/remove/import write through config.Save (atomic, clobber-guarded).
+// Servers imported from .mcp.json or codex can't be removed here (edit the
+// source file); remove on an imported name explains that.
 func mcpCLI(args []string, version string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: loopy mcp <list|add|remove|serve>")
+		return fmt.Errorf("usage: loopy mcp <list|add|remove|import|serve|test>")
 	}
 	if args[0] == "serve" {
 		return mcp.Serve(context.Background(), version)
@@ -36,6 +38,9 @@ func mcpCLI(args []string, version string) error {
 		}
 		return mcpTestCLI(args[1])
 	}
+	if args[0] == "import" {
+		return mcpImportCLI(args[1:])
+	}
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -45,13 +50,12 @@ func mcpCLI(args []string, version string) error {
 	switch args[0] {
 	case "list":
 		wd, _ := os.Getwd()
-		merged, errs := mcp.LoadMerged(wd, mcp.FromConfigMap(cfg.MCPServers))
-		loopyNames := map[string]bool{}
-		for name := range cfg.MCPServers {
-			loopyNames[name] = true
+		disc := mcp.LoadMergedFiltered(wd, mcp.FromConfigMap(cfg.MCPServers), mcp.ImportPolicyFrom(cfg.MCPImport))
+		names := make([]string, 0, len(disc.Merged)+len(disc.Blocked))
+		for name := range disc.Merged {
+			names = append(names, name)
 		}
-		names := make([]string, 0, len(merged))
-		for name := range merged {
+		for name := range disc.Blocked {
 			names = append(names, name)
 		}
 		sort.Strings(names)
@@ -59,22 +63,19 @@ func mcpCLI(args []string, version string) error {
 			fmt.Println("no MCP servers configured")
 		}
 		for _, name := range names {
-			c := merged[name]
-			src := "imported (.mcp.json/codex)"
-			if loopyNames[name] {
-				src = "loopy config"
-			}
-			target := strings.Join(c.Command, " ")
-			if c.Remote() {
-				target = c.URL
-			}
 			status := "enabled"
-			if c.Disabled() {
-				status = "disabled"
+			var c mcp.ServerConfig
+			if b, ok := disc.Blocked[name]; ok {
+				c, status = b, "blocked"
+			} else {
+				c = disc.Merged[name]
+				if c.Disabled() {
+					status = "disabled"
+				}
 			}
-			fmt.Printf("%-20s %-9s %-30s %s\n", name, status, target, src)
+			fmt.Printf("%-20s %-9s %-30s %s\n", name, status, mcpTarget(c), disc.Sources[name]+" config")
 		}
-		for src, e := range errs {
+		for src, e := range disc.Errs {
 			fmt.Fprintf(os.Stderr, "mcp: %s: %s\n", src, e)
 		}
 		return nil
@@ -114,11 +115,14 @@ func mcpCLI(args []string, version string) error {
 		}
 		name := args[1]
 		if _, ok := cfg.MCPServers[name]; !ok {
-			// Maybe it's imported.
+			// Maybe it's imported (or blocked by the import policy).
 			wd, _ := os.Getwd()
-			merged, _ := mcp.LoadMerged(wd, mcp.FromConfigMap(cfg.MCPServers))
-			if _, imported := merged[name]; imported {
+			disc := mcp.LoadMergedFiltered(wd, mcp.FromConfigMap(cfg.MCPServers), mcp.ImportPolicyFrom(cfg.MCPImport))
+			if _, imported := disc.Merged[name]; imported {
 				return fmt.Errorf("%q comes from .mcp.json or ~/.codex/config.toml — edit that file to remove it", name)
+			}
+			if _, blocked := disc.Blocked[name]; blocked {
+				return fmt.Errorf("%q is blocked by the mcpImport config — edit ~/.loopy/config.json", name)
 			}
 			return fmt.Errorf("no mcp server named %q", name)
 		}
@@ -129,7 +133,7 @@ func mcpCLI(args []string, version string) error {
 		fmt.Printf("removed mcp server %q\n", name)
 		return nil
 	}
-	return fmt.Errorf("unknown mcp subcommand %q (list|add|remove|serve|test)", args[0])
+	return fmt.Errorf("unknown mcp subcommand %q (list|add|remove|import|serve|test)", args[0])
 }
 
 // mcpTestCLI is the doctor: connect to one configured server, report status,
@@ -141,9 +145,12 @@ func mcpTestCLI(name string) error {
 		return err
 	}
 	wd, _ := os.Getwd()
-	merged, _ := mcp.LoadMerged(wd, mcp.FromConfigMap(cfg.MCPServers))
-	sc, ok := merged[name]
+	disc := mcp.LoadMergedFiltered(wd, mcp.FromConfigMap(cfg.MCPServers), mcp.ImportPolicyFrom(cfg.MCPImport))
+	sc, ok := disc.Merged[name]
 	if !ok {
+		if _, blocked := disc.Blocked[name]; blocked {
+			return fmt.Errorf("server %q is blocked by the mcpImport config — edit ~/.loopy/config.json", name)
+		}
 		return fmt.Errorf("no mcp server named %q (try: loopy mcp list)", name)
 	}
 	fmt.Printf("testing mcp server %q (%s)…\n", name, mcpTarget(sc))
@@ -172,4 +179,63 @@ func mcpTarget(c mcp.ServerConfig) string {
 		return c.URL
 	}
 	return strings.Join(c.Command, " ")
+}
+
+// mcpImportCLI materializes imported (claude/codex) servers into loopy's own
+// config — mcp-polish item 6. Imported means: admitted by the mcpImport
+// policy and not already in loopy's config (idempotent; existing loopy
+// entries are never touched). --dry-run prints the JSONC fragment instead of
+// writing.
+func mcpImportCLI(args []string) error {
+	dryRun := false
+	for _, a := range args {
+		if a == "--dry-run" {
+			dryRun = true
+		} else {
+			return fmt.Errorf("usage: loopy mcp import [--dry-run]")
+		}
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	wd, _ := os.Getwd()
+	disc := mcp.LoadMergedFiltered(wd, mcp.FromConfigMap(cfg.MCPServers), mcp.ImportPolicyFrom(cfg.MCPImport))
+	add := map[string]config.MCPServer{}
+	for name, sc := range disc.Merged {
+		if _, owned := cfg.MCPServers[name]; owned {
+			continue // already loopy's own — importing is a no-op
+		}
+		add[name] = config.MCPServer{
+			Command: sc.Command, Env: sc.Env, Cwd: sc.Cwd,
+			URL: sc.URL, Headers: sc.Headers, Enabled: sc.Enabled,
+			Note: sc.Note, StartupTimeout: sc.StartupTimeout, ToolTimeout: sc.ToolTimeout,
+		}
+	}
+	if len(add) == 0 {
+		fmt.Println("nothing to import — all servers are already in loopy's config (or blocked by mcpImport)")
+		return nil
+	}
+	if dryRun {
+		body, err := json.MarshalIndent(add, "", "  ")
+		if err != nil {
+			return err
+		}
+		fmt.Printf("would add %d server(s) to ~/.loopy/config.json under \"mcp\":\n%s\n", len(add), body)
+		return nil
+	}
+	if cfg.MCPServers == nil {
+		cfg.MCPServers = map[string]config.MCPServer{}
+	}
+	names := make([]string, 0, len(add))
+	for name, entry := range add {
+		cfg.MCPServers[name] = entry
+		names = append(names, name)
+	}
+	if err := cfg.Save(); err != nil {
+		return err
+	}
+	sort.Strings(names)
+	fmt.Printf("imported %d mcp server(s) into ~/.loopy/config.json: %s\n", len(names), strings.Join(names, ", "))
+	return nil
 }

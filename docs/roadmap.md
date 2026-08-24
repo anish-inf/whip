@@ -98,7 +98,8 @@ Improvement plan with per-item checkboxes: [`.ai-docs/plans/mcp-polish/`](../.ai
 - [x] Auto-reconnect with backoff on dropped sessions (gen-guard makes it safe; manual `/mcp reconnect` stays as override)
 - [x] MCP server instructions injected into the system prompt (opencode `session/system.ts:119-135`)
 - [x] `loopy mcp test <name>` (the doctor: connect + list + timing + stderr tail, non-zero exit on failure — CI-checkable `.mcp.json`)
-- [ ] `loopy mcp import [--dry-run]` (materialize claude/codex imports into loopy's config)
+- [x] `loopy mcp import [--dry-run]` (materialize claude/codex imports into loopy's config)
+- [x] MCP import source gating: `"mcpImport"` block (`enabled`/`only`/`exclude` per claude/codex source); blocked imports stay visible in `/mcp` and `loopy mcp list` instead of vanishing — stops third-party codex-config entries (e.g. ChatGPT app's `node_repl`) from being picked up wholesale
 - [ ] Overlay config entries (`"overlay": true` patches `enabled` over imports instead of copying definitions)
 
 ## LSP

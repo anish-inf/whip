@@ -143,11 +143,16 @@ type Manager struct {
 	servers  map[string]*server // keyed by configured name
 	onChange func()             // optional redraw hook, like taskRegistry.OnChange
 
+	// blocked holds servers an mcpImport policy filtered out. They never
+	// connect, but stay visible in the status view so a gated import isn't
+	// silent. Set at startup; read via Blocked.
+	blocked []Server
+
 	// connectTransport builds the transport for a server config. A var so
 	// tests can substitute in-process transports without spawning processes.
 	connectTransport func(cfg ServerConfig, stderr *ringBuffer) (sdkmcp.Transport, error)
 
-	onChangeMu sync.Mutex // guards onChange (SetOnChange may race connect goroutines)
+	onChangeMu sync.Mutex // guards onChange, blocked, and closed (writes may race connect goroutines)
 	closed     bool       // set by Close; connect() won't store new sessions after it
 }
 
@@ -614,6 +619,38 @@ func Probe(ctx context.Context, name string, cfg ServerConfig) ProbeResult {
 		}
 	}
 	return res
+}
+
+// SetBlocked records the servers an import policy filtered out (already
+// disabled+noted ServerConfigs). Called once at startup, before Start.
+func (m *Manager) SetBlocked(cfgs map[string]ServerConfig) {
+	m.onChangeMu.Lock()
+	defer m.onChangeMu.Unlock()
+	m.blocked = make([]Server, 0, len(cfgs))
+	for name, c := range cfgs {
+		m.blocked = append(m.blocked, Server{Name: name, Status: StatusDisabled, Note: c.Note})
+	}
+	sort.Slice(m.blocked, func(i, j int) bool { return m.blocked[i].Name < m.blocked[j].Name })
+}
+
+// Blocked returns the name-sorted snapshot of policy-filtered servers.
+func (m *Manager) Blocked() []Server {
+	m.onChangeMu.Lock()
+	defer m.onChangeMu.Unlock()
+	return append([]Server(nil), m.blocked...)
+}
+
+// BlockedByPolicy reports whether name was filtered out by the mcpImport
+// policy (vs merely disabled), so /mcp enable can point at the right fix.
+func (m *Manager) BlockedByPolicy(name string) bool {
+	m.onChangeMu.Lock()
+	defer m.onChangeMu.Unlock()
+	for _, b := range m.blocked {
+		if b.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 // Statuses returns a stable, name-sorted snapshot for /mcp.

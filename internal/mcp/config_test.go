@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/context-labs/loopy/internal/config"
 )
 
 func TestParseClaudeStdio(t *testing.T) {
@@ -204,6 +206,145 @@ func TestLoadMergedDiscovery(t *testing.T) {
 	}
 	if _, ok := merged["cdx"]; !ok {
 		t.Error("codex servers should still merge when .mcp.json is broken")
+	}
+}
+
+// TestLoadMergedFilteredPolicy pins the mcpImport gating: a policy-filtered
+// import (the ChatGPT desktop app's node_repl from ~/.codex/config.toml)
+// lands in Blocked as disabled+noted — never connected, never silently
+// dropped — while admitted imports and loopy's own entries merge normally.
+func TestLoadMergedFilteredPolicy(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte(
+		`{"mcpServers": {"proj": {"command": "proj-srv"}, "ghost": {"command": "ghost-srv"}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	codexFile := filepath.Join(dir, "codex.toml")
+	if err := os.WriteFile(codexFile, []byte(
+		"[mcp_servers.node_repl]\ncommand = \"/app/bin/node_repl\"\n[mcp_servers.paper]\nurl = \"http://127.0.0.1:29979/mcp\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	orig := CodexPath
+	CodexPath = func() string { return codexFile }
+	defer func() { CodexPath = orig }()
+
+	// The node_repl scenario: codex source on, node_repl excluded.
+	policy := ImportPolicy{Codex: ImportSourcePolicy{
+		Enabled: true,
+		Exclude: map[string]bool{"node_repl": true},
+	}}
+	f := LoadMergedFiltered(dir, nil, policy)
+	if _, ok := f.Merged["paper"]; !ok {
+		t.Error("admitted codex server should merge")
+	}
+	if _, ok := f.Merged["node_repl"]; ok {
+		t.Error("excluded server must not merge")
+	}
+	b, ok := f.Blocked["node_repl"]
+	if !ok {
+		t.Fatal("excluded server must appear in Blocked, not vanish")
+	}
+	if !b.Disabled() || !strings.HasPrefix(b.Note, "blocked by mcpImport config") {
+		t.Errorf("blocked entry should be disabled with a note, got %+v", b)
+	}
+	if f.Sources["node_repl"] != "codex" || f.Sources["proj"] != ".mcp.json" || f.Sources["paper"] != "codex" {
+		t.Errorf("source attribution wrong: %v", f.Sources)
+	}
+
+	// Source off: everything from claude drops into Blocked.
+	f = LoadMergedFiltered(dir, nil, ImportPolicy{
+		Claude: ImportSourcePolicy{Enabled: false},
+		Codex:  ImportSourcePolicy{Enabled: true},
+	})
+	if len(f.Blocked) != 2 {
+		t.Errorf("both claude servers should be blocked, got %v", f.Blocked)
+	}
+	if _, ok := f.Merged["proj"]; ok {
+		t.Error("disabled source must not merge")
+	}
+
+	// Only-allowlist, and exclude beating only when both are set.
+	f = LoadMergedFiltered(dir, nil, ImportPolicy{
+		Claude: ImportSourcePolicy{Enabled: true, Only: map[string]bool{"proj": true, "ghost": true},
+			Exclude: map[string]bool{"ghost": true}},
+		Codex: ImportSourcePolicy{Enabled: true},
+	})
+	if _, ok := f.Merged["proj"]; !ok {
+		t.Error("allowlisted server should merge")
+	}
+	if _, ok := f.Blocked["ghost"]; !ok {
+		t.Error("exclude must win over only")
+	}
+
+	// A loopy entry of the same name is never shadowed by a ghost row.
+	f = LoadMergedFiltered(dir, map[string]ServerConfig{"node_repl": {Command: []string{"mine"}}}, policy)
+	if f.Merged["node_repl"].Command[0] != "mine" {
+		t.Error("loopy config must still win over a blocked import")
+	}
+	if _, ok := f.Blocked["node_repl"]; ok {
+		t.Error("no ghost row when loopy owns the name")
+	}
+
+	// Zero policy == LoadMerged (import everything).
+	def := LoadMergedFiltered(dir, nil, ImportPolicyFrom(nil))
+	if len(def.Merged) != 4 || len(def.Blocked) != 0 {
+		t.Errorf("nil policy must import everything, got merged=%v blocked=%v", def.Merged, def.Blocked)
+	}
+}
+
+// TestManagerFromBlockedDiscovery pins the original failure scenario end to
+// end at the manager level: a codex config carrying the ChatGPT app's
+// node_repl, gated by policy, produces a manager with no node_repl server
+// (nothing connects, nothing errors) and one visible blocked row.
+func TestManagerFromBlockedDiscovery(t *testing.T) {
+	dir := t.TempDir()
+	codexFile := filepath.Join(dir, "codex.toml")
+	if err := os.WriteFile(codexFile, []byte(
+		"[mcp_servers.node_repl]\ncommand = \"/app/bin/node_repl\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	orig := CodexPath
+	CodexPath = func() string { return codexFile }
+	defer func() { CodexPath = orig }()
+
+	f := LoadMergedFiltered(dir, nil, ImportPolicyFrom(&config.MCPImport{
+		Codex: &config.MCPImportSource{Exclude: []string{"node_repl"}},
+	}))
+	mgr := NewManager(f.Merged)
+	mgr.SetBlocked(f.Blocked)
+	if _, ok := mgr.Config("node_repl"); ok {
+		t.Error("a blocked server must never reach the manager's live set")
+	}
+	if !mgr.BlockedByPolicy("node_repl") {
+		t.Error("the manager must remember node_repl as policy-blocked")
+	}
+	blocked := mgr.Blocked()
+	if len(blocked) != 1 || blocked[0].Status != StatusDisabled || blocked[0].Note == "" {
+		t.Errorf("blocked snapshot: %+v", blocked)
+	}
+}
+
+// TestImportPolicyFrom covers the config-block → policy conversion.
+func TestImportPolicyFrom(t *testing.T) {
+	off := false
+	p := ImportPolicyFrom(&config.MCPImport{
+		Claude: &config.MCPImportSource{Enabled: &off},
+		Codex:  &config.MCPImportSource{Only: []string{"a"}, Exclude: []string{"b"}},
+	})
+	if p.Claude.Admits("anything") {
+		t.Error("enabled=false must block the whole source")
+	}
+	if !p.Codex.Admits("a") || p.Codex.Admits("c") {
+		t.Error("only must act as an allowlist")
+	}
+	if p.Codex.Admits("b") {
+		t.Error("exclude must beat only")
+	}
+	// nil block and nil source both mean "on, unfiltered".
+	for _, p := range []ImportPolicy{ImportPolicyFrom(nil), ImportPolicyFrom(&config.MCPImport{})} {
+		if !p.Claude.Admits("x") || !p.Codex.Admits("x") {
+			t.Error("nil policy must admit everything")
+		}
 	}
 }
 

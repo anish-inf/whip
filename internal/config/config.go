@@ -118,6 +118,10 @@ type Config struct {
 	// internal/mcp.ServerConfig for the normalized semantics). On load it is
 	// merged over imported claude/codex configs: loopy always wins per name.
 	MCPServers map[string]MCPServer `json:"mcp,omitempty"`
+	// MCPImport gates which imported MCP server definitions loopy picks up
+	// (claude-style .mcp.json, codex-style ~/.codex/config.toml). nil imports
+	// both sources, preserving the pre-gating behavior.
+	MCPImport *MCPImport `json:"mcpImport,omitempty"`
 	// LSPServers is loopy's own LSP server block (loopy-native shape; see
 	// internal/lsp.FromConfigMap for the merge semantics). Entries extend or
 	// disable the built-in registry (gopls).
@@ -169,6 +173,26 @@ type LSPServer struct {
 	RootMarkers []string          `json:"rootMarkers,omitempty"`
 	Env         map[string]string `json:"env,omitempty"`
 	Enabled     *bool             `json:"enabled,omitempty"`
+}
+
+// MCPImport selects which claude/codex MCP server definitions loopy imports.
+// A nil source entry (or nil Enabled) leaves that source on. Example:
+//
+//	"mcpImport": {
+//	  "codex": { "enabled": true, "exclude": ["node_repl"] }
+//	}
+type MCPImport struct {
+	Claude *MCPImportSource `json:"claude,omitempty"`
+	Codex  *MCPImportSource `json:"codex,omitempty"`
+}
+
+// MCPImportSource gates one import source. Enabled nil means on; Only, when
+// non-empty, is an allowlist of server names; Exclude is a denylist and wins
+// over Only when both are set (documented behavior, no validation error).
+type MCPImportSource struct {
+	Enabled *bool    `json:"enabled,omitempty"`
+	Only    []string `json:"only,omitempty"`
+	Exclude []string `json:"exclude,omitempty"`
 }
 
 // MCPServer is the config-file form of an MCP server entry. It mirrors
@@ -239,9 +263,9 @@ func Load() (*Config, error) {
 	}
 	// Recover from a clobbered/empty config: no providers and no models is
 	// never a usable state, so prefer the backup, else regenerate defaults —
-	// BUT preserve any MCP server entries: an mcp-only config is valid (the
-	// user may configure servers before providers), and regenerating defaults
-	// would silently wipe them.
+	// BUT preserve any MCP server/import entries: an mcp-only config is valid
+	// (the user may configure servers before providers), and regenerating
+	// defaults would silently wipe them.
 	if len(cfg.Providers) == 0 && len(cfg.Models) == 0 {
 		logf("config.load", "CLOBBERED/EMPTY config detected (%d bytes on disk), attempting recovery", len(data))
 		if bak, err := os.ReadFile(p + ".bak"); err == nil {
@@ -251,11 +275,15 @@ func Load() (*Config, error) {
 				if len(restored.MCPServers) == 0 && len(cfg.MCPServers) > 0 {
 					restored.MCPServers = cfg.MCPServers // keep the user's servers
 				}
+				if restored.MCPImport == nil {
+					restored.MCPImport = cfg.MCPImport // keep import gating too
+				}
 				return &restored, restored.Save()
 			}
 		}
 		def := Default()
 		def.MCPServers = cfg.MCPServers // mcp-only configs are valid; keep them
+		def.MCPImport = cfg.MCPImport
 		logf("config.load", "no usable .bak; regenerated defaults (%s), keeping %d mcp entries", def.fingerprint(), len(cfg.MCPServers))
 		return def, def.Save()
 	}
@@ -320,7 +348,9 @@ func marshalConfig(c *Config) ([]byte, error) {
 	}
 	header := "// loopy configuration — JSONC: comments and trailing commas are allowed.\n" +
 		"// providers: declare each API endpoint once. models: route each model to one or\n" +
-		"// more providers (first is the default). defaultModel/defaultProvider pick the route.\n"
+		"// more providers (first is the default). defaultModel/defaultProvider pick the route.\n" +
+		"// mcp: loopy's own MCP servers; mcpImport: gate claude/codex imports, e.g.\n" +
+		"//   \"mcpImport\": { \"codex\": { \"enabled\": true, \"exclude\": [\"node_repl\"] } }\n"
 	out := append([]byte(header), body...)
 	return append(out, '\n'), nil
 }

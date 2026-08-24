@@ -152,6 +152,79 @@ func TestLoadJSONCCommentsAndTrailingCommas(t *testing.T) {
 	}
 }
 
+// TestMCPImportRoundTrip pins the mcpImport block's JSONC shape: absent stays
+// nil (import-everything default), and a full block round-trips through
+// Save/Load unchanged — including exclude beating only at policy level.
+func TestMCPImportRoundTrip(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	os.MkdirAll(filepath.Join(home, ".loopy"), 0o700)
+	src := `{
+  "defaultModel": "m1",
+  "providers": { "a": { "baseUrl": "https://a", "api": "openai-completions" } },
+  "models": { "m1": { "providers": ["a"] } },
+  "mcpImport": {
+    "claude": { "enabled": false },
+    "codex": { "enabled": true, "only": ["paper"], "exclude": ["node_repl"] }
+  }
+}
+`
+	os.WriteFile(filepath.Join(home, ".loopy", "config.json"), []byte(src), 0o600)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.MCPImport == nil || cfg.MCPImport.Claude == nil || cfg.MCPImport.Claude.Enabled == nil || *cfg.MCPImport.Claude.Enabled {
+		t.Fatalf("claude should parse as enabled=false, got %+v", cfg.MCPImport)
+	}
+	if got := cfg.MCPImport.Codex.Exclude; len(got) != 1 || got[0] != "node_repl" {
+		t.Fatalf("codex exclude: %+v", cfg.MCPImport.Codex)
+	}
+	if err := cfg.Save(); err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.MCPImport == nil || *reloaded.MCPImport.Claude.Enabled || reloaded.MCPImport.Codex.Only[0] != "paper" {
+		t.Fatalf("mcpImport did not round-trip: %+v", reloaded.MCPImport)
+	}
+	// Absent block stays nil — zero-breakage default.
+	if err := os.WriteFile(filepath.Join(home, ".loopy", "config.json"), []byte(`{
+  "defaultModel": "m1",
+  "providers": { "a": { "baseUrl": "https://a", "api": "openai-completions" } },
+  "models": { "m1": { "providers": ["a"] } }
+}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg2, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg2.MCPImport != nil {
+		t.Errorf("absent mcpImport must stay nil, got %+v", cfg2.MCPImport)
+	}
+}
+
+// TestLoadPreservesMCPImportOnClobber: regenerating defaults after a clobber
+// keeps the user's import gating (same rule as MCP servers).
+func TestLoadPreservesMCPImportOnClobber(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	dir := filepath.Join(home, ".loopy")
+	os.MkdirAll(dir, 0o700)
+	os.WriteFile(filepath.Join(dir, "config.json"), []byte(
+		`{"providers":null,"models":null,"mcpImport":{"codex":{"enabled":false}}}`), 0o600)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.MCPImport == nil || cfg.MCPImport.Codex == nil || *cfg.MCPImport.Codex.Enabled {
+		t.Fatalf("mcpImport must survive clobber recovery, got %+v", cfg.MCPImport)
+	}
+}
+
 func TestLoadRecoversFromClobberedConfig(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

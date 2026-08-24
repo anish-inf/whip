@@ -117,7 +117,8 @@ slow or broken server never blocks the loop (calls fail fast with an
 actionable message, and dropped sessions auto-reconnect with backoff).
 `/mcp` shows live status; `/mcp <name> reconnect|enable|disable` manages
 servers without restarting. Server instructions teach the model how to use
-each server's tools automatically. CLI: `loopy mcp list|add|remove`, and
+each server's tools automatically. CLI: `loopy mcp list|add|remove|import`
+(`import [--dry-run]` copies imported servers into loopy's own config), and
 `loopy mcp test <name>` to doctor one server (status, timing, tool names,
 stderr tail; non-zero exit — validate a `.mcp.json` in CI). `loopy mcp
 serve` runs loopy's own tools (read/bash/edit/write) as an MCP server for
@@ -148,3 +149,19 @@ select the folder**. Set `"browser": { "mode": "extension" }` in
 icon (a green ● appears) to let loopy drive it; click again to detach. While
 pinned, Chrome shows a "loopy is debugging this browser" bar — that's the
 mechanism doing the work.
+
+Gate the claude/codex imports with the `"mcpImport"` block — useful when
+another app writes MCP entries into `~/.codex/config.toml` you don't want
+(blocked servers stay visible in `/mcp` and `mcp list` instead of silently
+loading):
+
+```json
+{
+  "mcpImport": {
+    "codex": { "enabled": true, "exclude": ["node_repl"] }
+  }
+}
+```
+
+Per source: `enabled` kills the whole source, `only` is a name allowlist,
+`exclude` a denylist (wins over `only`). No block = import everything.

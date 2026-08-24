@@ -170,7 +170,7 @@ in the system prompt — the feature paid for itself on first run.
 | 3 | First-settle note | 1 | ✅ shipped |
 | 4 | Auto-reconnect backoff | 1 | ✅ shipped |
 | 5 | Server instructions in system prompt | 1 | ✅ shipped |
-| 6 | `mcp import` | 2 | planned |
+| 6 | `mcp import` | 2 | ✅ shipped (with import source gating, see `.ai-docs/plans/mcp-import-toggle/`) |
 | 7 | `mcp test` doctor | 2 | ✅ shipped |
 | 8 | Overlay entries | 2 | planned |
 | 9 | serve project conventions | 3 | parked |

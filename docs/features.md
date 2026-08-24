@@ -303,10 +303,24 @@ expand from loopy's environment.
 - **TUI** — `/mcp` shows the status table (`● N tools` / `✗ err` /
   `○ disabled` / `◌ connecting…`); `/mcp <name> reconnect|enable|disable`
   reconnects live or persists a toggle through the guarded `Config.Save`.
-- **CLI** — `loopy mcp list` (merged view with source labels), `loopy mcp
-  add <name> -- <cmd...>` / `--url`, `loopy mcp remove`. `loopy mcp serve`
-  (`serve.go`) exposes loopy's read/bash/edit/write as an MCP stdio server
-  for other harnesses.
+- **CLI** — `loopy mcp list` (merged view with per-name source labels —
+  `loopy config` / `.mcp.json` / `codex config` — and a `blocked` state),
+  `loopy mcp add <name> -- <cmd...>` / `--url`, `loopy mcp remove`,
+  `loopy mcp import [--dry-run]` (materializes imported servers into loopy's
+  config; `--dry-run` prints the JSONC fragment without writing; blocked
+  servers are never imported). `loopy mcp serve` (`serve.go`) exposes loopy's
+  read/bash/edit/write as an MCP stdio server for other harnesses.
+- **Import gating** — the `"mcpImport"` block in `~/.loopy/config.json`
+  (`{"claude": …, "codex": …}` per source: `enabled`, `only` allowlist,
+  `exclude` denylist — exclude wins over only; absent block imports both
+  sources, the pre-gating behavior). Filtered-out imports land in the
+  discovery result's `Blocked` map as disabled+noted copies
+  (`LoadMergedFiltered`), stay visible in `/mcp` and `loopy mcp list`
+  (`○ disabled — blocked by mcpImport config`), and `/mcp <name> enable` on a
+  blocked name refuses with a pointer at the config instead of silently
+  shadowing. This is the fix for third-party apps writing MCP entries into
+  `~/.codex/config.toml` (e.g. the ChatGPT desktop app's `node_repl`) that
+  loopy would otherwise pick up wholesale.
 - **Shutdown** — `Manager.Close()` runs before `bashrun.KillAll()`; stdio
   children spawn in their own process group, and the SDK terminates them
   (stdin close → SIGTERM → SIGKILL after 3s).
@@ -333,14 +347,19 @@ Polish (the "never stuck, always know why" pass):
   names, stderr tail on failure, non-zero exit — CI-checkable `.mcp.json`.
 
 Tests: `config_test.go` (claude/codex parsing incl. a real-world codex
-config, merge precedence, discovery errors, tool-name round-trips),
-`manager_test.go` (connect/call, error-as-output, structured+media
+config, merge precedence, discovery errors, tool-name round-trips, import
+policy filtering — blocked-in-`Blocked`, exclude-beats-only, loopy-name
+shadow protection — and the blocked node_repl scenario at the manager
+level), `manager_test.go` (connect/call, error-as-output, structured+media
 flattening, dead-server degradation, reconnect, parallel calls under `-race`,
 ctx cancel mid-connect), `loop_test.go` (model→MCP→model round trip against
 a fake provider; stale def on a dead server returns `"Error: …"` and the turn
 completes), `selfhost_test.go` (`loopy mcp serve` end-to-end, gated on
-`LOOPY_TEST_SELFHOST=1`), `tui/mcp_test.go` (status view, toggle persistence
-round-trip).
+`LOOPY_TEST_SELFHOST=1`), `tui/mcp_test.go` (status view incl. blocked rows,
+toggle persistence round-trip, enable-on-blocked refusal),
+`config/config_test.go` (mcpImport JSONC round-trip, clobber recovery
+preserving the block), `cmd/loopy/mcp_import_test.go` (import dry-run vs
+apply, idempotence, blocked servers never imported).
 
 ## Process safety
 

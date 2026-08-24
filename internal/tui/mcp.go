@@ -45,6 +45,10 @@ func (m *model) mcpCommand(fields []string) (tea.Model, tea.Cmd) {
 // into loopy's config first — otherwise a bare {enabled:false} entry would
 // shadow the import on next launch and lose the command/url for re-enable.
 func (m *model) mcpSetEnabled(name string, enabled bool) {
+	if m.mcpMgr.BlockedByPolicy(name) {
+		m.append(errStyle.Render(fmt.Sprintf("mcp server %s is blocked by the mcpImport config — edit ~/.loopy/config.json (or remove the gate) to enable it", name)))
+		return
+	}
 	live, ok := m.mcpMgr.Config(name)
 	if !ok {
 		m.append(errStyle.Render("no MCP server named " + name))
@@ -80,7 +84,7 @@ func (m *model) mcpSetEnabled(name string, enabled bool) {
 // mcpStatusView renders the /mcp table: one row per server with status,
 // tool count, and failure detail.
 func (m *model) mcpStatusView() string {
-	servers := m.mcpMgr.Statuses()
+	servers := append(m.mcpMgr.Statuses(), m.mcpMgr.Blocked()...)
 	if len(servers) == 0 {
 		return dimStyle.Render("no MCP servers")
 	}

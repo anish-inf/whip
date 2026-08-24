@@ -263,14 +263,17 @@ func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string) (s
 	m.wireTasks() // redraw the UI when background subagents start/settle
 
 	// MCP: merge loopy's own config with imported claude (.mcp.json) and codex
-	// (~/.codex/config.toml) servers, then kick concurrent connects in the
-	// background. Tool calls block on that server's first settle only, so a
+	// (~/.codex/config.toml) servers — gated by the mcpImport policy, whose
+	// blocked entries stay visible in /mcp — then kick concurrent connects in
+	// the background. Tool calls block on that server's first settle only, so a
 	// slow/hung server never delays startup. Discovery problems (a broken
 	// .mcp.json) land as a transcript note, not a startup failure.
 	if wd, wdErr := os.Getwd(); wdErr == nil {
-		merged, mcpErrs := mcp.LoadMerged(wd, mcp.FromConfigMap(cfg.MCPServers))
-		if len(merged) > 0 || len(mcpErrs) > 0 {
+		disc := mcp.LoadMergedFiltered(wd, mcp.FromConfigMap(cfg.MCPServers), mcp.ImportPolicyFrom(cfg.MCPImport))
+		merged, mcpErrs := disc.Merged, disc.Errs
+		if len(merged) > 0 || len(disc.Blocked) > 0 || len(mcpErrs) > 0 {
 			m.mcpMgr = mcp.NewManager(merged)
+			m.mcpMgr.SetBlocked(disc.Blocked)
 			// MCP connects settle in the background; push each new tool set
 			// into the CURRENT agent (mutex-guarded on the agent side) so
 			// servers that connect after turn 1 show up without a restart.
