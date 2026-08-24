@@ -100,8 +100,8 @@ func TestE2EHeadless(t *testing.T) {
 		t.Fatalf("open headless: %v", err)
 	}
 	defer b.Close()
-	if b.mode != ModeHeadless {
-		t.Fatalf("mode: %v", b.mode)
+	if b.Mode() != ModeHeadless {
+		t.Fatalf("mode: %v", b.Mode())
 	}
 
 	if err := b.Navigate(ctx, url+"/set-cookie"); err != nil {
@@ -220,7 +220,7 @@ func TestE2ELiveAttach(t *testing.T) {
 	// see the cookie.
 	t.Setenv("LOOPY_CDP_URL", fmt.Sprintf("http://127.0.0.1:%d", port))
 	deadline := time.Now().Add(30 * time.Second)
-	var b *Browser
+	var b Backend
 	var err error
 	for time.Now().Before(deadline) {
 		b, err = Open(ctx, ModeLive)

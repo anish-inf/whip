@@ -196,7 +196,7 @@ func parseValue(s string) (any, error) {
 
 // exec runs one statement, returning printed output and an optional
 // screenshot JPEG.
-func (s browserStmt) exec(ctx context.Context, b *browser.Browser) (out string, shot []byte, err error) {
+func (s browserStmt) exec(ctx context.Context, b browser.Backend) (out string, shot []byte, err error) {
 	if s.name == "print" {
 		switch a := s.args[0].(type) {
 		case browserStmt:

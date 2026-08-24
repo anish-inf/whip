@@ -82,7 +82,7 @@ func BrowserExec() Tool {
 			if err != nil {
 				return "", err
 			}
-			return sess.Do(ctx, func(b *browser.Browser) (string, error) {
+			return sess.Do(ctx, func(b browser.Backend) (string, error) {
 				return runBrowserCode(ctx, b, a.Code, a.Session)
 			})
 		},
@@ -93,7 +93,7 @@ func BrowserExec() Tool {
 // The program is NOT a full JS engine — each statement is one helper call,
 // which keeps parsing trivially safe and the semantics obvious. js(...)
 // snippets are passed through to the page verbatim.
-func runBrowserCode(ctx context.Context, b *browser.Browser, code, session string) (string, error) {
+func runBrowserCode(ctx context.Context, b browser.Backend, code, session string) (string, error) {
 	prog, err := parseBrowserProgram(code)
 	if err != nil {
 		return "", err
@@ -131,7 +131,7 @@ func runBrowserCode(ctx context.Context, b *browser.Browser, code, session strin
 // neutralizeIfBlocked re-checks the current page URL against the
 // always-blocked floor and navigates to about:blank on a hit, returning a
 // note for the model. Best-effort: probe failures don't fail the call.
-func neutralizeIfBlocked(ctx context.Context, b *browser.Browser) string {
+func neutralizeIfBlocked(ctx context.Context, b browser.Backend) string {
 	info, err := b.Info(ctx)
 	if err != nil || info.URL == "" || info.Dialog != nil {
 		return ""

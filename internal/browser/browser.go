@@ -98,6 +98,11 @@ type Backend interface {
 	// Close releases resources. Live mode detaches only (never closes the
 	// user's browser); dedicated/headless kill the launched process.
 	Close() error
+	// Mode returns the session's browser mode (for mode-dependent policy).
+	Mode() Mode
+	// HandleDialog accepts or dismisses the next pending native JS dialog,
+	// blocking briefly for one to appear.
+	HandleDialog(accept bool, promptText string) error
 }
 
 // PageInfo mirrors browser-harness's page_info() helper.
@@ -128,10 +133,28 @@ type Browser struct {
 	launcher *launcher.Launcher // non-nil only when we launched (dedicated/headless)
 }
 
+// Driver selects the browser driver. "" or "rod" = rod (default);
+// "chromedp" = the spike driver. Set via LOOPY_BROWSER_DRIVER.
+var Driver = func() string {
+	if d := os.Getenv("LOOPY_BROWSER_DRIVER"); d != "" {
+		return d
+	}
+	return "rod"
+}()
+
 // Open connects (or launches) per mode and attaches to a controllable tab.
 // Attach mode discovery errors are actionable (ErrNoLiveBrowser,
 // ErrPermissionBlocked) — surface them to the user, not the model.
-func Open(ctx context.Context, mode Mode) (*Browser, error) {
+// Returns the Backend selected by Driver.
+func Open(ctx context.Context, mode Mode) (Backend, error) {
+	if Driver == "chromedp" {
+		return openChromedp(ctx, mode)
+	}
+	return openRod(ctx, mode)
+}
+
+// openRod is the rod-backed Open (the default driver).
+func openRod(ctx context.Context, mode Mode) (*Browser, error) {
 	b := &Browser{mode: mode}
 	switch mode {
 	case ModeLive:

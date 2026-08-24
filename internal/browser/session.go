@@ -40,7 +40,7 @@ type Session struct {
 	mode    Mode
 	sem     chan struct{}
 	mu      sync.Mutex
-	backend *Browser
+	backend Backend
 }
 
 // Session returns the named session (default name "default"), validating
@@ -77,7 +77,7 @@ func (m *Manager) Session(name string) (*Session, error) {
 // Do runs fn with the session's live backend, holding the session lock.
 // A dead backend is reopened once (stale-tab/browser-closed recovery);
 // reopen errors are returned for the caller to surface.
-func (s *Session) Do(ctx context.Context, fn func(b *Browser) (string, error)) (string, error) {
+func (s *Session) Do(ctx context.Context, fn func(b Backend) (string, error)) (string, error) {
 	s.sem <- struct{}{}
 	defer func() { <-s.sem }()
 	b, err := s.get(ctx)
@@ -96,7 +96,7 @@ func (s *Session) Do(ctx context.Context, fn func(b *Browser) (string, error)) (
 	return out, err
 }
 
-func (s *Session) get(ctx context.Context) (*Browser, error) {
+func (s *Session) get(ctx context.Context) (Backend, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.backend != nil {
