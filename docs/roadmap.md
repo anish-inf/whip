@@ -2,7 +2,8 @@
 
 UX niceties worth adopting, learned from [pi](file:///home/abe/code/pi) and
 [opencode](file:///home/abe/code/coding-harnesses/opencode). Check things off as they land.
-Full exploration reports: [learnings/other-harnesses/opencode/](learnings/other-harnesses/opencode/).
+Full exploration reports: [learnings/other-harnesses/opencode/](learnings/other-harnesses/opencode/),
+[learnings/other-harnesses/exo.md](learnings/other-harnesses/exo.md) (durable state, self-modification, scheduler/adapters).
 
 **Reference docs:** [features.md](features.md) (what's shipped, where it lives,
 its tests) and [concurrency.md](concurrency.md) (the channel patterns behind
@@ -19,6 +20,7 @@ parallel tool calls and background subagents).
 - [Safety & permissions](#safety--permissions)
 - [Theming & config](#theming--config)
 - [CLI surface](#cli-surface)
+- [Autonomy & durability](#autonomy--durability) (exo)
 
 ## Input & editing
 
@@ -101,7 +103,8 @@ Improvement plan with per-item checkboxes: [`.ai-docs/plans/mcp-polish/`](../.ai
 
 - [ ] Permission prompt: Allow once / Allow always / Reject, where "always" previews the exact rule it installs and "reject" takes a free-text redirect message back to the model (opencode `routes/session/permission.tsx`)
 - [ ] Command-prefix arity for useful "allow always" rules: `git checkout branch` → rule for `git checkout`, not the whole string (opencode `permission/arity.ts`)
-- [ ] Project trust prompt on first run in a directory (pi: `trust.json`, `defaultProjectTrust: "ask"`)
+- [x] Project trust prompt on first run in a directory (pi: `trust.json`, `defaultProjectTrust: "ask"`) — `internal/tui/trust.go` + `~/.loopy/trusted.json`, plain-terminal prompt before the TUI starts, piped stdin declines safely
+- [ ] Secrets as references, never values: `"$VAR"`/`"!cmd"` (or `${ENV_VAR}`-style) indirection in config and MCP/tool init, resolved host-side at point of use so raw keys never enter the event log or model context (exo `crates/exoharness/src/secrets.rs` — AES-GCM at rest with keychain/file master key is the full version; the indirection alone is most of the safety)
 
 ## Theming & config
 
@@ -117,3 +120,20 @@ Improvement plan with per-item checkboxes: [`.ai-docs/plans/mcp-polish/`](../.ai
 - [ ] Non-interactive one-shot mode: `loopy run "prompt"` — reads piped stdin too, `--format json` emits the raw event stream for scripting (opencode `cli/cmd/run.ts`)
 - [ ] `loopy sessions` list subcommand
 - [ ] Env markers in child processes (`LOOPY=1`, `LOOPY_SESSION_ID`) so scripts can detect they run under the agent (opencode sets `AGENT=1`, `OPENCODE_PID`)
+
+## Autonomy & durability
+
+From [exo](learnings/other-harnesses/exo.md) — a long-running agent built for safe self-modification. The unifying idea: an **append-only event log** is the source of truth, the prompt is a derived view, and every durable mutation goes through a named tool so the audit trail is complete.
+
+- [ ] Event-sourced session store: sessions.db becomes an append-only `events` table (typed kinds: message/tool_call/tool_result/lifecycle/**custom**) instead of a messages table; monotonic rowid gives cursor pagination for free; custom kinds are the extension point (compaction, host lifecycle) so new features don't need new tables (exo `crates/exoharness/src/types.rs` EventData; serde-alias discipline keeps old rows readable)
+- [ ] Compaction as a recorded event, not a destructive rewrite: the summary + cutoff land as a custom event; the raw log stays queryable so a bad compaction can be inspected and retried (exo spec.md: "the durable conversation does not have to equal the prompt")
+- [ ] `/events` introspection tool + `loopy events --tail`: let the model query its own history (lifecycle/host kinds by default, `kinds=["messages"]` sums usage for cost questions); the CLI tail is `SELECT … WHERE id > ?` polling (exo `list_conversation_events`, `pnpm events:tail`)
+- [ ] Synthesize error tool-results for dangling tool calls when materializing a crashed/interrupted turn on resume — keeps the API's tool-call pairing invariant (exo `flushDanglingToolResults`, `exoharness/typescript/harness/index.ts:786-804`)
+- [ ] `remember`/`forget` memory tools: one agent-global store (a KV row or `~/.loopy/memory.json`), injected as a developer message every turn with hard caps (exo: 200 entries × 600 chars, oldest dropped), corrupt store degrades loudly instead of bricking prompt assembly (exo `exo/tools/memory-tools.ts`)
+- [ ] `todowrite` planning tool: conversation-scoped, full-list rewrite each call, one item in_progress, injected back each round so the plan survives long tool loops (exo `exo/tools/todo-tools.ts`; the claude/opencode pattern)
+- [ ] Workspace rewind: git-snapshot the working tree per turn (or on demand) so file changes can be rolled back, and record the rollback as an event — the "rewind does not erase history" invariant: rolling back world state must not delete the memory of what was tried (exo `rewind_sandbox` + append `SandboxStarted{snapshot_id}`; opencode `revert.ts` is the same idea)
+- [ ] `rebuild_and_restart_loopy` self-update tool: queue an outcome record with a mandatory free-text `reason`, spawn a detached deferred rebuild, return immediately so the turn finishes; drain-marker file claimed between turns + Unix `exec()` to swap the binary; outcome appended to the event log so the model can verify its own update landed (exo `guardian-tools.ts` + `exo-service-guardian`)
+- [ ] Minimal scheduler: `@every 10m` / `@at <rfc3339>` / `*/N * * * *` tasks firing machine-authored user-message turns; grid-anchored fires (slow runs don't drift), missed-fire policy skip/once/all-cap-100, per-task `reportPrompt` instructing the future wakeup how to report, record-then-deliver outbox so a crash between run and wakeup redelivers on startup (exo `scheduler_runtime.rs` — the grammar is ~70 lines, an in-process goroutine ticker is enough)
+- [ ] Generic wakeup turn source: one internal `Wakeup{source, prompt}` channel consumed by the agent loop — scheduler, webhooks, post-restart notices all become the same mechanism; render with a distinct gutter marker (exo `conversation_wakeup.rs`: wakeups are just user messages)
+- [ ] SELF.md self-map: a checked-in navigational map of loopy's own source (important paths, common commands, diagnosis procedure); inject its *path* each turn, not contents — reading it is an agent action (exo `exo/SELF.md` + `EXO_SELF_MAP`)
+- [ ] Stealable `me.md` operating rules for the system prompt: "the tool set changes turn to turn — never assume a tool exists because it did earlier"; "after ~3 failed attempts on the same blocker, escalate plainly instead of looping"; git hygiene ("never `git add .`, review staged diff for secrets, never force-push") (exo `exo/prompts/me.md`)
