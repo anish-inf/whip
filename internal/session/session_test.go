@@ -76,6 +76,7 @@ func TestStoreRoundTrip(t *testing.T) {
 		{Role: "user", Content: "first question here", Authored: true, SentAt: &sent},
 		{Role: "assistant", Content: "the answer", Usage: &use, Model: "kimi-k3-fast @ inference",
 			ToolCalls: []llm.ToolCall{{ID: "c1", DurationMs: 42, ExitCode: 0}}},
+		{Role: "tool", Content: "c1 result", ToolCallID: "c1", Name: "bash"},
 		{Role: "user", Content: "follow-up"},
 		{Role: "assistant", Content: "final\nanswer"},
 	}
@@ -90,7 +91,7 @@ func TestStoreRoundTrip(t *testing.T) {
 	if meta.ID != id || meta.Title != "first question here" {
 		t.Fatalf("meta: %+v", meta)
 	}
-	if len(got) != 4 || got[0].Role != "user" || got[3].Content != "final\nanswer" {
+	if len(got) != 5 || got[0].Role != "user" || got[4].Content != "final\nanswer" {
 		t.Fatalf("messages: %+v", got)
 	}
 	// the submission timestamp must survive the round trip (rewind picker)
@@ -113,6 +114,11 @@ func TestStoreRoundTrip(t *testing.T) {
 	if u != "follow-up" || a != "final\nanswer" {
 		t.Fatalf("last exchange: %q %q", u, a)
 	}
+	// fully-answered history passes through Load unchanged (no synthesis).
+	// Save(id, 1, …) skips the system row, so one fewer row is stored.
+	if len(got) != len(msgs)-1 {
+		t.Fatalf("answered history must load verbatim: got %d, saved %d", len(got), len(msgs))
+	}
 
 	recent, err := st.Recent(10)
 	if err != nil || len(recent) != 1 || recent[0].ID != id {
@@ -127,7 +133,7 @@ func TestStoreRoundTrip(t *testing.T) {
 	if err := st.Save(id, 1, msgs, "kimi-k3-fast", "inference"); err != nil {
 		t.Fatal(err)
 	}
-	if _, got, _ = st.Load(id); len(got) != 4 {
+	if _, got, _ = st.Load(id); len(got) != 5 {
 		t.Fatalf("re-save duplicated rows: %d", len(got))
 	}
 }
@@ -300,5 +306,63 @@ func TestGoalPersistence(t *testing.T) {
 	st.SetGoal(id, "")
 	if meta, _, _ = st.Load(id); meta.Goal != "" {
 		t.Fatalf("goal not cleared: %+v", meta)
+	}
+}
+
+// An interrupted turn (ctrl+c / crash) persists an assistant tool_call with
+// no result; Load must synthesize an error result so the resumed conversation
+// satisfies the API's tool_call/tool-result pairing contract.
+func TestLoadSynthesizesDanglingToolResults(t *testing.T) {
+	st, err := Open(filepath.Join(t.TempDir(), "s.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	call := func(id, name string) llm.ToolCall {
+		var tc llm.ToolCall
+		tc.ID, tc.Function.Name = id, name
+		return tc
+	}
+	id, _ := st.Create("/tmp", "m", "p")
+	msgs := []llm.Message{
+		{Role: "system", Content: "sys"},
+		{Role: "user", Content: "go"},
+		// crash between the two parallel calls' results: c1 answered, c2 dangling
+		{Role: "assistant", ToolCalls: []llm.ToolCall{call("c1", "read"), call("c2", "bash")}},
+		{Role: "tool", Content: "file body", ToolCallID: "c1", Name: "read"},
+		{Role: "user", Content: "next"},
+		// a whole tool batch lost to the crash
+		{Role: "assistant", ToolCalls: []llm.ToolCall{call("c3", "edit"), call("c4", "write")}},
+	}
+	if err := st.Save(id, 1, msgs, "m", "p"); err != nil {
+		t.Fatal(err)
+	}
+
+	_, got, err := st.Load(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// c2's synthetic result lands right after its assistant message (ahead of
+	// c1's real one — result order among a batch's calls is free; only the
+	// pairing matters); c3 and c4 each get their own at the end of history.
+	wantRoles := []string{"user", "assistant", "tool", "tool", "user", "assistant", "tool", "tool"}
+	if len(got) != len(wantRoles) {
+		t.Fatalf("loaded %d messages, want %d: %+v", len(got), len(wantRoles), got)
+	}
+	for i, role := range wantRoles {
+		if got[i].Role != role {
+			t.Fatalf("message %d: role %q, want %q (%+v)", i, got[i].Role, role, got)
+		}
+	}
+	for i, id := range map[int]string{2: "c2", 6: "c3", 7: "c4"} {
+		m := got[i]
+		if m.ToolCallID != id || m.Name == "" || !strings.Contains(m.Content, "interrupted") {
+			t.Fatalf("synthetic result %d malformed: %+v", i, m)
+		}
+	}
+	// the real result is untouched
+	if got[3].Content != "file body" {
+		t.Fatalf("answered result changed: %+v", got[3])
 	}
 }

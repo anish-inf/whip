@@ -290,7 +290,51 @@ func (s *Store) Load(idOrPrefix string) (Meta, []llm.Message, error) {
 		}
 		msgs = append(msgs, m)
 	}
-	return meta, msgs, mrows.Err()
+	return meta, answerDanglingToolCalls(msgs), mrows.Err()
+}
+
+// answerDanglingToolCalls appends a synthetic error result for every
+// persisted tool call that has none — a ctrl+c or crash mid-turn interrupts
+// between the assistant message and its results, and the API rejects a
+// resumed conversation with an unanswered tool_call. Results go right after
+// the assistant message (the API wants them before the next non-tool
+// message); a fully-answered history is returned unchanged.
+func answerDanglingToolCalls(msgs []llm.Message) []llm.Message {
+	answered := make(map[string]bool, len(msgs))
+	dangling := false
+	for _, m := range msgs {
+		if m.Role == "tool" {
+			answered[m.ToolCallID] = true
+		}
+	}
+	for _, m := range msgs {
+		if m.Role == "assistant" {
+			for _, tc := range m.ToolCalls {
+				dangling = dangling || !answered[tc.ID]
+			}
+		}
+	}
+	if !dangling {
+		return msgs
+	}
+	out := make([]llm.Message, 0, len(msgs)+4)
+	for _, m := range msgs {
+		out = append(out, m)
+		if m.Role != "assistant" {
+			continue
+		}
+		for _, tc := range m.ToolCalls {
+			if !answered[tc.ID] {
+				out = append(out, llm.Message{
+					Role:       "tool",
+					Content:    "Error: tool call interrupted — the session ended before a result was recorded",
+					ToolCallID: tc.ID,
+					Name:       tc.Function.Name,
+				})
+			}
+		}
+	}
+	return out
 }
 
 // Recent returns up to n sessions, newest first.
