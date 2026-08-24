@@ -2859,8 +2859,42 @@ func (m *model) View() string {
 	if m.menu != nil {
 		b.WriteString("\n" + m.menuView())
 	}
-	b.WriteString("\n") // bottom padding
+	b.WriteString("\n" + m.statusView()) // persistent status line
+	b.WriteString("\n")                  // bottom padding
 	return b.String()
+}
+
+// statusView renders the always-on status line below the input: current
+// directory, model (effort), provider, and session token spend. It mirrors
+// the header's data but stays put while the transcript scrolls, so the four
+// facts are always visible no matter where the viewport sits.
+func (m *model) statusView() string {
+	model := m.modelName
+	if e := effortLabel(m.agent.Effort); e != "off" {
+		model += " (" + e + ")"
+	}
+	u := m.agent.Usage()
+	spend := fmt.Sprintf("%s/%s tok", fmtTok(u.PromptTokens), fmtTok(u.CompletionTokens))
+	if c := u.Cached(); c > 0 {
+		spend = fmt.Sprintf("%s(%s)/%s tok", fmtTok(u.PromptTokens), fmtTok(c), fmtTok(u.CompletionTokens))
+	}
+	line := fmt.Sprintf(" %s   %s   %s   %s", shortCWD(), model, m.provName, spend)
+	return dimStyle.Render(truncLine(line, max(m.width, 0)))
+}
+
+// shortCWD renders the working directory compactly for the status line: the
+// home directory collapses to ~ and only the last two path segments survive,
+// so a deep path doesn't crowd out the rest of the status.
+func shortCWD() string {
+	dir := cwd()
+	if home, err := os.UserHomeDir(); err == nil && strings.HasPrefix(dir, home) {
+		dir = "~" + strings.TrimPrefix(dir, home)
+	}
+	parts := strings.Split(strings.Trim(dir, "/"), "/")
+	if len(parts) > 3 {
+		return "…/" + strings.Join(parts[len(parts)-3:], "/")
+	}
+	return dir
 }
 
 const previewLines = 5
