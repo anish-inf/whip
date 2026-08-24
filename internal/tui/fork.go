@@ -110,6 +110,7 @@ func (m *model) fork(cut int, title string) {
 		return
 	}
 	m.sessionID = newID
+	m.agent.Tasks().SetSessionID(newID)
 	m.agent.Messages = m.agent.Messages[:cut+1]
 	m.future = nil
 	m.saved = cut + 1

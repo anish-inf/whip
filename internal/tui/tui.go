@@ -151,6 +151,7 @@ type model struct {
 
 	tasksFocus bool      // the tasks dock owns ↑/↓/enter/esc instead of the input
 	taskSel    int       // selected row in the dock (index into newest-first tasks)
+	dockSkip   int       // non-task rows at the dock's top (focused hint) — click math skips them
 	taskVP     *taskView // open per-task detail view; nil when on the main thread
 	dockRows   int       // rendered dock height; layout() maintains it for click math
 
@@ -485,6 +486,26 @@ func (m *model) resume(id string) error {
 	m.applyCompactModel()
 	m.agent.CompactThreshold = compactThresholdFor(m.cfg)
 	m.wireTasks()
+	// Publish before restoring so the settled rows record against this session.
+	m.agent.Tasks().SetSessionID(meta.ID)
+	// Restore the session's background subagents into the dock. Everything
+	// comes back settled: a process exit kills in-flight subagents, so a row
+	// still "running" on disk means it died with the last exit.
+	if tasks, terr := m.store.LoadTasks(meta.ID); terr == nil {
+		for _, st := range tasks {
+			status := agent.TaskStatus(st.Status)
+			if status == agent.TaskRunning {
+				status, st.Report = agent.TaskError, "interrupted — loopy exited before this subagent finished"
+			}
+			m.agent.RestoreTask(agent.BackgroundTask{
+				ID: st.ID, Description: st.Description, Prompt: st.Prompt,
+				Status: status, Report: st.Report,
+				StartedAt: st.StartedAt, EndedAt: st.EndedAt,
+			})
+		}
+	} else {
+		config.LogEvent("session.task", "load failed: "+terr.Error())
+	}
 	m.agent.Messages = append(m.agent.Messages, msgs...)
 	if contains(m.effortsFor(), effort) {
 		m.agent.Effort = effort
@@ -561,6 +582,7 @@ func (m *model) persist() {
 			return
 		}
 		m.sessionID = id
+		m.agent.Tasks().SetSessionID(id) // publish before Save so a settling subagent records
 	}
 	if err := m.store.Save(m.sessionID, m.saved, m.agent.Messages, m.modelName, m.provName); err != nil {
 		config.LogEvent("session.save", "FAILED id="+m.sessionID+": "+err.Error())
@@ -1002,6 +1024,12 @@ func (m *model) layout() {
 	m.dockRows = 0
 	if dock := m.tasksDock(); dock != "" { // lipgloss.Height("") is 1, not 0
 		m.dockRows = lipgloss.Height(dock)
+		// clicking computes task rows from the strip's top; a focused dock's
+		// hint row isn't a task — skip it
+		m.dockSkip = 0
+		if m.tasksFocus {
+			m.dockSkip++
+		}
 		chrome += m.dockRows + 1 // strip + the blank line above the input
 	}
 	w, h := m.width, max(m.height-chrome, 1)
@@ -1011,11 +1039,12 @@ func (m *model) layout() {
 	}
 }
 
-// dockTop returns the screen row where the tasks dock starts (its rows are
-// the last rows above the input box and bottom pad). layout() keeps dockRows
-// in sync with what View renders.
+// dockTop returns the screen row of the first TASK row in the dock: the dock
+// renders as the last dockRows rows above the input box and bottom pad, but
+// dockSkip non-task rows (the focused hint) sit on top of the task rows.
+// layout() keeps both in sync with what View renders.
 func (m *model) dockTop() int {
-	return m.height - 2 - m.input.Height() - m.dockRows
+	return m.height - 2 - m.input.Height() - m.dockRows + m.dockSkip
 }
 
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -1056,7 +1085,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
-		if m.picker == nil && m.mpicker == nil {
+		if m.picker == nil && m.mpicker == nil && m.palette == nil {
 			// dock rows sit just above the input box: click selects/opens,
 			// wheel scrolls the selection through the strip
 			if top, n := m.dockTop(), len(m.dockTasks()); n > 0 && msg.Y >= top && msg.Y < top+n {
@@ -1858,6 +1887,24 @@ func (m *model) applyCompactModel() {
 // every start/settle. OnChange runs on the worker goroutine, so it only sends
 // a message (never touches UI state directly).
 func (m *model) wireTasks() {
+	// Persist every start/settle to the session store so --resume can restore
+	// the dock. Headless-safe (no prog needed). The session id comes in as an
+	// argument — published via SetSessionID — so this worker-goroutine
+	// callback never races the UI goroutine reading m.sessionID.
+	st := m.store
+	m.agent.Tasks().OnRecord = func(sessionID string, t *agent.BackgroundTask) {
+		if st == nil || sessionID == "" {
+			return // no session row yet; the settle's OnRecord will land after one exists
+		}
+		if err := st.SaveTask(sessionID, session.Task{
+			ID: t.ID, Description: t.Description, Prompt: t.Prompt,
+			Status: string(t.Status), Report: t.Report,
+			StartedAt: t.StartedAt, EndedAt: t.EndedAt,
+		}); err != nil {
+			config.LogEvent("session.task", "save failed: "+err.Error())
+		}
+	}
+	m.agent.Tasks().SetSessionID(m.sessionID)
 	if m.prog == nil {
 		return // headless (tests)
 	}
@@ -1887,10 +1934,10 @@ func (m *model) runningTasks() int {
 func (m *model) tasksView() string {
 	tasks := m.agent.Tasks().List()
 	if len(tasks) == 0 {
-		return dimStyle.Render("(no background tasks)")
+		return dimStyle.Render("(no background subagents)")
 	}
 	var b strings.Builder
-	b.WriteString(dimStyle.Render(fmt.Sprintf("background tasks (%d):", len(tasks))))
+	b.WriteString(dimStyle.Render(fmt.Sprintf("background subagents (%d):", len(tasks))))
 	for _, t := range tasks {
 		icon := "⏳"
 		switch t.Status {
@@ -2349,6 +2396,7 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 		m.future = nil   // no redo across a cleared conversation
 		m.setGoal("")    // clear before detaching so the old session's goal is dropped too
 		m.sessionID = "" // next turn starts a fresh session
+		m.agent.Tasks().SetSessionID("")
 		m.saved = 1
 		m.append(dimStyle.Render("(conversation cleared)"))
 	case "/compact":
@@ -2570,7 +2618,7 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 		m.append(m.doctorReport())
 	case "/help":
 		m.append(dimStyle.Render(
-			"/model <name> [provider] — switch model\n/context-doctor — audit what a fresh session injects (skills, MCP, tool schemas) and its token cost\n/mcp [name] [reconnect|enable|disable] — MCP servers: status, reconnect, toggle\n/compact [model] [provider]|off — compact now, or pick the compaction model (off restores the default); compaction level: ctrl+p › Compaction level\n/mouse — toggle mouse capture (on = wheel scroll + clicks, drag to copy)\n/theme [light|dark|auto] — color scheme (bare toggles)\n/tasks [id] — background subagents: focus the dock, or open one task's live view (ctrl+t toggles dock focus)\n/resume [id] — resume a previous session\n/fork [name] — copy this conversation into a new session (pick a point in the rewind picker with f)\n/rename [title] — retitle this session\n/goal <text> — keep working until the goal is met (resume | clear | rounds <n>|default [--global])\n/goal-from-context [n] — formulate a goal from the last n messages (default 8) and work until it's met\n/clear — reset conversation\n/cd [dir] — change working directory (bare prints it)\n/pwd — print working directory\n!<cmd> — run a shell command locally; output lands in the transcript and the conversation\n/quit — exit\ntab — complete · ctrl+t — focus the background-tasks dock (↑/↓ select, enter opens, esc backs out) · ctrl+o — toggle thinking tokens · ctrl+e — expand the last tool result · ctrl+j / shift+enter — newline · ctrl+v — paste image · esc — interrupt the agent · esc esc (idle) — rewind the conversation (↑/↓ browse, enter rewinds, f forks) · while busy with queued messages: ↑/↓ select, del removes · PgUp/PgDn — scroll · wheel — scroll · drag — select/copy text · ctrl+c ctrl+c — quit"))
+			"/model <name> [provider] — switch model\n/context-doctor — audit what a fresh session injects (skills, MCP, tool schemas) and its token cost\n/mcp [name] [reconnect|enable|disable] — MCP servers: status, reconnect, toggle\n/compact [model] [provider]|off — compact now, or pick the compaction model (off restores the default); compaction level: ctrl+p › Compaction level\n/mouse — toggle mouse capture (on = wheel scroll + clicks, drag to copy)\n/theme [light|dark|auto] — color scheme (bare toggles)\n/tasks [id] — background subagents: focus the dock, or open one subagent's live view (ctrl+t toggles dock focus)\n/resume [id] — resume a previous session\n/fork [name] — copy this conversation into a new session (pick a point in the rewind picker with f)\n/rename [title] — retitle this session\n/goal <text> — keep working until the goal is met (resume | clear | rounds <n>|default [--global])\n/goal-from-context [n] — formulate a goal from the last n messages (default 8) and work until it's met\n/clear — reset conversation\n/cd [dir] — change working directory (bare prints it)\n/pwd — print working directory\n!<cmd> — run a shell command locally; output lands in the transcript and the conversation\n/quit — exit\ntab — complete · ctrl+t — focus the subagents dock (↑/↓ select, enter opens, esc backs out) · ctrl+o — toggle thinking tokens · ctrl+e — expand the last tool result · ctrl+j / shift+enter — newline · ctrl+v — paste image · esc — interrupt the agent · esc esc (idle) — rewind the conversation (↑/↓ browse, enter rewinds, f forks) · while busy with queued messages: ↑/↓ select, del removes · PgUp/PgDn — scroll · wheel — scroll · drag — select/copy text · ctrl+c ctrl+c — quit"))
 	case "/model":
 		if len(fields) < 2 {
 			m.openModelPicker()
@@ -2684,7 +2732,7 @@ func (m *model) View() string {
 	}
 	// running background subagents get a badge; /tasks lists them
 	if n := m.runningTasks(); n > 0 {
-		left += fmt.Sprintf(" · ⚙ %d bg", n)
+		left += fmt.Sprintf(" · ⚙ %d sub", n)
 	}
 	// right-aligned clickable effort control; ◌ marks thinking display
 	right := "⚡ " + effortLabel(m.agent.Effort) + " "

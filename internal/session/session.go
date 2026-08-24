@@ -33,6 +33,17 @@ CREATE TABLE IF NOT EXISTS messages (
 	role       TEXT NOT NULL,
 	content    TEXT NOT NULL, -- llm.Message JSON
 	PRIMARY KEY (session_id, seq)
+);
+CREATE TABLE IF NOT EXISTS tasks (
+	session_id  TEXT NOT NULL REFERENCES sessions(id),
+	task_id     TEXT NOT NULL,
+	description TEXT NOT NULL,
+	prompt      TEXT NOT NULL,
+	status      TEXT NOT NULL,
+	report      TEXT NOT NULL DEFAULT '',
+	started_at  TEXT NOT NULL,
+	ended_at    TEXT NOT NULL DEFAULT '',
+	PRIMARY KEY (session_id, task_id)
 );`
 
 // Meta is a session's bookkeeping row.
@@ -76,6 +87,58 @@ func Open(path string) (*Store, error) {
 func (s *Store) SetGoal(id, goal string) error {
 	_, err := s.db.Exec(`UPDATE sessions SET goal=? WHERE id=?`, goal, id)
 	return err
+}
+
+// Task is one background subagent's persisted record. It deliberately
+// mirrors agent.BackgroundTask's exported fields without importing agent
+// (session is a leaf; the TUI converts between them).
+type Task struct {
+	ID          string
+	Description string
+	Prompt      string
+	Status      string // "running", "done", "error", "cancelled"
+	Report      string
+	StartedAt   time.Time
+	EndedAt     time.Time
+}
+
+// SaveTask upserts a background subagent's record for a session. Called on
+// start and on settle, so the final row holds the settled status/report.
+func (s *Store) SaveTask(sessionID string, t Task) error {
+	ended := ""
+	if !t.EndedAt.IsZero() {
+		ended = t.EndedAt.UTC().Format(time.RFC3339)
+	}
+	_, err := s.db.Exec(`INSERT OR REPLACE INTO tasks
+		(session_id, task_id, description, prompt, status, report, started_at, ended_at)
+		VALUES (?,?,?,?,?,?,?,?)`,
+		sessionID, t.ID, t.Description, t.Prompt, t.Status, t.Report,
+		t.StartedAt.UTC().Format(time.RFC3339), ended)
+	return err
+}
+
+// LoadTasks returns a session's persisted background subagents, oldest first.
+func (s *Store) LoadTasks(sessionID string) ([]Task, error) {
+	rows, err := s.db.Query(`SELECT task_id, description, prompt, status, report, started_at, ended_at
+		FROM tasks WHERE session_id=? ORDER BY started_at`, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Task
+	for rows.Next() {
+		var t Task
+		var started, ended string
+		if err := rows.Scan(&t.ID, &t.Description, &t.Prompt, &t.Status, &t.Report, &started, &ended); err != nil {
+			return nil, err
+		}
+		t.StartedAt, _ = time.Parse(time.RFC3339, started)
+		if ended != "" {
+			t.EndedAt, _ = time.Parse(time.RFC3339, ended)
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
 }
 
 func (s *Store) Close() error { return s.db.Close() }

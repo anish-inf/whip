@@ -4,9 +4,59 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/context-labs/loopy/internal/llm"
 )
+
+func TestTaskRoundTrip(t *testing.T) {
+	st, err := Open(filepath.Join(t.TempDir(), "s.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	id, err := st.Create("/tmp", "m", "p")
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now().Add(-time.Minute)
+	// start writes the running row…
+	if err := st.SaveTask(id, Task{ID: "task-1", Description: "probe", Prompt: "look around", Status: "running", StartedAt: start}); err != nil {
+		t.Fatal(err)
+	}
+	// …settle upserts the same row with the final state
+	end := time.Now()
+	if err := st.SaveTask(id, Task{ID: "task-1", Description: "probe", Prompt: "look around", Status: "done", Report: "the report", StartedAt: start, EndedAt: end}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SaveTask(id, Task{ID: "task-2", Description: "other", Prompt: "p", Status: "error", Report: "boom", StartedAt: start.Add(time.Second), EndedAt: end}); err != nil {
+		t.Fatal(err)
+	}
+
+	tasks, err := st.LoadTasks(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 2 {
+		t.Fatalf("expected 2 tasks (the upsert must not duplicate), got %d", len(tasks))
+	}
+	if tasks[0].ID != "task-1" || tasks[0].Status != "done" || tasks[0].Report != "the report" {
+		t.Fatalf("task-1 should hold the settled state, got %+v", tasks[0])
+	}
+	if tasks[0].EndedAt.IsZero() {
+		t.Fatal("ended_at should round-trip")
+	}
+	if tasks[1].ID != "task-2" || tasks[1].Status != "error" {
+		t.Fatalf("task-2: %+v", tasks[1])
+	}
+	// tasks belong to their session only
+	if other, _ := st.Create("/tmp", "m", "p"); true {
+		if got, _ := st.LoadTasks(other); len(got) != 0 {
+			t.Fatalf("a fresh session should have no tasks, got %d", len(got))
+		}
+	}
+}
 
 func TestStoreRoundTrip(t *testing.T) {
 	st, err := Open(filepath.Join(t.TempDir(), "s.db"))

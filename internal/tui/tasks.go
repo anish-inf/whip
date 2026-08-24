@@ -76,7 +76,7 @@ func (m *model) tasksDock() string {
 
 	rows := make([]string, 0, len(tasks)+2)
 	if m.tasksFocus {
-		rows = append(rows, dimStyle.Render(" ⚙ background — ↑/↓ select · enter open · x cancel · esc back"))
+		rows = append(rows, dimStyle.Render(" ⚙ subagents — ↑/↓ select · enter open · x cancel · esc back"))
 	}
 
 	budget := tasksDockHeight - len(rows)

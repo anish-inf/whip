@@ -53,6 +53,35 @@ type taskRegistry struct {
 	// OnChange fires (from the worker goroutine) when a task starts or settles;
 	// the TUI installs it to redraw the task list live.
 	OnChange func(*BackgroundTask)
+	// OnRecord fires (from the worker goroutine) right after OnChange on start
+	// and settle; the TUI installs it to persist the task to the session store.
+	// Separate from OnChange so headless tests (prog == nil) still record.
+	// sessionID is what the handler should record against: the TUI publishes
+	// it via SetSessionID (an atomic, so the worker goroutine never races the
+	// UI goroutine's session switching). "" = no session yet; handlers must
+	// skip recording then.
+	OnRecord  func(sessionID string, t *BackgroundTask)
+	sessionID atomic.Pointer[string]
+}
+
+// SetSessionID publishes the session task records belong to ("" clears it —
+// /clear and /fork do this so a task settling mid-switch doesn't record
+// against the wrong session). Atomic: the registry's OnRecord runs on the
+// subagent worker goroutine while the TUI sets this from the UI goroutine.
+func (r *taskRegistry) SetSessionID(id string) {
+	if id == "" {
+		r.sessionID.Store(nil)
+		return
+	}
+	r.sessionID.Store(&id)
+}
+
+// recordSession returns the published session id ("" when none).
+func (r *taskRegistry) recordSession() string {
+	if p := r.sessionID.Load(); p != nil {
+		return *p
+	}
+	return ""
 }
 
 func newTaskRegistry() *taskRegistry {
@@ -113,6 +142,9 @@ func (r *taskRegistry) settle(id string, status TaskStatus, report string) {
 	if r.OnChange != nil {
 		r.OnChange(t)
 	}
+	if r.OnRecord != nil {
+		r.OnRecord(r.recordSession(), t)
+	}
 }
 
 var taskIDCounter atomic.Int64
@@ -139,6 +171,9 @@ func (a *Agent) StartBackground(ctx context.Context, description, prompt string)
 	a.bg.mu.Unlock()
 	if a.bg.OnChange != nil {
 		a.bg.OnChange(t)
+	}
+	if a.bg.OnRecord != nil {
+		a.bg.OnRecord(a.bg.recordSession(), t)
 	}
 
 	go func() {
@@ -250,4 +285,19 @@ func (a *Agent) Tasks() *taskRegistry {
 		a.bg = newTaskRegistry()
 	}
 	return a.bg
+}
+
+// RestoreTask inserts a previously-persisted task into the registry as
+// settled — no goroutine, no Steer, and Done arrives already closed so
+// waiters never block on work that isn't running. Used by --resume: the
+// subagent's process died with the last exit, so a persisted "running" row
+// must be restored with an explicit settled status by the caller.
+func (a *Agent) RestoreTask(t BackgroundTask) {
+	r := a.Tasks()
+	t.Done = make(chan struct{})
+	close(t.Done)
+	t.cancel = func() {} // Cancel() rejects non-running tasks, so it's never called
+	r.mu.Lock()
+	r.tasks[t.ID] = &t
+	r.mu.Unlock()
 }

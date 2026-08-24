@@ -31,7 +31,7 @@ var commands = []cand{
 	{"/theme", "[light|dark|auto] — color scheme (bare toggles)"},
 	{"/quit", "Exit loopy"},
 	{"/resume", "[id] — browse and resume previous sessions"},
-	{"/tasks", "[id] — background subagents: focus the dock, or open one task's live view"},
+	{"/tasks", "[id] — background subagents: focus the dock, or open one subagent's live view"},
 }
 
 // execNow lists commands the menu runs immediately on enter (they act

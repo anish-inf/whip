@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -13,7 +14,9 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/context-labs/loopy/internal/agent"
+	"github.com/context-labs/loopy/internal/config"
 	"github.com/context-labs/loopy/internal/llm"
+	"github.com/context-labs/loopy/internal/session"
 )
 
 // sseTextServer serves every streaming chat request with a fixed text
@@ -39,6 +42,145 @@ func tasksModel(url string) *model {
 	m.width, m.height = 80, 30
 	m.input.SetWidth(78)
 	return m
+}
+
+// tasksModelStore adds a real session store so task persistence is exercised.
+func tasksModelStore(t *testing.T, url string) *model {
+	t.Helper()
+	st, err := session.Open(filepath.Join(t.TempDir(), "s.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	m := tasksModel(url)
+	m.store = st
+	m.cfg = &config.Config{
+		DefaultModel: "m",
+		Providers:    map[string]config.Provider{"p": {BaseURL: url, APIKey: "k"}},
+		Models:       map[string]config.Model{"m": {Providers: []string{"p"}}},
+	}
+	m.modelName, m.provName = "m", "p"
+	return m
+}
+
+// Resuming a session restores its background subagents into the dock — and a
+// task persisted mid-flight comes back as an explicit error, not "running":
+// the subagent died with the process.
+func TestResumeRestoresTasks(t *testing.T) {
+	srv := sseTextServer(t, "ok")
+	defer srv.Close()
+	m := tasksModelStore(t, srv.URL)
+
+	// a session with messages and two tasks: one settled, one "running" (the
+	// state a crashed loopy leaves behind)
+	id, err := m.store.Create("/tmp", "m", "p")
+	if err != nil {
+		t.Fatal(err)
+	}
+	msgs := []llm.Message{{Role: "system", Content: "sys"}, {Role: "user", Content: "q", Authored: true}, {Role: "assistant", Content: "a"}}
+	if err := m.store.Save(id, 1, msgs, "m", "p"); err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now().Add(-time.Hour)
+	m.store.SaveTask(id, session.Task{ID: "task-1", Description: "finished probe", Prompt: "p", Status: "done", Report: "the report", StartedAt: start, EndedAt: start.Add(time.Minute)})
+	m.store.SaveTask(id, session.Task{ID: "task-2", Description: "died mid-flight", Prompt: "p", Status: "running", StartedAt: start})
+
+	// fresh agent, like a new process
+	m.agent = agent.New(llm.New(srv.URL, "k"), "m", 100, "sys")
+	if err := m.resume(id); err != nil {
+		t.Fatal(err)
+	}
+
+	tasks := m.agent.Tasks().List()
+	if len(tasks) != 2 {
+		t.Fatalf("resume should restore 2 tasks, got %d", len(tasks))
+	}
+	done, ok := m.agent.Tasks().Get("task-1")
+	if !ok || done.Status != agent.TaskDone || done.Report != "the report" {
+		t.Fatalf("settled task should restore verbatim, got %+v", done)
+	}
+	stale, ok := m.agent.Tasks().Get("task-2")
+	if !ok || stale.Status != agent.TaskError || !strings.Contains(stale.Report, "interrupted") {
+		t.Fatalf("a persisted running task must restore as interrupted-error, got %+v", stale)
+	}
+	// the dock shows both
+	dock := stripAll(m.tasksDock())
+	if !strings.Contains(dock, "finished probe") || !strings.Contains(dock, "died mid-flight") {
+		t.Fatalf("dock should list the restored subagents, got %q", dock)
+	}
+	// opening a restored settled task renders its stored report — no live stream
+	m.openTask("task-1")
+	if m.taskVP.live {
+		t.Fatal("a restored settled task must not subscribe to events")
+	}
+	if !strings.Contains(stripAll(m.taskViewView()), "the report") {
+		t.Fatalf("restored task view should show the stored report, got %q", stripAll(m.taskViewView()))
+	}
+}
+
+// Starting a background task with a store attached persists it; the settle
+// overwrites the running row with the final report (end-to-end through the
+// OnRecord hook, no tea.Program).
+func TestTaskPersistsOnStartAndSettle(t *testing.T) {
+	srv := sseTextServer(t, "the final report")
+	defer srv.Close()
+	m := tasksModelStore(t, srv.URL)
+	m.wireTasks()
+
+	id, err := m.store.Create("/tmp", "m", "p")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.sessionID = id
+	m.agent.Tasks().SetSessionID(id) // what persist() publishes
+
+	task := m.agent.StartBackground(t.Context(), "probe", "p")
+	defer m.agent.Tasks().Cancel(task.ID)
+
+	// the start lands a running row (OnRecord fires synchronously)
+	rows, err := m.store.LoadTasks(id)
+	if err != nil || len(rows) != 1 || rows[0].Status != "running" {
+		t.Fatalf("start should persist a running row: %v %+v", err, rows)
+	}
+
+	waitSettled(t, task)
+	rows, err = m.store.LoadTasks(id)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("settle must not add a row: %v %d", err, len(rows))
+	}
+	if rows[0].Status != "done" || rows[0].Report != "the final report" {
+		t.Fatalf("settle should overwrite with the final state, got %+v", rows[0])
+	}
+}
+
+// A task started in a brand-new session (no session row yet when it starts)
+// is still persisted: the registry's published session id is read at record
+// time, so the settle — which lands after the turn's persist() publishes the
+// id — records the task even though the start was skipped.
+func TestTaskPersistsWhenSessionIDAssignedMidFlight(t *testing.T) {
+	srv := sseTextServer(t, "late report")
+	defer srv.Close()
+	m := tasksModelStore(t, srv.URL)
+	m.wireTasks()
+	// no session id published: the start's OnRecord must no-op, not fail
+
+	task := m.agent.StartBackground(t.Context(), "probe", "p")
+	defer m.agent.Tasks().Cancel(task.ID)
+
+	id, err := m.store.Create("/tmp", "m", "p")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.agent.Tasks().SetSessionID(id) // what persist() publishes when the turn lands
+
+	waitSettled(t, task)
+	rows, err := m.store.LoadTasks(id)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("the settle should still persist the task: %v %d", err, len(rows))
+	}
+	if rows[0].Status != "done" || rows[0].Report != "late report" {
+		t.Fatalf("got %+v", rows[0])
+	}
 }
 
 // mkKey builds a KeyMsg from a name ("enter", "esc", "ctrl+t", "up", "down").
@@ -152,6 +294,81 @@ func TestEnterOpensTaskViewAndEscBacksOut(t *testing.T) {
 	m.key(mkKey("esc"))
 	if m.tasksFocus {
 		t.Fatal("second esc should return to the main thread")
+	}
+}
+
+// Clicking a dock row opens THAT row's task: when the dock is focused its
+// hint row sits above the task rows, and must not be clickable itself — the
+// click hitbox used to start one row too high, opening the task above the
+// one clicked.
+func TestDockClickOpensClickedRow(t *testing.T) {
+	srv := sseTextServer(t, "ok")
+	defer srv.Close()
+	m := tasksModel(srv.URL)
+	t1 := m.agent.StartBackground(t.Context(), "first", "p")
+	defer m.agent.Tasks().Cancel(t1.ID)
+	t2 := m.agent.StartBackground(t.Context(), "second", "p")
+	defer m.agent.Tasks().Cancel(t2.ID)
+
+	click := func(y int) tea.Model {
+		tm, _ := m.Update(tea.MouseMsg{
+			Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, Y: y,
+		})
+		return tm
+	}
+
+	// unfocused: the dock's first row is the newest task (t2); clicking it
+	// opens it
+	m.layout()
+	top := m.dockTop()
+	m2 := click(top).(*model)
+	if m2.taskVP == nil || m2.taskVP.id != t2.ID {
+		t.Fatalf("clicking the first row should open %s, got %+v", t2.ID, m2.taskVP)
+	}
+	m2.taskVP = nil
+	m = m2
+
+	// focused: a hint row sits above the task rows — clicking the SECOND task
+	// row must open the second task, not the first (the old off-by-one). The
+	// assertion is screen-position-based, not dockTop-based: the task rows
+	// render at stripTop+1 (past the hint) and stripTop+2.
+	m.tasksFocus = true
+	m.layout()
+	stripTop := m.height - 2 - m.input.Height() - m.dockRows
+	m2 = click(stripTop + 2).(*model)
+	if m2.taskVP == nil || m2.taskVP.id != t1.ID {
+		t.Fatalf("clicking the second task row should open %s, got %+v", t1.ID, m2.taskVP)
+	}
+	m2.taskVP = nil
+	m = m2
+
+	// the hint row itself is not clickable
+	m2 = click(stripTop).(*model)
+	if m2.taskVP != nil {
+		t.Fatal("clicking the hint row should not open a task")
+	}
+	if !m2.tasksFocus {
+		t.Fatal("clicking near the dock keeps it focused")
+	}
+}
+
+// While the palette is open it owns the screen; a click near the bottom must
+// not hit the dock hidden behind it.
+func TestDockClickIgnoredWhilePaletteOpen(t *testing.T) {
+	srv := sseTextServer(t, "ok")
+	defer srv.Close()
+	m := tasksModel(srv.URL)
+	task := m.agent.StartBackground(t.Context(), "probe", "p")
+	defer m.agent.Tasks().Cancel(task.ID)
+
+	m.layout()
+	top := m.dockTop()
+	m.openPalette()
+	m2, _ := m.Update(tea.MouseMsg{
+		Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, Y: top,
+	})
+	if m2.(*model).taskVP != nil {
+		t.Fatal("a click while the palette is open must not open a dock task")
 	}
 }
 

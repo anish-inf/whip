@@ -402,3 +402,27 @@ func TestBackgroundTaskUsageRollsIntoParent(t *testing.T) {
 		t.Fatalf("subagent usage should roll into the parent: %+v", u)
 	}
 }
+
+// A restored task is visible in the registry with its Done channel already
+// closed — resume must never leave a waiter blocked on work that isn't
+// running.
+func TestRestoreTaskSettledAndVisible(t *testing.T) {
+	a := New(nil, "m", 100, "sys")
+	a.RestoreTask(BackgroundTask{ID: "task-9", Description: "old", Status: TaskDone, Report: "done report"})
+
+	got, ok := a.Tasks().Get("task-9")
+	if !ok || got.Status != TaskDone || got.Report != "done report" {
+		t.Fatalf("restored task should be visible, got %+v ok=%v", got, ok)
+	}
+	select {
+	case <-got.Done: // already closed
+	default:
+		t.Fatal("a restored task's Done must be closed")
+	}
+	if a.Tasks().Cancel("task-9") {
+		t.Fatal("a settled restored task must not be cancellable")
+	}
+	if n := len(a.Tasks().List()); n != 1 {
+		t.Fatalf("List should include the restored task, got %d", n)
+	}
+}

@@ -74,6 +74,15 @@ completion for free — there's no per-waiter state to manage. Cancellation is
 the parent as a **steered message** (channel close → `Steer`), so the model
 sees the report on the next loop boundary without polling.
 
+Persistence rides the same events: the registry's `OnRecord` hook runs on the
+worker goroutine at start and settle, and the TUI uses it to upsert the task
+into the session store. The trap is that a worker-goroutine callback must
+**never read UI-goroutine state** — an early version read `m.sessionID`
+directly and `-race` caught it. The fix is the one piece of shared state
+published atomically: the registry holds an `atomic.Pointer[string]` session
+id (`SetSessionID`, written by the UI goroutine at persist/resume/clear/fork),
+and `OnRecord` receives the id as an argument. No lock, no closure over `m`.
+
 ### What this buys over the TS versions
 
 - **No leak bookkeeping.** The channel semaphore and the Done-close both have

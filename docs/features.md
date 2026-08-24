@@ -92,15 +92,28 @@ as a **steered message**, so the model sees it on the next loop boundary.
 
 - `Tasks().List()` / `Get(id)` / `Cancel(id)` — registry snapshot + cancel.
 - `Tasks().OnChange` — the TUI installs a callback that sends a message to
-  redraw live.
-- `/tasks` lists running/done tasks with report previews; a `⚙ N bg` header
-  badge shows the running count.
+  redraw live. `Tasks().OnRecord` — a second hook the TUI uses to upsert the
+  task into the session store on start and settle.
+- `/tasks` lists running/done subagents with report previews; a `⚙ N sub`
+  header badge shows the running count. The persistent dock strip above the
+  input is mouse-clickable: `dockTop()` maps screen rows to task rows,
+  skipping the focused hint row (`dockSkip`) so a click opens the row
+  actually clicked.
+- **Persisted across resume.** The session store's `tasks` table records
+  every start/settle; `resume()` seeds the registry via `RestoreTask`
+  (settled, `Done` pre-closed). A row still `running` on disk means the
+  subagent died with the last process exit, so it comes back as
+  `error` — "interrupted — loopy exited".
 
 Background tasks use a context **not** tied to the current turn — they outlive
 it by design. Cancelling a task cancels its subagent's turn.
 
 Tests: `TestBackgroundTaskDeliversReport`, `TestBackgroundTaskBroadcastsToManyWaiters`
-(8 waiters all woken by one channel close), `TestBackgroundTaskCancel`.
+(8 waiters all woken by one channel close), `TestBackgroundTaskCancel`;
+persistence: `session.TestTaskRoundTrip`, `TestRestoreTaskSettledAndVisible`,
+`TestResumeRestoresTasks`, `TestTaskPersistsOnStartAndSettle`;
+dock click hit-testing: `TestDockClickOpensClickedRow`,
+`TestDockClickIgnoredWhilePaletteOpen`.
 
 ## Models & providers
 
