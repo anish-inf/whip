@@ -1,8 +1,9 @@
 # browser-use as a first-class loopy feature
 
-**TL;DR — build one built-in `browser_exec` tool that pipes model-written
-Python to the `browser-use` CLI's persistent CDP daemon, exactly like
-hermes does.** Zero-code spike available today via the CLI's MCP server.
+**TL;DR — build a native Go browser subsystem on `go-rod/rod`** that
+drives the user's live Chrome (real cookies), a dedicated loopy-owned
+Chrome, or headless — all one binary, no Python. Spike/escape hatch: the
+`browser-use` CLI over MCP, zero code, today.
 
 ```mermaid
 flowchart LR
@@ -327,6 +328,12 @@ single-binary story.
 
 ## 5. The design I'd actually build
 
+> **Update — decision after the "10/10 UX" review:** go **Go-native with
+> `go-rod/rod`** as the first-class path (section 5b), not the CLI shim.
+> The shim survives as the 1-day spike / MCP escape hatch only.
+
+### 5a. Phased plan (original CLI-shim design, kept as the spike)
+
 ```mermaid
 flowchart LR
     P0["Phase 0 — today<br/>MCP config +<br/>flattenResult images"] --> P1["Phase 1 — ~300 LOC<br/>browser_exec built-in<br/>+ install + safety floor<br/>+ session locks"]
@@ -376,6 +383,57 @@ as a second built-in (cheaper than exec for pure observation).
 **Deliberately not now**: cloud provider REST (BU_AUTOSPAWN + `auth login`
 covers it via the CLI), supervisor/dialog bridge (only matters for
 native-Go), Camofox, recordings (the CLI has them; revisit if users ask).
+
+### 5b. The native design (chosen)
+
+```mermaid
+flowchart TD
+    A[loopy agent loop] --> BE[browser_exec tool<br/>code-shaped or navigate/act/observe triad]
+    BE --> BS[internal/browser<br/>small interface — rod behind it,<br/>chromedp as drop-in backup]
+    BS --> M{which Chrome?}
+    M -->|attach| AT[live attach<br/>profile scan, DevToolsActivePort,<br/>SingletonLock, 144-popup flow<br/>~400 LOC ported from daemon.py]
+    M -->|dedicated| DE[rod launcher<br/>--user-data-dir + --remote-debugging-port<br/>no popups, loopy-owned profile]
+    M -->|headless| HE[rod launcher headless<br/>or lightweight engine later]
+    AT --> S[per-tab CDP sessions<br/>serialized by loopy's channel locks]
+    DE --> S
+    HE --> S
+    S --> V[screenshot → resize → image part<br/>Page.startScreencast → live TUI preview]
+```
+
+**Why native wins at the 10/10 bar:**
+
+- The only *hard* mode is attaching to the user's live Chrome (their real
+  cookies/sessions), and that hard part is a bounded port of
+  `daemon.py`'s discovery + permission flow (~400 LOC). Dedicated and
+  headless Chrome are ~20 lines of rod launcher each — no Playwright
+  download, no browser-managed install.
+- Native turns the CLI path's worst UX moments into TUI moments: the
+  Chrome "Allow remote debugging?" popup becomes a loopy modal with
+  auto-retry (never a model-visible error string); screenshot→vision
+  becomes in-process; `Page.startScreencast` gives a **live page preview
+  in the TUI**, impossible through a subprocess; install friction
+  disappears (the binary you already have).
+- Session isolation for parallel subagents becomes per-tab CDP sessions
+  behind loopy's existing channel locks instead of cross-process daemons
+  keyed by env vars.
+- Hermes's token benchmark transfers: keep the tool surface at one
+  code-shaped tool or a tiny triad. Never 12 tools.
+- Mitigations: rod is one-maintainer — hide it behind a small internal
+  interface (chromedp is the backup); Chrome's anti-debug ratchet is the
+  moving part, and porting hermes/browser-harness's fixes is mechanical
+  because the source is right there.
+
+**Scope for v1 (~1–1.5k LOC, ~1 week):** the three browser modes, the
+~15 helpers worth having (navigate, snapshot/AX-tree, js, click/type/
+scroll/wait, screenshot, tabs), the SSRF floor ported from
+`url_safety.py` (metadata endpoints unconditional, DNS-every-answer,
+post-redirect recheck), trust gating like bash, step-label tool rows,
+screenshot→vision with the 256KB/1568px JPEG ladder. Dialogs: port the
+sync-XHR bridge only if native dialog events prove flaky — local Chrome
+doesn't have Browserbase's auto-dismiss problem.
+
+**Escape hatch kept:** the browser-use MCP server works via existing MCP
+config for anyone wanting the Python ecosystem; one doc paragraph, no code.
 
 ## 6. Gotchas discovered while reading (save these)
 
