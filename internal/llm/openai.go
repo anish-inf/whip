@@ -26,17 +26,24 @@ type Message struct {
 	// results, goal-check continuations). Internal only — never sent to the
 	// provider. Used so input-history recall cycles only real submissions.
 	Authored bool `json:"authored,omitempty"`
+	// SentAt is when the human submitted the message (local time). Internal
+	// only — never sent to the provider; used by the rewind picker's
+	// per-message timestamp. A pointer so omitempty drops it for injected and
+	// pre-field messages (a zero time.Time struct is never omitted).
+	SentAt *time.Time `json:"sent_at,omitempty"`
 }
 
-// stripAuthored returns a copy of msgs with the internal Authored marker
-// cleared — it's loopy-local bookkeeping (input-history recall) and must never
-// reach the provider. It copies because req.Messages typically aliases the
-// caller's conversation slice, which must keep the flag for storage/recall.
+// stripAuthored returns a copy of msgs with the internal Authored marker and
+// SentAt timestamp cleared — they're loopy-local bookkeeping (input-history
+// recall, the rewind picker) and must never reach the provider. It copies
+// because req.Messages typically aliases the caller's conversation slice,
+// which must keep the fields for storage/recall.
 func stripAuthored(msgs []Message) []Message {
 	out := make([]Message, len(msgs))
 	copy(out, msgs)
 	for i := range out {
 		out[i].Authored = false
+		out[i].SentAt = nil
 	}
 	return out
 }

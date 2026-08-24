@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/context-labs/loopy/internal/llm"
 	"github.com/context-labs/loopy/internal/tools"
@@ -190,7 +191,12 @@ func (a *Agent) TurnAuthored(ctx context.Context, input string, ev Events) (stri
 }
 
 func (a *Agent) turn(ctx context.Context, input string, authored bool, ev Events) (string, error) {
-	a.Messages = append(a.Messages, llm.Message{Role: "user", Content: input, Authored: authored})
+	msg := llm.Message{Role: "user", Content: input, Authored: authored}
+	if authored {
+		now := time.Now()
+		msg.SentAt = &now
+	}
+	a.Messages = append(a.Messages, msg)
 	for {
 		if err := a.maybeCompact(ctx, ev); err != nil {
 			return "", err

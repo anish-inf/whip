@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func sseServer(t *testing.T, lines ...string) *httptest.Server {
@@ -37,12 +38,16 @@ func TestStreamStripsAuthoredFlag(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	msgs := []Message{{Role: "user", Content: "typed by me", Authored: true}}
+	sent := time.Now()
+	msgs := []Message{{Role: "user", Content: "typed by me", Authored: true, SentAt: &sent}}
 	if _, _, err := New(srv.URL, "test-key").Stream(context.Background(), Request{Model: "m", Messages: msgs}, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(string(body), "authored") {
 		t.Fatalf("Authored flag leaked to provider: %s", body)
+	}
+	if strings.Contains(string(body), "sent_at") {
+		t.Fatalf("SentAt timestamp leaked to provider: %s", body)
 	}
 }
 
