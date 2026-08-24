@@ -153,6 +153,7 @@ func TestPaletteArrowsStepEffortInPlace(t *testing.T) {
 // Toggles apply in place too: enter flips thinking tokens, palette open.
 func TestPaletteToggleThinkingInPlace(t *testing.T) {
 	m := compactCmdModel()
+	m.showThinking = true // matches the Run() default
 	m.openPalette()
 	var tm tea.Model
 	for _, r := range "thinking" {
@@ -164,8 +165,28 @@ func TestPaletteToggleThinkingInPlace(t *testing.T) {
 	if m.palette == nil {
 		t.Fatal("enter on a toggle must keep the palette open")
 	}
+	if m.showThinking {
+		t.Fatal("enter should have toggled thinking tokens off")
+	}
+	// the toggle persists to the global config (reload proves the round-trip)
+	reloaded, err := config.Load()
+	if err != nil {
+		t.Fatalf("reload config: %v", err)
+	}
+	if reloaded.Thinking == nil || *reloaded.Thinking {
+		t.Fatalf("expected thinking: false saved to config, got %v", reloaded.Thinking)
+	}
+	tm, _ = m.paletteKey(tea.KeyMsg{Type: tea.KeyEnter})
+	m = tm.(*model)
 	if !m.showThinking {
-		t.Fatal("enter should have toggled thinking tokens on")
+		t.Fatal("a second enter should toggle thinking tokens back on")
+	}
+	reloaded, err = config.Load()
+	if err != nil {
+		t.Fatalf("reload config: %v", err)
+	}
+	if reloaded.Thinking == nil || !*reloaded.Thinking {
+		t.Fatalf("expected thinking: true saved to config, got %v", reloaded.Thinking)
 	}
 }
 

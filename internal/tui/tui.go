@@ -214,7 +214,12 @@ func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string) (s
 
 	ti := newInput()
 
+	// default on: "" (config never set / pre-feature file) means medium, not
+	// off; an explicit "off" in the file is honored
 	ag.Effort = cfg.DefaultEffort
+	if ag.Effort == "" {
+		ag.Effort = "medium"
+	}
 	// Mouse capture ON by default so the wheel scrolls the transcript viewport
 	// and ⚡/tool clicks work — but only wheel+click reporting (?1000), NOT
 	// cell-motion (?1002). With capture off, tmux's WheelUpPane binding sees
@@ -226,10 +231,14 @@ func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string) (s
 	if cfg.Mouse != nil {
 		mouseOn = *cfg.Mouse
 	}
+	showThinking := true // default on; "thinking": false in config opts out
+	if cfg.Thinking != nil {
+		showThinking = *cfg.Thinking
+	}
 	m := &model{
 		cfg: cfg, agent: ag, modelName: mn, provName: pn, sysPrompt: sysPrompt,
 		input: ti, spin: spinner.New(spinner.WithSpinner(spinner.Dot)), follow: true, saved: 1,
-		catalogs: config.LoadCatalogs(), mouseOn: mouseOn, now: time.Now,
+		catalogs: config.LoadCatalogs(), mouseOn: mouseOn, now: time.Now, showThinking: showThinking,
 		compactModel: cfg.CompactModel, compactProv: cfg.CompactProvider,
 	}
 	m.applyCompactModel()
@@ -475,8 +484,13 @@ func (m *model) resume(id string) error {
 	if err != nil {
 		return err
 	}
-	// prefer the session's model/provider; fall back to current on error
-	effort := m.agent.Effort
+	// prefer the session's model/provider; fall back to current on error.
+	// The session's own effort wins; a row that pre-dates per-session effort
+	// ("") inherits the current default and gets stamped on the next save.
+	effort := meta.Effort
+	if effort == "" {
+		effort = m.agent.Effort
+	}
 	if ag, mn, pn, err := buildAgent(m.cfg, meta.Model, meta.Provider, m.sysPrompt); err == nil {
 		m.agent, m.modelName, m.provName = ag, mn, pn
 	} else {
@@ -509,6 +523,29 @@ func (m *model) resume(id string) error {
 		config.LogEvent("session.task", "load failed: "+terr.Error())
 	}
 	m.agent.Messages = append(m.agent.Messages, msgs...)
+	// restore the cumulative token totals saved with the session; a row that
+	// pre-dates the usage columns reads zero, so rebuild by summing the
+	// per-message usage already stored on each assistant message. Either way
+	// the next persist stamps the columns, so reconstruction happens once.
+	in, cached, out := meta.UsageIn, meta.UsageCached, meta.UsageOut
+	if in == 0 && out == 0 {
+		for _, msg := range msgs {
+			if msg.Usage != nil {
+				in += msg.Usage.PromptTokens
+				out += msg.Usage.CompletionTokens
+				cached += msg.Usage.Cached()
+			}
+		}
+	}
+	if in > 0 || out > 0 {
+		u := llm.Usage{PromptTokens: in, CompletionTokens: out}
+		if cached > 0 {
+			u.PromptTokensDetails = &struct {
+				CachedTokens int `json:"cached_tokens"`
+			}{CachedTokens: cached}
+		}
+		m.agent.SetUsage(u)
+	}
 	if contains(m.effortsFor(), effort) {
 		m.agent.Effort = effort
 	}
@@ -573,12 +610,17 @@ func (m *model) seedTranscript(msgs []llm.Message, base int) {
 	m.refreshVP()
 }
 
-// persist writes any unsaved messages to the session store.
+// persist writes any unsaved messages to the session store and re-stamps the
+// session's bookkeeping (goal, effort) — the effort stamp is what a resume
+// restores, so it runs even when no new messages landed.
 func (m *model) persist() {
-	if m.store == nil || len(m.agent.Messages) <= m.saved {
+	if m.store == nil {
 		return
 	}
 	if m.sessionID == "" {
+		if len(m.agent.Messages) <= m.saved {
+			return // nothing new to say; don't create an empty session row
+		}
 		id, err := m.store.Create(cwd(), m.modelName, m.provName)
 		if err != nil {
 			config.LogEvent("session.save", "create failed: "+err.Error())
@@ -588,12 +630,22 @@ func (m *model) persist() {
 		m.sessionID = id
 		m.agent.Tasks().SetSessionID(id) // publish before Save so a settling subagent records
 	}
+	// Bookkeeping re-stamps every persist — even one with no new messages —
+	// so a resume restores goal/effort, and the cumulative token totals that
+	// survive a compaction rewrite of the messages.
+	m.store.SetGoal(m.sessionID, m.goal)
+	m.store.SetEffort(m.sessionID, m.agent.Effort)
+	if u := m.agent.Usage(); u.PromptTokens > 0 || u.CompletionTokens > 0 {
+		m.store.SetUsage(m.sessionID, u.PromptTokens, u.Cached(), u.CompletionTokens)
+	}
+	if len(m.agent.Messages) <= m.saved {
+		return
+	}
 	if err := m.store.Save(m.sessionID, m.saved, m.agent.Messages, m.modelName, m.provName); err != nil {
 		config.LogEvent("session.save", "FAILED id="+m.sessionID+": "+err.Error())
 		m.append(errStyle.Render("session save failed: " + err.Error()))
 		return
 	}
-	m.store.SetGoal(m.sessionID, m.goal)
 	m.saved = len(m.agent.Messages)
 }
 
@@ -641,12 +693,28 @@ func (m *model) setTheme(theme string) {
 	m.append(dimStyle.Render("◐ theme: " + CurrentTheme()))
 }
 
-// setEffort changes the reasoning effort and stores it as the new default.
+// setEffort changes the reasoning effort and stores it both ways: as the new
+// global default (every future session starts here) and on the live session
+// row (resuming this conversation restores it). "" = off. Callers that only
+// reconcile state (model switch / catalog refresh dropping an unsupported
+// level) use resetEffort instead so a quiet reconciliation never rewrites
+// the user's chosen global default.
 func (m *model) setEffort(lv string) {
 	m.agent.Effort = lv
 	m.cfg.DefaultEffort = lv
 	if err := m.cfg.Save(); err != nil {
 		m.append(errStyle.Render("config save failed: " + err.Error()))
+	}
+	if m.store != nil && m.sessionID != "" {
+		m.store.SetEffort(m.sessionID, lv) // best-effort; persist() re-stamps
+	}
+}
+
+// resetEffort applies a level without touching the global default.
+func (m *model) resetEffort(lv string) {
+	m.agent.Effort = lv
+	if m.store != nil && m.sessionID != "" {
+		m.store.SetEffort(m.sessionID, lv)
 	}
 }
 
@@ -1597,11 +1665,7 @@ func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyCtrlO:
 		// toggle rendering of reasoning/thinking tokens
-		m.showThinking = !m.showThinking
-		if !m.showThinking {
-			m.flushThink() // drop any in-flight reasoning display
-		}
-		m.append(dimStyle.Render("◌ thinking tokens: " + onOff(m.showThinking)))
+		m.toggleThinking()
 		return m, nil
 
 	case tea.KeyTab:
@@ -2022,7 +2086,7 @@ func (m *model) switchModel(name, prov string) {
 	m.agent, m.modelName, m.provName = ag, mn, pn
 	m.wireTasks()
 	if !contains(m.effortsFor(), ag.Effort) {
-		m.setEffort("") // the new model doesn't support the current level
+		m.resetEffort("") // the new model doesn't support the current level
 	}
 	m.cfg.DefaultModel, m.cfg.DefaultProvider = mn, pn // store the switch as the new default
 	if err := m.cfg.Save(); err != nil {
@@ -2276,6 +2340,27 @@ func (m *model) appendThink(s string) {
 
 // flushThink moves any in-flight partial reasoning line into the transcript
 // and ends the current thinking segment.
+// toggleThinking flips reasoning-token display (ctrl+o / palette) and persists
+// the choice to the global config, like /mouse does.
+func (m *model) toggleThinking() {
+	m.setThinking(!m.showThinking)
+	m.append(dimStyle.Render("◌ thinking tokens: " + onOff(m.showThinking)))
+}
+
+// setThinking applies the state without the transcript note (palette ←/→
+// steppers call this); it still persists.
+func (m *model) setThinking(on bool) {
+	m.showThinking = on
+	if !on {
+		m.flushThink() // drop any in-flight reasoning display
+	}
+	b := on
+	m.cfg.Thinking = &b
+	if err := m.cfg.Save(); err != nil {
+		m.append(errStyle.Render("config save failed: " + err.Error()))
+	}
+}
+
 func (m *model) flushThink() {
 	cur := strings.TrimRight(m.curThink, " \n")
 	m.curThink = ""

@@ -55,6 +55,10 @@ var extraColumns = []struct{ name, def string }{
 	{"fork_seq", "fork_seq INTEGER NOT NULL DEFAULT 0"},     // branch point in the source
 	{"tags", "tags TEXT NOT NULL DEFAULT ''"},               // comma-separated labels
 	{"pinned", "pinned INTEGER NOT NULL DEFAULT 0"},         // 1 = keep / sort first
+	{"effort", "effort TEXT NOT NULL DEFAULT ''"},           // reasoning effort in effect ("" = global default)
+	{"usage_in", "usage_in INTEGER NOT NULL DEFAULT 0"},     // cumulative input tokens (provider-reported)
+	{"usage_cached", "usage_cached INTEGER NOT NULL DEFAULT 0"}, // of usage_in, tokens served from the prompt cache
+	{"usage_out", "usage_out INTEGER NOT NULL DEFAULT 0"},   // cumulative output tokens
 }
 
 // Meta is a session's bookkeeping row.
@@ -69,6 +73,10 @@ type Meta struct {
 	ForkSeq    int      // conversation index the fork branched at
 	Tags       []string // freeform labels, for filtering /resume
 	Pinned     bool     // pinned sessions sort first and survive cleanup
+	Effort     string   // reasoning effort for this session ("" = use the global default)
+	UsageIn    int      // cumulative input tokens across the session's API calls
+	UsageCached int     // of UsageIn, tokens served from the provider's prompt cache
+	UsageOut   int      // cumulative output tokens
 	UpdatedAt  time.Time
 }
 
@@ -106,6 +114,23 @@ func Open(path string) (*Store, error) {
 // SetGoal stores the session's active goal ("" clears it).
 func (s *Store) SetGoal(id, goal string) error {
 	_, err := s.db.Exec(`UPDATE sessions SET goal=? WHERE id=?`, goal, id)
+	return err
+}
+
+// SetEffort stores the session's reasoning effort. "" means the row pre-dates
+// per-session effort or never set one: resume falls back to the current global
+// default and stamps it on the next save.
+func (s *Store) SetEffort(id, effort string) error {
+	_, err := s.db.Exec(`UPDATE sessions SET effort=? WHERE id=?`, effort, id)
+	return err
+}
+
+// SetUsage stores the session's cumulative token totals (absolute values, not
+// deltas) so a resumed session keeps its spend across restarts and
+// compactions. Rows from before this column existed read as zero and get
+// stamped with real totals on the next save.
+func (s *Store) SetUsage(id string, in, cached, out int) error {
+	_, err := s.db.Exec(`UPDATE sessions SET usage_in=?, usage_cached=?, usage_out=? WHERE id=?`, in, cached, out, id)
 	return err
 }
 
@@ -209,7 +234,7 @@ func (s *Store) Save(id string, from int, msgs []llm.Message, model, provider st
 
 // Load resolves idOrPrefix to a session and returns its metadata and messages.
 func (s *Store) Load(idOrPrefix string) (Meta, []llm.Message, error) {
-	rows, err := s.db.Query(`SELECT id, title, model, provider, cwd, goal, forked_from, fork_seq, tags, pinned, updated_at FROM sessions WHERE id LIKE ?||'%' LIMIT 3`, idOrPrefix)
+	rows, err := s.db.Query(`SELECT id, title, model, provider, cwd, goal, forked_from, fork_seq, tags, pinned, effort, usage_in, usage_cached, usage_out, updated_at FROM sessions WHERE id LIKE ?||'%' LIMIT 3`, idOrPrefix)
 	if err != nil {
 		return Meta{}, nil, err
 	}
@@ -253,7 +278,7 @@ func (s *Store) Load(idOrPrefix string) (Meta, []llm.Message, error) {
 
 // Recent returns up to n sessions, newest first.
 func (s *Store) Recent(n int) ([]Meta, error) {
-	rows, err := s.db.Query(`SELECT id, title, model, provider, cwd, goal, forked_from, fork_seq, tags, pinned, updated_at FROM sessions
+	rows, err := s.db.Query(`SELECT id, title, model, provider, cwd, goal, forked_from, fork_seq, tags, pinned, effort, usage_in, usage_cached, usage_out, updated_at FROM sessions
 		WHERE EXISTS (SELECT 1 FROM messages WHERE session_id = sessions.id)
 		ORDER BY updated_at DESC LIMIT ?`, n)
 	if err != nil {
@@ -363,8 +388,8 @@ func (s *Store) Fork(srcID string, uptoSeq int, title string) (string, error) {
 		return "", err
 	}
 	defer tx.Rollback()
-	if _, err := tx.Exec(`INSERT INTO sessions (id, created_at, updated_at, cwd, model, provider, title, goal, forked_from, fork_seq)
-		SELECT ?, ?, ?, cwd, model, provider, ?, goal, ?, ? FROM sessions WHERE id=?`,
+	if _, err := tx.Exec(`INSERT INTO sessions (id, created_at, updated_at, cwd, model, provider, title, goal, forked_from, fork_seq, effort)
+		SELECT ?, ?, ?, cwd, model, provider, ?, goal, ?, ?, effort FROM sessions WHERE id=?`,
 		newID, now(), now(), title, srcID, uptoSeq, srcID); err != nil {
 		return "", err
 	}
@@ -397,7 +422,7 @@ func (s *Store) SetPinned(id string, pinned bool) error {
 // ForksOf lists sessions forked from id, newest first — the session tree's
 // children of one node.
 func (s *Store) ForksOf(id string) ([]Meta, error) {
-	rows, err := s.db.Query(`SELECT id, title, model, provider, cwd, goal, forked_from, fork_seq, tags, pinned, updated_at
+	rows, err := s.db.Query(`SELECT id, title, model, provider, cwd, goal, forked_from, fork_seq, tags, pinned, effort, usage_in, usage_cached, usage_out, updated_at
 		FROM sessions WHERE forked_from=? ORDER BY updated_at DESC`, id)
 	if err != nil {
 		return nil, err
@@ -460,7 +485,8 @@ func scanMetas(rows *sql.Rows) ([]Meta, error) {
 		var updated, tags string
 		var pinned int
 		if err := rows.Scan(&m.ID, &m.Title, &m.Model, &m.Provider, &m.CWD, &m.Goal,
-			&m.ForkedFrom, &m.ForkSeq, &tags, &pinned, &updated); err != nil {
+			&m.ForkedFrom, &m.ForkSeq, &tags, &pinned, &m.Effort,
+			&m.UsageIn, &m.UsageCached, &m.UsageOut, &updated); err != nil {
 			return nil, err
 		}
 		if tags != "" {

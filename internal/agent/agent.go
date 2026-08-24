@@ -109,6 +109,14 @@ func (a *Agent) AddUsage(u llm.Usage) {
 	a.usageMu.Unlock()
 }
 
+// SetUsage seeds the session totals with stored values — a resumed session
+// keeps counting from where it was saved, not from zero.
+func (a *Agent) SetUsage(u llm.Usage) {
+	a.usageMu.Lock()
+	a.usage = u
+	a.usageMu.Unlock()
+}
+
 // Usage returns the session's cumulative token usage: input, output, and
 // cached-input tokens across every streamed call (plus compaction and
 // subagent calls on this agent).

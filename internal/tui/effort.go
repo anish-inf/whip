@@ -88,7 +88,7 @@ func (m *model) updateCatalogs(cats map[string]config.Catalog) {
 		m.agent.ContextLimit = n // /models is the source of truth
 	}
 	if !contains(m.effortsFor(), m.agent.Effort) {
-		m.setEffort("")
+		m.resetEffort("")
 		m.append(dimStyle.Render("⚡ effort reset to off: not supported by " + m.agent.Model))
 	}
 }
