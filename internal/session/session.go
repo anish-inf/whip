@@ -221,7 +221,7 @@ func (s *Store) Save(id string, from int, msgs []llm.Message, model, provider st
 	title := ""
 	for _, m := range msgs {
 		if m.Role == "user" {
-			title = truncate(strings.Join(strings.Fields(m.Content), " "), 64)
+			title = truncate(strings.Join(strings.Fields(m.TextContent()), " "), 64)
 			break
 		}
 	}
@@ -318,7 +318,7 @@ func (s *Store) UserHistory(limit int) ([]string, error) {
 		if !msg.Authored {
 			continue // injected by loopy (steered task result / goal prompt), not typed
 		}
-		content := strings.TrimSpace(msg.Content)
+		content := strings.TrimSpace(msg.TextContent())
 		if content == "" || seen[content] {
 			continue
 		}
@@ -343,7 +343,7 @@ func (s *Store) LastExchange(id string) (user, assistant string) {
 			id, q.role).Scan(&data); err == nil {
 			var m llm.Message
 			if json.Unmarshal([]byte(data), &m) == nil {
-				*q.dst = m.Content
+				*q.dst = m.TextContent()
 			}
 		}
 	}

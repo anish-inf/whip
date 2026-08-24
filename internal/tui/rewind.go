@@ -52,13 +52,13 @@ func (m *model) rewindEntries() []rewindEntry {
 	var out []rewindEntry
 	for i, msg := range m.agent.Messages {
 		if msg.Role == "user" && msg.Authored {
-			out = append(out, rewindEntry{cut: i, text: oneLine(msg.Content), when: msg.SentAt})
+			out = append(out, rewindEntry{cut: i, text: oneLine(msg.TextContent()), when: msg.SentAt})
 		}
 	}
 	for i, msg := range m.future {
 		if msg.Role == "user" && msg.Authored {
 			out = append(out, rewindEntry{
-				cut: len(m.agent.Messages) + i, text: oneLine(msg.Content), when: msg.SentAt, future: true,
+				cut: len(m.agent.Messages) + i, text: oneLine(msg.TextContent()), when: msg.SentAt, future: true,
 			})
 		}
 	}
@@ -151,7 +151,7 @@ func (m *model) applyRewind(cut int) string {
 	text := ""
 	if cut < len(m.agent.Messages)+len(m.future) {
 		if msg := m.messageAt(cut); msg.Role == "user" && msg.Authored {
-			text = msg.Content
+			text = msg.TextContent()
 		}
 	}
 	return text

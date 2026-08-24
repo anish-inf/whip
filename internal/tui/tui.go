@@ -564,9 +564,10 @@ func (m *model) resume(id string) error {
 	for _, msg := range msgs {
 		// Authored only: steered subagent reports and goal prompts are stored
 		// as role "user" but were never typed — ↑ must not recall them.
-		if msg.Role == "user" && msg.Authored && !seen[msg.Content] {
-			seen[msg.Content] = true
-			m.hist = append(m.hist, msg.Content)
+		text := msg.TextContent()
+		if msg.Role == "user" && msg.Authored && !seen[text] {
+			seen[text] = true
+			m.hist = append(m.hist, text)
 		}
 	}
 	m.histIdx = len(m.hist)
@@ -595,11 +596,11 @@ func (m *model) seedTranscript(msgs []llm.Message, base int) {
 		switch msg.Role {
 		case "user":
 			bi = len(m.blocks)
-			m.blocks = append(m.blocks, block{kind: blockText, text: youStyle.Render("❯ ") + linkifyFilePaths(msg.Content, realFileExists)})
+			m.blocks = append(m.blocks, block{kind: blockText, text: youStyle.Render("❯ ") + linkifyFilePaths(msg.TextContent(), realFileExists)})
 		case "assistant":
-			if strings.TrimSpace(msg.Content) != "" {
+			if strings.TrimSpace(msg.TextContent()) != "" {
 				bi = len(m.blocks)
-				m.blocks = append(m.blocks, block{kind: blockAssistant, text: strings.TrimRight(msg.Content, "\n")})
+				m.blocks = append(m.blocks, block{kind: blockAssistant, text: strings.TrimRight(msg.TextContent(), "\n")})
 			}
 			for _, tc := range msg.ToolCalls {
 				m.blocks = append(m.blocks, block{kind: blockText, text: toolStyle.Render("⚒ "+tc.Function.Name+" ") + dimStyle.Render(tc.Function.Arguments)})
@@ -1033,16 +1034,29 @@ func detectColorScheme() string {
 			}
 		}
 	}
-	// Query the terminal directly whenever we have one. Note: inside tmux the
-	// pane answers OSC 11 with tmux's OWN configured color, which often
-	// differs from the real terminal — so over ssh/tmux an "answered" value
-	// may be wrong; treat the query as best-effort and prefer the terminal's
-	// env hints above.
+	// Query the terminal directly whenever we have one. termenv's query refuses
+	// to run inside tmux/screen (TERM=screen*/tmux*) and silently assumes a dark
+	// background — wrong for a tmux user on a light terminal. queryTerminal-
+	// Background reaches the REAL terminal via DCS passthrough inside tmux, and
+	// via a plain OSC 11 query otherwise, so use it first and keep termenv only
+	// as a fallback for terminals it can query directly.
 	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
 	if err != nil {
-		return "dark default (no tty)"
+		SetUnknownTheme()
+		return "undetermined (no tty) — neutral default"
 	}
 	defer tty.Close()
+	inTmux := os.Getenv("TMUX") != "" ||
+		strings.HasPrefix(os.Getenv("TERM"), "screen") ||
+		strings.HasPrefix(os.Getenv("TERM"), "tmux")
+	if light, ok := queryTerminalBackground(tty, inTmux); ok {
+		setScheme(light)
+		if inTmux {
+			return "terminal query (via tmux passthrough)"
+		}
+		return "terminal query"
+	}
+	// fallback: termenv's own query (non-tmux terminals it can reach)
 	type result struct{ light bool }
 	done := make(chan result, 1)
 	go func() {
@@ -1054,7 +1068,13 @@ func detectColorScheme() string {
 		setScheme(r.light)
 		return "terminal query"
 	case <-time.After(300 * time.Millisecond):
-		return "dark default (query timed out)"
+		// No reliable signal: don't force a dark guess. Neutral default keeps
+		// text at the terminal's own colors instead of inverting contrast.
+		SetUnknownTheme()
+		if inTmux {
+			return "undetermined (tmux needs: set -g allow-passthrough on) — neutral default"
+		}
+		return "undetermined (query timed out) — neutral default"
 	}
 }
 
@@ -2346,15 +2366,18 @@ func (m *model) skillCands() []cand {
 // prepareTurn refreshes the system prompt's skills block (so new skills load
 // without a restart) and MCP server instructions (so late-arriving servers
 // teach the model how to use their tools), then expands $skill / @file
-// tokens in the input.
-func (m *model) prepareTurn(text string) string {
+// tokens in the input. It returns the expanded text plus any image parts
+// extracted from @image tags.
+func (m *model) prepareTurn(text string) (string, []llm.ContentPart) {
 	sk := skills.Scan(skills.DefaultDirs()...)
 	sys := m.sysPrompt + skills.PromptBlock(sk)
 	if m.mcpMgr != nil {
 		sys += m.mcpMgr.InstructionsBlock()
 	}
 	m.agent.Messages[0].Content = sys
-	return expandMentions(expandSkills(text, sk))
+	expanded := expandMentions(expandSkills(text, sk))
+	parts, withNote := imageParts(text)
+	return expanded + withNote, parts
 }
 
 // appendAssistant writes assistant text into the transcript, rendering it as
@@ -2489,7 +2512,7 @@ func (m *model) submitGoal(text string) (tea.Model, tea.Cmd) {
 
 func (m *model) submitTurn(text string, authored bool) (tea.Model, tea.Cmd) {
 	m.busy = true
-	prepared := m.prepareTurn(text)
+	prepared, parts := m.prepareTurn(text)
 	userMsgIdx := len(m.agent.Messages) // where Turn will append this message
 	// Rewind bookkeeping: if a redo stack exists, this resubmission replaces a
 	// clipped message. Record the replaced text on the new message (internal,
@@ -2562,11 +2585,7 @@ func (m *model) submitTurn(text string, authored bool) (tea.Model, tea.Cmd) {
 	}
 
 	go func() {
-		turn := m.agent.Turn
-		if authored {
-			turn = m.agent.TurnAuthored
-		}
-		final, err := turn(ctx, prepared, agent.Events{
+		events := agent.Events{
 			OnText:  onText,
 			OnThink: onThink,
 			OnToolStart: func(n, a string) {
@@ -2580,7 +2599,17 @@ func (m *model) submitTurn(text string, authored bool) (tea.Model, tea.Cmd) {
 			},
 			OnCompact: func(took, kept int) { send(compactMsg{took: took, kept: kept}) },
 			OnUsage:   func(u llm.Usage) { send(usageMsg(u)) },
-		})
+		}
+		var final string
+		var err error
+		switch {
+		case len(parts) > 0:
+			final, err = m.agent.TurnWithImages(ctx, prepared, parts, events)
+		case authored:
+			final, err = m.agent.TurnAuthored(ctx, prepared, events)
+		default:
+			final, err = m.agent.Turn(ctx, prepared, events)
+		}
 		flush()
 		// stamp rewind provenance on the submitted message (appended by turn)
 		if rewoundFrom != "" && userMsgIdx < len(m.agent.Messages) {

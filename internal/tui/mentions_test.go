@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -92,7 +93,7 @@ func TestPrepareTurnReloadsSkillsEveryTurn(t *testing.T) {
 		[]byte("---\nname: demo\ndescription: live demo skill\n---\n"), 0o644)
 
 	m := &model{agent: agent.New(llm.New("http://unused", "k"), "m", 1, "overwritten"), sysPrompt: "BASE"}
-	out := m.prepareTurn("use $demo now")
+	out, _ := m.prepareTurn("use $demo now")
 	sys := m.agent.Messages[0].Content
 	if !strings.HasPrefix(sys, "BASE") || !strings.Contains(sys, "<name>demo</name>") || !strings.Contains(sys, "<description>live demo skill</description>") {
 		t.Fatalf("system prompt: %q", sys)
@@ -108,5 +109,58 @@ func TestPrepareTurnReloadsSkillsEveryTurn(t *testing.T) {
 	m.prepareTurn("hello")
 	if !strings.Contains(m.agent.Messages[0].Content, "<name>fresh</name>") {
 		t.Fatalf("new skill not picked up: %q", m.agent.Messages[0].Content)
+	}
+}
+
+func TestImageParts(t *testing.T) {
+	dir := t.TempDir()
+	img := filepath.Join(dir, "shot.png")
+	if err := os.WriteFile(img, []byte("\x89PNG\r\n\x1a\nfake"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	parts, note := imageParts("what is in @" + img + " ?")
+	if len(parts) != 1 {
+		t.Fatalf("expected 1 image part, got %d", len(parts))
+	}
+	p := parts[0]
+	if p.Type != "image_url" || p.ImageURL == nil {
+		t.Fatalf("part: %+v", p)
+	}
+	if !strings.HasPrefix(p.ImageURL.URL, "data:image/png;base64,") {
+		t.Fatalf("data url: %q", p.ImageURL.URL)
+	}
+	if !strings.Contains(note, "attached image(s):") || !strings.Contains(note, img) {
+		t.Fatalf("note: %q", note)
+	}
+
+	// text files are not inlined as images
+	if parts, note := imageParts("see @foo.go"); parts != nil || note != "" {
+		t.Fatalf("text tag should not produce image parts: %v %q", parts, note)
+	}
+}
+
+func TestMessageMultimodalRoundTrip(t *testing.T) {
+	parts := []llm.ContentPart{llm.ImagePart("png", []byte("fake-image-bytes"))}
+	m := llm.Message{Role: "user", Content: "describe", Parts: parts}
+
+	data, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// wire form: content is an array beginning with the text part
+	if !strings.Contains(string(data), `"type":"image_url"`) {
+		t.Fatalf("marshaled: %s", data)
+	}
+
+	var back llm.Message
+	if err := json.Unmarshal(data, &back); err != nil {
+		t.Fatal(err)
+	}
+	if back.TextContent() != "describe" {
+		t.Fatalf("text content: %q", back.TextContent())
+	}
+	if len(back.Parts) != 1 || back.Parts[0].ImageURL == nil {
+		t.Fatalf("parts: %+v", back.Parts)
 	}
 }

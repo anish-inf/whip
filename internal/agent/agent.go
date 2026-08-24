@@ -195,7 +195,7 @@ func (a *Agent) AllTools() []tools.Tool {
 // auto-compacts (summarizing old turns) and retries once before surfacing
 // the error to the caller.
 func (a *Agent) Turn(ctx context.Context, input string, ev Events) (string, error) {
-	return a.turn(ctx, input, false, ev)
+	return a.turn(ctx, input, nil, false, ev)
 }
 
 // TurnAuthored is Turn for a message the human actually typed and submitted
@@ -203,11 +203,18 @@ func (a *Agent) Turn(ctx context.Context, input string, ev Events) (string, erro
 // The message is marked Authored so input-history recall cycles only real
 // submissions.
 func (a *Agent) TurnAuthored(ctx context.Context, input string, ev Events) (string, error) {
-	return a.turn(ctx, input, true, ev)
+	return a.turn(ctx, input, nil, true, ev)
 }
 
-func (a *Agent) turn(ctx context.Context, input string, authored bool, ev Events) (string, error) {
-	msg := llm.Message{Role: "user", Content: input, Authored: authored}
+// TurnWithImages is TurnAuthored for a submission that attaches images. Each
+// part is a vision ContentPart (see llm.ImagePart); the model receives the
+// text and the images together as a multimodal content array.
+func (a *Agent) TurnWithImages(ctx context.Context, input string, parts []llm.ContentPart, ev Events) (string, error) {
+	return a.turn(ctx, input, parts, true, ev)
+}
+
+func (a *Agent) turn(ctx context.Context, input string, parts []llm.ContentPart, authored bool, ev Events) (string, error) {
+	msg := llm.Message{Role: "user", Content: input, Parts: parts, Authored: authored}
 	if authored {
 		now := time.Now()
 		msg.SentAt = &now
@@ -403,7 +410,7 @@ func (a *Agent) maybeCompact(ctx context.Context, ev Events) error {
 func EstimateTokens(msgs []llm.Message) int {
 	total := 0
 	for _, m := range msgs {
-		total += 4 + (len(m.Content)+3)/4
+		total += 4 + (len(m.TextContent())+3)/4 + 1200*len(m.Parts) // ~tokens for an image
 		for _, tc := range m.ToolCalls {
 			total += 8 + (len(tc.Function.Name)+len(tc.Function.Arguments)+3)/4
 		}
@@ -488,9 +495,9 @@ func writeTranscript(b *strings.Builder, msgs []llm.Message) {
 	for _, m := range msgs {
 		switch m.Role {
 		case "user":
-			fmt.Fprintf(b, "user: %s\n", truncateField(m.Content, 2000))
+			fmt.Fprintf(b, "user: %s\n", truncateField(m.TextContent(), 2000))
 		case "assistant":
-			if c := strings.TrimSpace(m.Content); c != "" {
+			if c := strings.TrimSpace(m.TextContent()); c != "" {
 				fmt.Fprintf(b, "assistant: %s\n", truncateField(c, 2000))
 			}
 			for _, tc := range m.ToolCalls {

@@ -5,6 +5,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,12 +17,15 @@ import (
 )
 
 // Message is one chat message. Content is a string; ToolCalls set on assistant
-// messages, ToolCallID on role "tool" results.
+// messages, ToolCallID on role "tool" results. A user message may also carry
+// image Parts (multimodal/vision) — when Parts is non-empty it is sent as the
+// content array and Content is mirrored as a text part so both stay in sync.
 type Message struct {
-	Role       string     `json:"role"`
-	Content    string     `json:"content"`
-	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
-	ToolCallID string     `json:"tool_call_id,omitempty"`
+	Role       string        `json:"role"`
+	Content    string        `json:"content"`
+	Parts      []ContentPart `json:"-"`
+	ToolCalls  []ToolCall    `json:"tool_calls,omitempty"`
+	ToolCallID string        `json:"tool_call_id,omitempty"`
 	// Name is the function name on role "tool" messages. OpenAI ignores it,
 	// but Moonshot/Kimi requires it ("tool messages need a resolvable tool
 	// name") — without it every tool-using turn 400s.
@@ -48,6 +52,122 @@ type Message struct {
 	// RewoundFrom notes that this message replaced an earlier clipped one
 	// (rewind + resubmit). Internal only — never sent to the provider.
 	RewoundFrom string `json:"rewound_from,omitempty"`
+}
+
+// ContentPart is one element of a multimodal user message: either text or an
+// image (as a data-URL). Kimi K3 and OpenAI vision models require `content`
+// as an array of these parts rather than a plain string when images are
+// attached. The wire shape is {"type":"text","text":...} and
+// {"type":"image_url","image_url":{"url":"data:image/png;base64,..."}}.
+type ContentPart struct {
+	Type     string `json:"type"`
+	Text     string `json:"text,omitempty"`
+	ImageURL *struct {
+		URL string `json:"url"`
+	} `json:"image_url,omitempty"`
+}
+
+// TextContent returns the message's text, whether it was set directly
+// (Content) or carried in a Parts array (multimodal messages mirror their
+// text into both).
+func (m Message) TextContent() string {
+	if m.Content != "" {
+		return m.Content
+	}
+	for _, p := range m.Parts {
+		if p.Type == "text" {
+			return p.Text
+		}
+	}
+	return ""
+}
+
+// imageDataURL builds a base64 data URL for image bytes of the given format
+// extension (png, jpg, gif, webp, bmp). jpg is emitted as image/jpeg.
+func imageDataURL(ext string, data []byte) string {
+	mime := "image/" + ext
+	if ext == "jpg" {
+		mime = "image/jpeg"
+	}
+	return "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(data)
+}
+
+// ImagePart builds an image ContentPart from raw bytes and a format extension.
+func ImagePart(ext string, data []byte) ContentPart {
+	p := ContentPart{Type: "image_url"}
+	p.ImageURL = &struct {
+		URL string `json:"url"`
+	}{URL: imageDataURL(ext, data)}
+	return p
+}
+
+// messageWire is the JSON shape of a Message. Content is `any` so it can be a
+// plain string (text-only) or a []ContentPart array (multimodal). The internal
+// fields are omitempty and cleared by stripAuthored before a provider request,
+// so they only ever appear in the persisted session store.
+type messageWire struct {
+	Role        string     `json:"role"`
+	Content     any        `json:"content"`
+	ToolCalls   []ToolCall `json:"tool_calls,omitempty"`
+	ToolCallID  string     `json:"tool_call_id,omitempty"`
+	Name        string     `json:"name,omitempty"`
+	Authored    bool       `json:"authored,omitempty"`
+	SentAt      *time.Time `json:"sent_at,omitempty"`
+	Usage       *Usage     `json:"usage,omitempty"`
+	Model       string     `json:"model,omitempty"`
+	RewoundFrom string     `json:"rewound_from,omitempty"`
+}
+
+// MarshalJSON sends Content as a plain string for text-only messages and as a
+// content-parts array (text + images) for multimodal ones.
+func (m Message) MarshalJSON() ([]byte, error) {
+	w := messageWire{
+		Role: m.Role, Content: m.Content, ToolCalls: m.ToolCalls, ToolCallID: m.ToolCallID,
+		Name: m.Name, Authored: m.Authored, SentAt: m.SentAt, Usage: m.Usage,
+		Model: m.Model, RewoundFrom: m.RewoundFrom,
+	}
+	if len(m.Parts) > 0 {
+		parts := m.Parts
+		if m.Content != "" {
+			// keep the text part first so the model reads it before the images
+			parts = append([]ContentPart{{Type: "text", Text: m.Content}}, parts...)
+		}
+		w.Content = parts
+	}
+	return json.Marshal(w)
+}
+
+// UnmarshalJSON accepts both the plain-string and content-parts wire forms.
+func (m *Message) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		messageWire
+		Content json.RawMessage `json:"content"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	m.Role, m.ToolCalls, m.ToolCallID, m.Name = raw.Role, raw.ToolCalls, raw.ToolCallID, raw.Name
+	m.Authored, m.SentAt, m.Usage, m.Model, m.RewoundFrom = raw.Authored, raw.SentAt, raw.Usage, raw.Model, raw.RewoundFrom
+	if len(raw.Content) == 0 {
+		return nil
+	}
+	var s string
+	if err := json.Unmarshal(raw.Content, &s); err == nil {
+		m.Content = s
+		return nil
+	}
+	var parts []ContentPart
+	if err := json.Unmarshal(raw.Content, &parts); err != nil {
+		return err
+	}
+	for _, p := range parts {
+		if p.Type == "text" {
+			m.Content = p.Text
+		} else if p.Type == "image_url" {
+			m.Parts = append(m.Parts, p)
+		}
+	}
+	return nil
 }
 
 // ToolCall is a model-requested tool invocation. DurationMs and ExitCode are
