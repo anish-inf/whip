@@ -261,3 +261,28 @@ func TestE2ELiveAttach(t *testing.T) {
 func jsonUnmarshal(s string, v any) error {
 	return json.Unmarshal([]byte(s), v)
 }
+
+// Regression: eval right after attach must not hang (a Page.enable settle
+// race was reported against an earlier build). No settle sleeps — a race
+// here shows up as a hang. 5 iterations to catch flakiness.
+func TestEvalImmediatelyAfterAttach(t *testing.T) {
+	_ = chromiumPath(t)
+	t.Setenv("HOME", t.TempDir())
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	for i := 0; i < 5; i++ {
+		b, err := Open(ctx, ModeHeadless)
+		if err != nil {
+			t.Fatalf("iter %d open: %v", i, err)
+		}
+		// zero settle: eval the instant we're attached
+		res, err := b.Eval(ctx, "1+1")
+		if err != nil {
+			t.Fatalf("iter %d eval: %v", i, err)
+		}
+		if res != "2" {
+			t.Fatalf("iter %d: got %s", i, res)
+		}
+		b.Close()
+	}
+}

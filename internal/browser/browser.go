@@ -152,20 +152,37 @@ func Open(ctx context.Context, mode Mode) (*Browser, error) {
 		if err != nil {
 			return nil, err
 		}
-		l := launcher.New().
-			UserDataDir(filepath.Join(home, ".loopy", "browser", "dedicated-profile")).
-			Set("remote-debugging-port", "0"). // random free port
-			Leakless(true).
-			Headless(mode == ModeHeadless)
-		if os.Getenv("LOOPY_BROWSER_DEBUG") != "" {
-			l = l.Set("enable-logging", "stderr").Set("v", "1")
+		profileDir := filepath.Join(home, ".loopy", "browser", "dedicated-profile")
+		newLauncher := func() *launcher.Launcher {
+			l := launcher.New().
+				UserDataDir(profileDir).
+				Set("remote-debugging-port", "0"). // random free port
+				Leakless(true).
+				Headless(mode == ModeHeadless)
+			if os.Getenv("LOOPY_BROWSER_DEBUG") != "" {
+				l = l.Set("enable-logging", "stderr").Set("v", "1")
+			}
+			if bin := os.Getenv("ROD_BROWSER_BIN"); bin != "" { // test/override hook
+				l = l.Bin(bin)
+			}
+			return l
 		}
-		if bin := os.Getenv("ROD_BROWSER_BIN"); bin != "" { // test/override hook
-			l = l.Bin(bin)
-		}
+		l := newLauncher()
 		ws, err := l.Launch()
 		if err != nil {
-			return nil, fmt.Errorf("launch dedicated chrome: %w", err)
+			// A crashed previous run leaves a locked/poisoned profile
+			// (SingletonLock, stale DevToolsActivePort) whose next launch
+			// wedges the renderer — the closed-connection regression other
+			// sessions hit. Quarantine the dir and retry once fresh.
+			quarantine := profileDir + ".stale-" + time.Now().Format("20060102150405")
+			if rerr := os.Rename(profileDir, quarantine); rerr != nil {
+				return nil, fmt.Errorf("launch dedicated chrome: %w", err)
+			}
+			l = newLauncher()
+			ws, err = l.Launch()
+			if err != nil {
+				return nil, fmt.Errorf("launch dedicated chrome after profile quarantine: %w", err)
+			}
 		}
 		b.launcher = l
 		b.browser = rod.New().ControlURL(ws)
