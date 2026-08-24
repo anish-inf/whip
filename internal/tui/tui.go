@@ -847,6 +847,21 @@ func (m *model) contentPad() int {
 	return max(m.vp.Height-h, 0)
 }
 
+// viewportView renders the transcript viewport and drops the dead rows at its
+// bottom. The viewport always renders its full allocated height (lipgloss
+// Height pads it out), and the content is bottom-anchored — padding goes on
+// top — so when the transcript is shorter than the viewport the unused rows
+// would otherwise render as a gap between the last message and the input box.
+func (m *model) viewportView() string {
+	s := sanitizeView(m.vp.View())
+	lines := strings.Split(s, "\n")
+	last := len(lines) - 1
+	for last >= 0 && strings.TrimSpace(ansi.Strip(lines[last])) == "" {
+		last--
+	}
+	return strings.Join(lines[:last+1], "\n")
+}
+
 func (m *model) Init() tea.Cmd {
 	return textarea.Blink
 }
@@ -2813,7 +2828,7 @@ func (m *model) View() string {
 	// and the /help command. The bottom hint covers the busy/interactive states.
 	tips := "`ctrl+p` commands"
 	b.WriteString(dimStyle.Render(tips) + "\n\n")
-	b.WriteString(sanitizeView(m.vp.View()) + "\n")
+	b.WriteString(m.viewportView() + "\n")
 	if m.curThink != "" {
 		b.WriteString("\n" + m.thinkView() + "\n")
 	}
