@@ -115,14 +115,28 @@ func unregisterChromaStyle() {
 // variant gets a higher-contrast inline-code treatment: stock Light uses
 // salmon (203) on near-white (254), which is nearly unreadable — dark red on
 // a light-gray chip instead.
+//
+// Tables: stock Dark/Light ship an empty StyleTable, leaving separator
+// choice to lipgloss defaults. Pin the separators explicitly (column pipes +
+// box-drawing joints on the header rule) so a lipgloss default change can't
+// silently unformat tables, and drop the per-cell margin to one space —
+// glamour's default cell padding wastes ~4 columns per cell, which is the
+// difference between a readable table and wrapped mush at narrow widths.
 func mdStyle() glamouransi.StyleConfig {
+	var st glamouransi.StyleConfig
 	if mdLight {
-		st := styles.LightStyleConfig
+		st = styles.LightStyleConfig
 		st.Code.Color = strPtr("124")           // dark red
 		st.Code.BackgroundColor = strPtr("255") // lightest gray chip
-		return st
+	} else {
+		st = styles.DarkStyleConfig
 	}
-	return styles.DarkStyleConfig
+	st.Table.ColumnSeparator = strPtr("│")
+	st.Table.CenterSeparator = strPtr("┼")
+	st.Table.RowSeparator = strPtr("─")
+	zero := uint(0)
+	st.Table.Margin = &zero
+	return st
 }
 
 func strPtr(s string) *string { return &s }

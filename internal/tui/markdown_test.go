@@ -142,3 +142,44 @@ func TestResizeRewrapsTranscript(t *testing.T) {
 		}
 	}
 }
+
+// Table rendering: pipes separate columns, a header rule with box-drawing
+// joints, cell content wraps within width, and alignment markers hold. Pins
+// the explicit Table style (stock Dark/Light leave separators to lipgloss
+// defaults — a dependency bump must not silently unformat tables).
+func TestRenderMarkdownTable(t *testing.T) {
+	md := "| Name | Age | City |\n|:---|---:|---|\n| Alice | 30 | New York |\n| Bob | 25 | London |"
+	out := renderMarkdown(md, 50)
+	plain := ansi.Strip(out)
+	for _, want := range []string{"│", "─", "Alice", "New York"} {
+		if !strings.Contains(plain, want) {
+			t.Errorf("table render missing %q:\n%s", want, plain)
+		}
+	}
+	// every rendered line respects width
+	for i, l := range strings.Split(out, "\n") {
+		if w := ansi.StringWidth(l); w > 50 {
+			t.Errorf("line %d exceeds width 50 (%d): %q", i, w, l)
+		}
+	}
+	// markdown pipes consumed, not literal
+	if strings.Contains(plain, "|---|") {
+		t.Errorf("table markers should be consumed:\n%s", plain)
+	}
+}
+
+// A wide table at narrow width wraps cell content instead of overflowing or
+// mangling columns.
+func TestRenderMarkdownTableNarrow(t *testing.T) {
+	md := "| Package | Purpose |\n|---|---|\n| internal/agent | the agent loop with a long description that must wrap around |"
+	out := renderMarkdown(md, 40)
+	for i, l := range strings.Split(out, "\n") {
+		if w := ansi.StringWidth(l); w > 40 {
+			t.Errorf("line %d exceeds width 40 (%d): %q", i, w, l)
+		}
+	}
+	plain := ansi.Strip(out)
+	if !strings.Contains(plain, "internal/agent") || !strings.Contains(plain, "wrap") {
+		t.Errorf("wrapped table lost content:\n%s", plain)
+	}
+}
