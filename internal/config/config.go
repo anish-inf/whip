@@ -359,7 +359,8 @@ func Default() *Config {
 			},
 		},
 		Models: map[string]Model{
-			"kimi-k3-fast":           {Providers: []string{"inference"}, Context: 131072, Vision: true},
+			"kimi-k3":                {Providers: []string{"inference"}, Context: 1048576, Vision: true},
+			"kimi-k3-fast":           {Providers: []string{"inference"}, Context: 1048576, Vision: true},
 			"glm-5.2-fast":           {Providers: []string{"inference"}, Context: 128000},
 			"deepseek-v4-flash-0731": {Providers: []string{"inference"}, Context: 384000},
 		},
