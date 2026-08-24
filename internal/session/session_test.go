@@ -4,6 +4,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/context-labs/loopy/internal/llm"
 )
@@ -19,9 +20,10 @@ func TestStoreRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	sent := time.Date(2025, 6, 1, 14, 30, 0, 0, time.UTC)
 	msgs := []llm.Message{
 		{Role: "system", Content: "sys"},
-		{Role: "user", Content: "first question here"},
+		{Role: "user", Content: "first question here", Authored: true, SentAt: &sent},
 		{Role: "assistant", Content: "the answer"},
 		{Role: "user", Content: "follow-up"},
 		{Role: "assistant", Content: "final\nanswer"},
@@ -39,6 +41,10 @@ func TestStoreRoundTrip(t *testing.T) {
 	}
 	if len(got) != 4 || got[0].Role != "user" || got[3].Content != "final\nanswer" {
 		t.Fatalf("messages: %+v", got)
+	}
+	// the submission timestamp must survive the round trip (rewind picker)
+	if got[0].SentAt == nil || !got[0].SentAt.Equal(sent) {
+		t.Fatalf("SentAt did not round-trip: %+v", got[0])
 	}
 
 	u, a := st.LastExchange(id)

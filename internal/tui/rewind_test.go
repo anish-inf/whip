@@ -4,6 +4,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -233,7 +234,6 @@ func TestRewindPickerOrderAndArrows(t *testing.T) {
 	if strings.Count(view, "❯") != 1 {
 		t.Fatalf("exactly one selected row should be marked\n%s", view)
 	}
-
 	// ↑ walks toward older (up the list): q3 → q2 → q1, then clamps
 	for _, want := range []string{"q2", "q1", "q1"} {
 		press(t, m, tea.KeyMsg{Type: tea.KeyUp})
@@ -246,6 +246,40 @@ func TestRewindPickerOrderAndArrows(t *testing.T) {
 		press(t, m, tea.KeyMsg{Type: tea.KeyDown})
 		if got := m.rew.entries[m.rew.sel].text; got != want {
 			t.Fatalf("↓ should move to %s, on %s", want, got)
+		}
+	}
+}
+
+// Each entry renders its submission timestamp dimmed on the line below the
+// preview. Messages predating SentAt show an em dash, never a wrong time.
+func TestRewindPickerShowsTimestamps(t *testing.T) {
+	t1 := time.Date(2025, 6, 1, 14, 30, 0, 0, time.Local)
+	t2 := time.Date(2025, 6, 1, 15, 45, 0, 0, time.Local)
+	m := rewindModel(t,
+		llm.Message{Role: "user", Content: "q1", Authored: true, SentAt: &t1},
+		llm.Message{Role: "assistant", Content: "a1"},
+		llm.Message{Role: "user", Content: "q2", Authored: true, SentAt: &t2},
+		llm.Message{Role: "assistant", Content: "a2"},
+		llm.Message{Role: "user", Content: "q3-old", Authored: true}, // no SentAt: legacy row
+	)
+	press(t, m, esc(m))
+	press(t, m, esc(m))
+
+	view := m.rewindView()
+	for _, ts := range []string{"2025-06-01 14:30", "2025-06-01 15:45"} {
+		if !strings.Contains(view, ts) {
+			t.Errorf("picker should show timestamp %q\n%s", ts, view)
+		}
+	}
+	// the legacy row (no SentAt) renders a dash, and each timestamp sits on
+	// the line below its own preview
+	lines := strings.Split(view, "\n")
+	for i, ln := range lines {
+		if strings.Contains(ln, "q1") && !strings.Contains(lines[i+1], "14:30") {
+			t.Errorf("q1's timestamp should sit directly below it\n%s", view)
+		}
+		if strings.Contains(ln, "q3-old") && !strings.Contains(lines[i+1], "—") {
+			t.Errorf("q3-old (no SentAt) should show a dash below it\n%s", view)
 		}
 	}
 }
