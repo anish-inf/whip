@@ -122,6 +122,25 @@ type Config struct {
 	// internal/lsp.FromConfigMap for the merge semantics). Entries extend or
 	// disable the built-in registry (gopls).
 	LSPServers map[string]LSPServer `json:"lsp,omitempty"`
+	// Browser configures the native browser subsystem (internal/browser).
+	Browser BrowserConfig `json:"browser,omitempty"`
+}
+
+// BrowserConfig controls browser_exec: which Chrome to drive and the
+// private-address policy for non-live backends.
+type BrowserConfig struct {
+	// Mode: "live" (attach to the user's running Chrome, default),
+	// "dedicated" (loopy-owned profile), or "headless".
+	Mode string `json:"mode,omitempty"`
+	// CDPURL attaches live mode to an explicit DevTools endpoint instead of
+	// the profile scan (http:// or ws://).
+	CDPURL string `json:"cdpUrl,omitempty"`
+	// AllowPrivateURLs permits private/LAN targets on dedicated/headless
+	// backends (default false; live mode is always exempt — the user's own
+	// browser on their own network).
+	AllowPrivateURLs bool `json:"allowPrivateUrls,omitempty"`
+	// Enabled false hides the browser_exec tool entirely.
+	Enabled *bool `json:"enabled,omitempty"`
 }
 
 // LSPServer is the config-file form of an LSP server entry. It mirrors

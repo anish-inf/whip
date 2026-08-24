@@ -138,14 +138,14 @@ func TestBackgroundTaskDeliversReport(t *testing.T) {
 
 	// the report should be queued for steering into the parent. Steer runs in
 	// the task goroutine right after settle closes Done, so poll briefly.
-	var pending []string
+	var pending []pendingSteer
 	for i := 0; i < 100; i++ {
 		if pending = ag.drainPending(); len(pending) > 0 {
 			break
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	if len(pending) != 1 || !strings.Contains(pending[0], "report-body") {
+	if len(pending) != 1 || !strings.Contains(pending[0].text, "report-body") {
 		t.Fatalf("expected steered report, got %v", pending)
 	}
 }

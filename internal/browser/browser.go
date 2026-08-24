@@ -1,0 +1,636 @@
+// Package browser provides loopy's native browser subsystem: one Go binary
+// driving the user's live Chrome (their real cookies/sessions), a dedicated
+// loopy-owned Chrome, or a headless instance — no Python, no Node.
+//
+// Design: docs/learnings/browser-use-integration.md §5b. The public surface
+// is the Backend interface with go-rod/rod behind it; chromedp is a drop-in
+// backup if rod ever stalls. The live-attach discovery is a port of
+// browser-harness's daemon.py (profile scan, DevToolsActivePort,
+// SingletonLock liveness, Chrome 144+ permission-popup errors).
+package browser
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/go-rod/rod"
+	"github.com/go-rod/rod/lib/launcher"
+	"github.com/go-rod/rod/lib/proto"
+)
+
+// Mode selects which browser loopy drives.
+type Mode string
+
+const (
+	// ModeLive attaches to the user's running everyday browser via its
+	// CDP endpoint — their real cookies and logins. Discovered via profile
+	// scan; never launches or closes the browser.
+	ModeLive Mode = "live"
+	// ModeDedicated launches a separate Chrome instance with a loopy-owned
+	// user-data-dir (~/.loopy/browser/dedicated-profile) and remote
+	// debugging enabled from the start — no permission popups.
+	ModeDedicated Mode = "dedicated"
+	// ModeHeadless is ModeDedicated without a window.
+	ModeHeadless Mode = "headless"
+)
+
+// ErrPermissionBlocked reports Chrome 144+'s per-connection "Allow remote
+// debugging?" popup (or the chrome://inspect toggle being off) standing
+// between loopy and a live browser. The user must act in Chrome; retry
+// after they confirm.
+var ErrPermissionBlocked = errors.New("chrome permission-blocked")
+
+// ErrNoLiveBrowser means no supported Chromium-family browser with a
+// reachable debug port was found running.
+var ErrNoLiveBrowser = errors.New("no live browser with remote debugging found")
+
+// Backend is the browser driver contract. *Browser implements it with rod;
+// tests substitute fakes, and chromedp is the drop-in backup (§5b).
+type Backend interface {
+	// Info reports the attached page's URL, title, viewport, and scroll
+	// position, or the pending native JS dialog when one is open.
+	Info(ctx context.Context) (PageInfo, error)
+	// Navigate loads url in the controlled tab (creating it if needed) and
+	// waits for load.
+	Navigate(ctx context.Context, url string) error
+	// Back steps the tab history.
+	Back(ctx context.Context) error
+	// Eval evaluates a JS expression in the tab and returns the JSON value.
+	Eval(ctx context.Context, expression string) (string, error)
+	// ClickAt dispatches trusted mouse events at viewport coordinates.
+	ClickAt(ctx context.Context, x, y float64) error
+	// TypeText inserts text into the focused element.
+	TypeText(ctx context.Context, text string) error
+	// PressKey sends a named key (Enter, Tab, Backspace, ArrowDown, …) with
+	// real key events so framework listeners fire.
+	PressKey(ctx context.Context, key string) error
+	// Fill focuses a selector, clears it, and types — safe for
+	// React/Vue-controlled inputs.
+	Fill(ctx context.Context, selector, text string) error
+	// Scroll dispatches a mouse-wheel event at the viewport center.
+	Scroll(ctx context.Context, dy float64) error
+	// WaitLoad blocks until document.readyState is complete or ctx expires.
+	WaitLoad(ctx context.Context) error
+	// WaitElement polls for a selector; visible additionally requires layout.
+	WaitElement(ctx context.Context, selector string, visible bool) (bool, error)
+	// Screenshot returns a JPEG of the viewport, downscaled so no side
+	// exceeds maxDim (0 = no limit) — sized for direct use as a vision
+	// image part.
+	Screenshot(ctx context.Context, maxDim int) (jpeg []byte, err error)
+	// AXTree returns the page's accessibility tree as compact JSON
+	// (role/name/backendDOMNodeId per node). Large — callers filter.
+	AXTree(ctx context.Context) (string, error)
+	// BoxModel returns the viewport-px center of the node, for AXTree →
+	// ClickAt workflows.
+	BoxModel(ctx context.Context, backendNodeID int) (x, y float64, err error)
+	// Tabs lists open page targets.
+	Tabs(ctx context.Context) ([]Tab, error)
+	// UseTab switches control to the given target id.
+	UseTab(ctx context.Context, targetID string) error
+	// UploadFiles sets files on a file input matched by selector.
+	UploadFiles(ctx context.Context, selector string, paths []string) error
+	// Close releases resources. Live mode detaches only (never closes the
+	// user's browser); dedicated/headless kill the launched process.
+	Close() error
+}
+
+// PageInfo mirrors browser-harness's page_info() helper.
+type PageInfo struct {
+	URL, Title            string
+	Width, Height         int
+	ScrollX, ScrollY      float64
+	PageWidth, PageHeight float64
+	Dialog                *Dialog `json:",omitempty"`
+}
+
+// Dialog is a pending native JS dialog (alert/confirm/prompt/beforeunload).
+// The page's JS thread is frozen until HandleDialog responds.
+type Dialog struct {
+	Type, Message, DefaultPrompt string
+}
+
+// Tab is one open page target.
+type Tab struct {
+	TargetID, Title, URL string
+}
+
+// Browser owns one rod browser connection plus the controlled page.
+type Browser struct {
+	mode     Mode
+	browser  *rod.Browser
+	page     *rod.Page
+	launcher *launcher.Launcher // non-nil only when we launched (dedicated/headless)
+}
+
+// Open connects (or launches) per mode and attaches to a controllable tab.
+// Attach mode discovery errors are actionable (ErrNoLiveBrowser,
+// ErrPermissionBlocked) — surface them to the user, not the model.
+func Open(ctx context.Context, mode Mode) (*Browser, error) {
+	b := &Browser{mode: mode}
+	switch mode {
+	case ModeLive:
+		ws, err := DiscoverLiveWS(ctx)
+		if err != nil {
+			return nil, err
+		}
+		b.browser = rod.New().ControlURL(ws)
+		if err := b.browser.Connect(); err != nil {
+			msg := err.Error()
+			if strings.Contains(msg, "403") || strings.Contains(msg, "permission") || strings.Contains(msg, "timed out") {
+				return nil, fmt.Errorf("%w: Chrome's 'Allow remote debugging?' popup needs a click (or enable chrome://inspect/#remote-debugging): %s", ErrPermissionBlocked, msg)
+			}
+			return nil, fmt.Errorf("connect to live browser: %w", err)
+		}
+	case ModeDedicated, ModeHeadless:
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return nil, err
+		}
+		profileDir := filepath.Join(home, ".loopy", "browser", "dedicated-profile")
+		newLauncher := func() *launcher.Launcher {
+			l := launcher.New().
+				UserDataDir(profileDir).
+				Set("remote-debugging-port", "0"). // random free port
+				Leakless(true).
+				Headless(mode == ModeHeadless)
+			if os.Getenv("LOOPY_BROWSER_DEBUG") != "" {
+				l = l.Set("enable-logging", "stderr").Set("v", "1")
+			}
+			if bin := os.Getenv("ROD_BROWSER_BIN"); bin != "" { // test/override hook
+				l = l.Bin(bin)
+			}
+			return l
+		}
+		l := newLauncher()
+		ws, err := l.Launch()
+		if err != nil {
+			// A crashed previous run leaves a locked/poisoned profile
+			// (SingletonLock, stale DevToolsActivePort) whose next launch
+			// wedges the renderer — the closed-connection regression other
+			// sessions hit. Quarantine the dir and retry once fresh.
+			quarantine := profileDir + ".stale-" + time.Now().Format("20060102150405")
+			if rerr := os.Rename(profileDir, quarantine); rerr != nil {
+				return nil, fmt.Errorf("launch dedicated chrome: %w", err)
+			}
+			l = newLauncher()
+			ws, err = l.Launch()
+			if err != nil {
+				return nil, fmt.Errorf("launch dedicated chrome after profile quarantine: %w", err)
+			}
+		}
+		b.launcher = l
+		b.browser = rod.New().ControlURL(ws)
+		if err := b.browser.Connect(); err != nil {
+			l.Cleanup()
+			return nil, fmt.Errorf("connect to launched chrome: %w", err)
+		}
+	default:
+		return nil, fmt.Errorf("unknown browser mode %q", mode)
+	}
+	b.browser = b.browser.Context(ctx)
+	if err := b.attachPage(); err != nil {
+		b.browser.Close()
+		if b.launcher != nil {
+			b.launcher.Cleanup()
+		}
+		return nil, err
+	}
+	return b, nil
+}
+
+// internalURL matches browser-harness's INTERNAL prefix set.
+func internalURL(u string) bool {
+	for _, p := range []string{"chrome://", "chrome-untrusted://", "devtools://", "chrome-extension://", "about:"} {
+		if strings.HasPrefix(u, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// attachPage picks the controllable tab: the first real page, else a
+// reusable blank/new-tab page, else a fresh about:blank (daemon.py's
+// attach_first_page, simplified: loopy owns the whole connection so
+// parallel agents fight over nothing — one Browser per caller).
+func (b *Browser) attachPage() error {
+	pages, err := b.browser.Pages()
+	if err != nil {
+		return fmt.Errorf("list pages: %w", err)
+	}
+	var blank *rod.Page
+	for _, p := range pages {
+		info, err := p.Info()
+		if err != nil {
+			continue
+		}
+		if info.Type != "page" {
+			continue
+		}
+		if !internalURL(info.URL) {
+			b.page = p
+			break
+		}
+		if blank == nil && (info.URL == "about:blank" || strings.HasPrefix(info.URL, "chrome://newtab") || strings.HasPrefix(info.URL, "edge://newtab")) {
+			blank = p
+		}
+	}
+	if b.page == nil {
+		b.page = blank
+	}
+	if b.page == nil {
+		b.page, err = b.browser.Page(proto.TargetCreateTarget{URL: "about:blank"})
+		if err != nil {
+			return fmt.Errorf("create tab: %w", err)
+		}
+	}
+	// ponytail: browser-harness enables Page/DOM/Runtime/Network up front;
+	// rod enables domains lazily per call. Skip the explicit enable (it
+	// deadlocked against headless-shell's event stream in e2e).
+	return nil
+}
+
+// Mode returns the session's browser mode (for mode-dependent policy).
+func (b *Browser) Mode() Mode { return b.mode }
+
+// Close releases the connection; launched browsers are killed.
+func (b *Browser) Close() error {
+	if b.browser == nil {
+		return nil
+	}
+	err := b.browser.Close()
+	if b.launcher != nil {
+		b.launcher.Cleanup() // kills the launched process tree
+	}
+	return err
+}
+
+// --- Backend implementation ---
+
+func (b *Browser) Info(ctx context.Context) (PageInfo, error) {
+	if d, err := b.pendingDialog(ctx); err == nil && d != nil {
+		return PageInfo{Dialog: d}, nil
+	}
+	res, err := b.runtimeEval(ctx, `JSON.stringify({url:location.href,title:document.title,w:innerWidth,h:innerHeight,sx:scrollX,sy:scrollY,pw:document.documentElement.scrollWidth,ph:document.documentElement.scrollHeight})`)
+	if err != nil {
+		return PageInfo{}, err
+	}
+	var raw struct {
+		URL, Title     string
+		W, H           int
+		SX, SY, PW, PH float64
+	}
+	if err := json.Unmarshal([]byte(res.Result.Value.String()), &raw); err != nil {
+		return PageInfo{}, err
+	}
+	return PageInfo{URL: raw.URL, Title: raw.Title, Width: raw.W, Height: raw.H, ScrollX: raw.SX, ScrollY: raw.SY, PageWidth: raw.PW, PageHeight: raw.PH}, nil
+}
+
+func (b *Browser) pendingDialog(ctx context.Context) (*Dialog, error) {
+	// ponytail: browser-harness buffers Page.javascriptDialogOpening events on
+	// a background reader; v1 surfaces dialogs only through HandleDialog when
+	// an action hangs on one. Generalize to an event buffer if agents trip
+	// on unexpected alerts.
+	return nil, nil
+}
+
+// HandleDialog accepts or dismisses the next pending native dialog,
+// blocking up to 2s for one to appear.
+func (b *Browser) HandleDialog(accept bool, promptText string) error {
+	wait, handle := b.page.Timeout(2 * time.Second).HandleDialog()
+	_ = wait()
+	return handle(&proto.PageHandleJavaScriptDialog{Accept: accept, PromptText: promptText})
+}
+
+func (b *Browser) Navigate(ctx context.Context, url string) error {
+	if b.page == nil {
+		return errors.New("no attached tab")
+	}
+	p := b.page.Context(ctx)
+	if err := p.Navigate(url); err != nil {
+		return err
+	}
+	// Poll readyState via our raw-CDP eval instead of rod's WaitLoad (which
+	// evals a rAF-loop helper that wedges against some page/server combos).
+	return b.WaitLoad(ctx)
+}
+
+func (b *Browser) Back(ctx context.Context) error {
+	p := b.page.Context(ctx)
+	if err := p.NavigateBack(); err != nil {
+		return err
+	}
+	return b.WaitLoad(ctx)
+}
+
+// Eval runs Runtime.evaluate directly (ByValue + AwaitPromise, per
+// browser-harness's js()): the expression is evaluated as-is, with an
+// IIFE-retry when Chrome reports an illegal top-level return — both
+// "document.title" and "const x = 1; return x" work. rod's page.Eval wraps
+// the snippet as a function body, which breaks bare expressions.
+func (b *Browser) Eval(ctx context.Context, expression string) (string, error) {
+	res, err := b.runtimeEval(ctx, expression)
+	if err != nil && strings.Contains(err.Error(), "Illegal return statement") {
+		res, err = b.runtimeEval(ctx, "(function(){"+expression+"})()")
+	}
+	if err != nil {
+		return "", err
+	}
+	if res.ExceptionDetails != nil || (res.Result.Subtype == "error") {
+		desc := res.Result.Description
+		if res.ExceptionDetails != nil && res.ExceptionDetails.Text != "" {
+			desc = res.ExceptionDetails.Text + ": " + desc
+		}
+		return "", fmt.Errorf("JavaScript evaluation failed: %s; expression: %.160s", desc, expression)
+	}
+	if res.Result.Type == proto.RuntimeRemoteObjectTypeUndefined {
+		return "null", nil
+	}
+	data, err := res.Result.Value.MarshalJSON()
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
+func (b *Browser) runtimeEval(ctx context.Context, expression string) (*proto.RuntimeEvaluateResult, error) {
+	return proto.RuntimeEvaluate{
+		Expression:    expression,
+		ReturnByValue: true,
+		AwaitPromise:  true,
+	}.Call(b.page.Context(ctx))
+}
+
+func (b *Browser) ClickAt(ctx context.Context, x, y float64) error {
+	m := proto.InputDispatchMouseEvent{Type: proto.InputDispatchMouseEventTypeMousePressed, X: x, Y: y, Button: proto.InputMouseButtonLeft, ClickCount: 1}
+	if err := m.Call(b.page.Context(ctx)); err != nil {
+		return err
+	}
+	m.Type = proto.InputDispatchMouseEventTypeMouseReleased
+	return m.Call(b.page.Context(ctx))
+}
+
+func (b *Browser) TypeText(ctx context.Context, text string) error {
+	return proto.InputInsertText{Text: text}.Call(b.page.Context(ctx))
+}
+
+// keyDefs maps key names to codes, per browser-harness's _KEYS table.
+var keyDefs = map[string]struct {
+	Code string
+	Key  int
+	Text string
+}{
+	"Enter":      {"Enter", 13, "\r"},
+	"Tab":        {"Tab", 9, "\t"},
+	"Backspace":  {"Backspace", 8, ""},
+	"Escape":     {"Escape", 27, ""},
+	"Delete":     {"Delete", 46, ""},
+	" ":          {"Space", 32, " "},
+	"ArrowLeft":  {"ArrowLeft", 37, ""},
+	"ArrowUp":    {"ArrowUp", 38, ""},
+	"ArrowRight": {"ArrowRight", 39, ""},
+	"ArrowDown":  {"ArrowDown", 40, ""},
+	"Home":       {"Home", 36, ""},
+	"End":        {"End", 35, ""},
+	"PageUp":     {"PageUp", 33, ""},
+	"PageDown":   {"PageDown", 34, ""},
+}
+
+// PressKey sends keyDown(+char)+keyUp with virtual key codes so listeners
+// checking e.keyCode / e.key both fire (helpers.py press_key).
+func (b *Browser) PressKey(ctx context.Context, key string) error {
+	p := b.page.Context(ctx)
+	def, ok := keyDefs[key]
+	if !ok && len(key) == 1 {
+		def = struct {
+			Code string
+			Key  int
+			Text string
+		}{key, int(key[0]), key}
+		ok = true
+	}
+	if !ok {
+		return fmt.Errorf("unknown key %q", key)
+	}
+	down := proto.InputDispatchKeyEvent{
+		Type: proto.InputDispatchKeyEventTypeKeyDown,
+		Key:  key, Code: def.Code,
+		WindowsVirtualKeyCode: def.Key, NativeVirtualKeyCode: def.Key,
+	}
+	if err := down.Call(p); err != nil {
+		return err
+	}
+	if def.Text != "" {
+		if err := (proto.InputDispatchKeyEvent{Type: proto.InputDispatchKeyEventTypeChar, Text: def.Text, Key: key, Code: def.Code}).Call(p); err != nil {
+			return err
+		}
+	}
+	up := down
+	up.Type = proto.InputDispatchKeyEventTypeKeyUp
+	return up.Call(p)
+}
+
+// Fill clears and types into a framework-managed input with real key events
+// plus synthetic input/change (helpers.py fill_input).
+func (b *Browser) Fill(ctx context.Context, selector, text string) error {
+	sel, _ := json.Marshal(selector)
+	focused, err := b.Eval(ctx, fmt.Sprintf(`(()=>{const e=document.querySelector(%s);if(!e)return false;e.focus();return true})()`, sel))
+	if err != nil {
+		return err
+	}
+	if focused != "true" {
+		return fmt.Errorf("fill: element not found: %s", selector)
+	}
+	if err := b.PressKey(ctx, "Backspace"); err != nil { // select-all via eval is simpler and portable
+		return err
+	}
+	if _, err := b.Eval(ctx, fmt.Sprintf(`(()=>{const e=document.querySelector(%s);if(!e)return;const s=window.getSelection(),r=document.createRange();e.select&&e.select();r.selectNodeContents(e);s.removeAllRanges();s.addRange(r)})()`, sel)); err != nil {
+		return err
+	}
+	if err := b.PressKey(ctx, "Backspace"); err != nil {
+		return err
+	}
+	for _, ch := range text {
+		if err := b.PressKey(ctx, string(ch)); err != nil {
+			return err
+		}
+	}
+	_, err = b.Eval(ctx, fmt.Sprintf(`(()=>{const e=document.querySelector(%s);if(!e)return;e.dispatchEvent(new Event('input',{bubbles:true}));e.dispatchEvent(new Event('change',{bubbles:true}))})()`, sel))
+	return err
+}
+
+func (b *Browser) Scroll(ctx context.Context, dy float64) error {
+	info, err := b.Info(ctx)
+	if err != nil {
+		return err
+	}
+	return (proto.InputDispatchMouseEvent{
+		Type: proto.InputDispatchMouseEventTypeMouseWheel,
+		X:    float64(info.Width) / 2, Y: float64(info.Height) / 2,
+		DeltaX: 0, DeltaY: dy,
+	}).Call(b.page.Context(ctx))
+}
+
+// WaitLoad polls document.readyState == complete (helpers.py wait_for_load)
+// with a 15s cap when ctx has no earlier deadline.
+func (b *Browser) WaitLoad(ctx context.Context) error {
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, 15*time.Second)
+		defer cancel()
+	}
+	t := time.NewTicker(200 * time.Millisecond)
+	defer t.Stop()
+	for {
+		res, err := b.Eval(ctx, "document.readyState")
+		if err == nil && res == `"complete"` {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-t.C:
+		}
+	}
+}
+
+// WaitElement polls for a selector, per helpers.py wait_for_element.
+func (b *Browser) WaitElement(ctx context.Context, selector string, visible bool) (bool, error) {
+	sel, _ := json.Marshal(selector)
+	expr := fmt.Sprintf(`!!document.querySelector(%s)`, sel)
+	if visible {
+		expr = fmt.Sprintf(`(()=>{const e=document.querySelector(%s);if(!e)return false;if(typeof e.checkVisibility==='function')return e.checkVisibility({checkOpacity:true,checkVisibilityCSS:true});const s=getComputedStyle(e);return s.display!=='none'&&s.visibility!=='hidden'&&s.opacity!=='0'})()`, sel)
+	}
+	t := time.NewTicker(300 * time.Millisecond)
+	defer t.Stop()
+	for {
+		res, err := b.Eval(ctx, expr)
+		if err != nil {
+			return false, err
+		}
+		if res == "true" {
+			return true, nil
+		}
+		select {
+		case <-ctx.Done():
+			return false, nil
+		case <-t.C:
+		}
+	}
+}
+
+// Screenshot captures the viewport as JPEG (quality 80), downscaled via the
+// clip scale factor so no side exceeds maxDim — the vision-embed ladder from
+// browser-use's _native_screenshot_result (1568px keeps under model caps).
+func (b *Browser) Screenshot(ctx context.Context, maxDim int) ([]byte, error) {
+	quality := 80
+	p := b.page.Context(ctx)
+	req := &proto.PageCaptureScreenshot{Format: proto.PageCaptureScreenshotFormatJpeg, Quality: &quality}
+	if maxDim > 0 {
+		metrics, err := proto.PageGetLayoutMetrics{}.Call(p)
+		if err == nil && metrics.CSSLayoutViewport != nil {
+			w := float64(metrics.CSSLayoutViewport.ClientWidth)
+			h := float64(metrics.CSSLayoutViewport.ClientHeight)
+			scale := 1.0
+			if max(w, h) > float64(maxDim) {
+				scale = float64(maxDim) / max(w, h)
+			}
+			req.Clip = &proto.PageViewport{X: 0, Y: 0, Width: w, Height: h, Scale: scale}
+		}
+	}
+	shot, err := req.Call(p)
+	if err != nil {
+		return nil, err
+	}
+	return shot.Data, nil
+}
+
+// AXTree returns the full accessibility tree as compact JSON, filtered to
+// the fields an agent needs (role, name, backendDOMNodeId) — per
+// browser-harness's cdp("Accessibility.getFullAXTree") guidance, pre-filtered
+// in Go instead of Python.
+func (b *Browser) AXTree(ctx context.Context) (string, error) {
+	res, err := proto.AccessibilityGetFullAXTree{}.Call(b.page.Context(ctx))
+	if err != nil {
+		return "", err
+	}
+	type node struct {
+		Role          string `json:"role"`
+		Name          string `json:"name"`
+		BackendNodeID int    `json:"backendDOMNodeId"`
+	}
+	out := make([]node, 0, len(res.Nodes))
+	for _, n := range res.Nodes {
+		if n.Ignored {
+			continue
+		}
+		nn := node{BackendNodeID: int(n.BackendDOMNodeID)}
+		if n.Role != nil {
+			nn.Role = n.Role.Value.String()
+		}
+		if n.Name != nil {
+			nn.Name = n.Name.Value.String()
+		}
+		if nn.Role == "" && nn.Name == "" {
+			continue
+		}
+		out = append(out, nn)
+	}
+	data, err := json.Marshal(out)
+	return string(data), err
+}
+
+// BoxModel returns the viewport-px center of a node's content quad.
+func (b *Browser) BoxModel(ctx context.Context, backendNodeID int) (float64, float64, error) {
+	res, err := proto.DOMGetBoxModel{BackendNodeID: proto.DOMBackendNodeID(backendNodeID)}.Call(b.page.Context(ctx))
+	if err != nil {
+		return 0, 0, err
+	}
+	q := res.Model.Content // [x1,y1,x2,y2,x3,y3,x4,y4]
+	var sx, sy float64
+	for i := 0; i < 4; i++ {
+		sx += q[i*2]
+		sy += q[i*2+1]
+	}
+	return sx / 4, sy / 4, nil
+}
+
+func (b *Browser) Tabs(ctx context.Context) ([]Tab, error) {
+	pages, err := b.browser.Context(ctx).Pages()
+	if err != nil {
+		return nil, err
+	}
+	var out []Tab
+	for _, p := range pages {
+		info, err := p.Info()
+		if err != nil || info.Type != "page" {
+			continue
+		}
+		out = append(out, Tab{TargetID: string(p.TargetID), Title: info.Title, URL: info.URL})
+	}
+	return out, nil
+}
+
+func (b *Browser) UseTab(ctx context.Context, targetID string) error {
+	page, err := b.browser.Context(ctx).PageFromTarget(proto.TargetTargetID(targetID))
+	if err != nil {
+		return err
+	}
+	b.page = page
+	return nil
+}
+
+// UploadFiles sets files on an <input type=file> (helpers.py upload_file).
+func (b *Browser) UploadFiles(ctx context.Context, selector string, paths []string) error {
+	p := b.page.Context(ctx)
+	el, err := p.Element(selector)
+	if err != nil {
+		return fmt.Errorf("upload: element not found: %s", selector)
+	}
+	return el.SetFiles(paths)
+}

@@ -33,14 +33,45 @@ func goalContinuePrompt(goal string) string {
 	return fmt.Sprintf(`[goal check] The session goal is:
 %s
 
-If the goal is FULLY accomplished and you have VERIFIED it with your tools (builds pass, tests pass, behavior confirmed), reply starting with exactly %s followed by a one-line summary.
+If the goal is FULLY accomplished and you have VERIFIED it with your tools (builds pass, tests pass, behavior confirmed), your reply MUST begin with the literal token %s as the very first characters — no preamble, no "Verified:" line, nothing before it. Example first line: "%s — shipped and verified."
 
-Otherwise do not mention %s — keep working toward the goal right now with your tools. If any part is incomplete, unverified, or you are unsure, that means keep working. Do not stop to ask questions; make reasonable assumptions and proceed.`, goal, goalMetToken, goalMetToken)
+Otherwise do not use the token %s at all — keep working toward the goal right now with your tools. If any part is incomplete, unverified, or you are unsure, that means keep working. Do not stop to ask questions; make reasonable assumptions and proceed.`, goal, goalMetToken, goalMetToken, goalMetToken)
 }
 
 // goalMet reports whether the model explicitly declared the goal done.
+// The prompt demands GOAL_MET as the first token, but models routinely add
+// a one-line "Verified: …" preamble (observed in the wild: the loop kept
+// re-firing while every reply contained the token mid-message). Accept the
+// token in the first 200 bytes when it's a declaration — followed by a
+// separator (—, --, -, ., :, !, newline, or end) — so aspirational mentions
+// like "making progress toward GOAL_MET soon" don't count.
 func goalMet(final string) bool {
-	return strings.HasPrefix(strings.TrimSpace(final), goalMetToken)
+	const window = 200
+	head := strings.TrimSpace(final)
+	if len(head) > window {
+		head = head[:window]
+	}
+	i := strings.Index(head, goalMetToken)
+	if i < 0 {
+		return false
+	}
+	// The character immediately after the token must be a word boundary
+	// (guards "GOAL_METRICS") — then anything goes: separators, "done", etc.
+	if i+len(goalMetToken) < len(head) {
+		c := head[i+len(goalMetToken)]
+		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' {
+			return false
+		}
+	}
+	// "…toward GOAL_MET soon" is aspirational, not a declaration: the token
+	// preceded by "toward "/"until " etc. doesn't count.
+	prefix := strings.ToLower(head[:i])
+	for _, hedge := range []string{"toward", "until", "before", "to reach", "approaching"} {
+		if strings.HasSuffix(strings.TrimSpace(prefix), hedge) {
+			return false
+		}
+	}
+	return true
 }
 
 // goalRoundsCommand implements /goal rounds: bare reports the effective cap
