@@ -30,9 +30,11 @@ func TestStatusLineAlwaysShown(t *testing.T) {
 			t.Errorf("status line should show %q\n--- view tail ---\n%s", want, tailLines(v, 6))
 		}
 	}
-	// the directory is present (compacted to its last segments)
-	if !strings.Contains(v, "loopy-three") {
-		t.Errorf("status line should show the working directory\n%s", tailLines(v, 6))
+	// the directory is present (compacted to its last segments) — assert
+	// against the actual cwd via shortCWD, not a hardcoded checkout name:
+	// tests run from internal/tui regardless of the repo folder's name.
+	if dir := shortCWD(); !strings.Contains(v, dir) {
+		t.Errorf("status line should show the working directory %q\n%s", dir, tailLines(v, 6))
 	}
 }
 
