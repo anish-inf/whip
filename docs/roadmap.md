@@ -16,6 +16,8 @@ parallel tool calls and background subagents).
 - [Agent loop](#agent-loop)
 - [Skills & subagents](#skills--subagents)
 - [Models & providers](#models--providers)
+- [MCP](#mcp)
+- [LSP](#lsp)
 - [Safety & permissions](#safety--permissions)
 - [Theming & config](#theming--config)
 - [CLI surface](#cli-surface)
@@ -96,6 +98,14 @@ Improvement plan with per-item checkboxes: [`.ai-docs/plans/mcp-polish/`](../.ai
 - [x] `loopy mcp test <name>` (the doctor: connect + list + timing + stderr tail, non-zero exit on failure — CI-checkable `.mcp.json`)
 - [ ] `loopy mcp import [--dry-run]` (materialize claude/codex imports into loopy's config)
 - [ ] Overlay config entries (`"overlay": true` patches `enabled` over imports instead of copying definitions)
+
+## LSP
+
+- [x] LSP diagnostics in `write`/`edit` tool output — stdlib-only client (`internal/lsp/`), gopls built-in + user servers via the `"lsp"` config block, capped 1.5s wait, sibling-file errors included (opencode `src/lsp/` diagnostics flow, research in `docs/learnings/other-harnesses/opencode/lsp.md`); plan: [`.ai-docs/plans/lsp-diagnostics/`](../.ai-docs/plans/lsp-diagnostics/README.md) (Linear INF-4989)
+- [ ] `@file.go#N` symbol-range expansion via `documentSymbol` (Linear INF-4991; deferred from the at-mentions port — see `docs/learnings/other-harnesses/opencode/at-mentions.md`)
+- [ ] Read warm-up (forked `touchFile` on read so first-edit diagnostics are instant — opencode `tool/read.ts:119`)
+- [ ] Pull diagnostics (`textDocument/diagnostic`) for servers without push
+- [ ] Navigation tool (definition/references/symbols) if cross-file diagnostics prove insufficient
 
 ## Safety & permissions
 

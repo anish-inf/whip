@@ -359,6 +359,66 @@ prompts, killed after 15s of no input.
 Tests: `killall_test.go` — `TestKillAllReapsChildren` (kills a live `sleep 60`),
 `TestBackgroundGrandchildDoesNotHang`.
 
+## LSP diagnostics
+
+`internal/lsp/` — a stdlib-only LSP client over stdio (JSON-RPC +
+`Content-Length` framing; no new dependencies) that feeds language-server
+diagnostics back into the model's `write`/`edit` tool results, so the model
+sees and fixes breakage in the same turn instead of spending a `go build`
+round-trip. Ported from opencode's diagnostics flow
+(`packages/opencode/src/lsp/`, research in
+`docs/learnings/other-harnesses/opencode/lsp.md`) with two widenings:
+sibling-file errors (opencode renders only the touched file) and wait-free
+wakeup (a per-file channel close instead of polling timeouts).
+
+- **Tool output** — after a successful `write`/`edit`, the tool result gains
+  a `<diagnostics file="…">ERROR [l:c] msg</diagnostics>` block (format
+  ported verbatim from opencode's `lsp/diagnostic.ts`): errors+warnings for
+  the edited file (max 20), errors-only for up to 5 sibling files in the
+  same directory, with a "this edit introduced errors in other files" note.
+  Injection is via the package hook `tools.LSP` (same pattern as
+  `tools.InteractiveBash`); nil hook = unchanged output.
+- **Manager** (`manager.go`) — the registry is data: `gopls` built-in (root =
+  nearest `go.work`/`go.mod`/`go.sum`, found by walking up from the file);
+  the `"lsp"` block in `~/.loopy/config.json` (same shape as the `mcp`
+  block: `command`, `extensions`, `rootMarkers`, `env`, `enabled`) adds
+  servers or disables the built-in. Servers spawn lazily on first covered
+  file touch; concurrent touches dedup through a close-to-broadcast channel,
+  failed spawns (binary not on PATH, initialize error) are remembered per
+  (server, root) so a broken server is a permanent no-op, never a retry
+  storm. The wait for diagnostics is capped at 1.5s and honors the tool
+  call's ctx (ctrl+c cancels); timeout = no block appended, the tool result
+  is never delayed further or failed.
+- **Client** (`client.go`) — one reader goroutine parses frames and routes
+  responses by id into cap-1 pending channels; writes funnel through a
+  buffered channel drained by one writer goroutine (no locks). Server→client
+  requests (`window/workDoneProgress/create`, `workspace/configuration`,
+  `client/registerCapability`) get a null-result ack, same as opencode.
+  Shutdown is polite `shutdown`/`exit` then SIGKILL of the process group;
+  `Manager.Close()` runs next to `mcpMgr.Close()` on exit.
+- **TUI** — `/lsp` prints per-server rows (`● connected (root: …)` /
+  `○ not started` / `✗ err`); the manager is built in the same startup block
+  as MCP and installed on `tools.LSP`.
+
+Tests: `internal/lsp/client_test.go` (frame parsing incl. split/garbage,
+request routing, ctx-cancel on unanswered requests, server-request acks),
+`manager_test.go` (in-process fake LSP server over pipes — no real gopls:
+edited-file blocks, sibling blocks, didOpen→didChange versioning, timeout,
+cancel, broken-spawn caching, config merge, root walk),
+`concurrency_test.go` (spawn dedup across 8 concurrent touches, parallel
+waiter wake with goroutine-leak check, publish-before-wait interleaving),
+`internal/tools/lsp_test.go` (block appended to write/edit output, nil hook,
+failure never fails the tool), `internal/agent/lsp_test.go`
+(`TestLSPDiagnosticsReachModel`: fake provider receives the diagnostics
+block in the tool result on the next call), `internal/tui/lsp_test.go`
+(`/lsp` status view).
+
+Out of scope (breadcrumbs in `.ai-docs/plans/lsp-diagnostics/README.md`):
+@-mention symbol-range expansion (Linear INF-4991), read warm-up
+(opencode forks `touchFile` on read — cut; revisit if first-edit latency
+annoys), pull diagnostics, navigation tools (definition/references/hover),
+auto-installing servers.
+
 ## Skills
 
 `internal/skills/skills.go` — scans `.agents/skills/*/SKILL.md` (project) and

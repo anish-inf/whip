@@ -23,6 +23,7 @@ import (
 	"github.com/context-labs/loopy/internal/agent"
 	"github.com/context-labs/loopy/internal/config"
 	"github.com/context-labs/loopy/internal/llm"
+	"github.com/context-labs/loopy/internal/lsp"
 	"github.com/context-labs/loopy/internal/mcp"
 	"github.com/context-labs/loopy/internal/session"
 	"github.com/context-labs/loopy/internal/skills"
@@ -146,6 +147,7 @@ type model struct {
 	catalogs     map[string]config.Catalog // provider model lists (capabilities)
 	mcpMgr       *mcp.Manager              // MCP server connections; nil when none configured
 	mcpSeen      map[string]bool           // servers whose first settle was announced
+	lspMgr       *lsp.Manager              // LSP diagnostics source for write/edit tool output
 
 	irunner *interactiveRunner // installed on tools.InteractiveBash at startup
 	iactive *interactive       // in-flight interactive command; nil when idle
@@ -272,6 +274,12 @@ func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string) (s
 				m.append(errStyle.Render(fmt.Sprintf("mcp: %s: %s", src, derr)))
 			}
 		}
+		// LSP: build the diagnostics manager (built-ins merged under the
+		// config's "lsp" block) and install it for write/edit tool output.
+		// Servers spawn lazily on first covered file touch; a missing binary
+		// is remembered as broken, so this never blocks startup.
+		m.lspMgr = lsp.NewManager(lsp.FromConfigMap(cfg.LSPServers))
+		tools.LSP = m.lspMgr
 	}
 	if dir, derr := config.Dir(); derr == nil {
 		if st, serr := session.Open(dir + "/sessions.db"); serr == nil {
@@ -338,6 +346,11 @@ func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string) (s
 	// so a clean stdio server never becomes a KillAll target.
 	if m.mcpMgr != nil {
 		m.mcpMgr.Close()
+	}
+	// LSP servers get the same courtesy (shutdown/exit, then SIGKILL).
+	if m.lspMgr != nil {
+		m.lspMgr.Close()
+		tools.LSP = nil
 	}
 	// Make sure no agent-spawned child process (a server the model started, a
 	// watcher, a daemon) outlives loopy. KillAll SIGKILLs every tracked process
@@ -2664,6 +2677,8 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 		return m, m.spin.Tick
 	case "/mcp":
 		return m.mcpCommand(fields)
+	case "/lsp":
+		return m.lspCommand(fields)
 	case "/cd":
 		m.cdCommand(strings.TrimSpace(strings.TrimPrefix(text, "/cd")))
 		return m, nil

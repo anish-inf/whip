@@ -113,6 +113,20 @@ type Config struct {
 	// internal/mcp.ServerConfig for the normalized semantics). On load it is
 	// merged over imported claude/codex configs: loopy always wins per name.
 	MCPServers map[string]MCPServer `json:"mcp,omitempty"`
+	// LSPServers is loopy's own LSP server block (loopy-native shape; see
+	// internal/lsp.FromConfigMap for the merge semantics). Entries extend or
+	// disable the built-in registry (gopls).
+	LSPServers map[string]LSPServer `json:"lsp,omitempty"`
+}
+
+// LSPServer is the config-file form of an LSP server entry. It mirrors
+// MCPServer minus the remote fields (LSP is stdio-only here).
+type LSPServer struct {
+	Command     []string          `json:"command,omitempty"`
+	Extensions  []string          `json:"extensions,omitempty"`
+	RootMarkers []string          `json:"rootMarkers,omitempty"`
+	Env         map[string]string `json:"env,omitempty"`
+	Enabled     *bool             `json:"enabled,omitempty"`
 }
 
 // MCPServer is the config-file form of an MCP server entry. It mirrors
