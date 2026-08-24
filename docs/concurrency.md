@@ -143,3 +143,19 @@ and `KillAll()` SIGKILLs the whole process group on exit, so an agent-started
 server never outlives loopy. The non-interactive path closes its output pipes
 on process exit so a detached grandchild (`sleep 30 &`, nohup) can't hang the
 agent waiting on pipe EOF.
+
+## 4. LSP diagnostic waiters = per-file channel closes
+
+`internal/lsp/manager.go` reuses close-to-broadcast for LSP push diagnostics:
+`write`/`edit` send `didOpen`/`didChange` with a document version, then wait
+on a channel registered under the file's path; the reader goroutine's
+`publishDiagnostics` handler closes all of that file's waiters (a stale push
+is harmless — the waiter re-checks the diagnostics cache and re-registers).
+This replaces opencode's poll-with-timeout `waitForDiagnostics`
+(`packages/opencode/src/lsp/client.ts`): no per-waiter goroutine, no polling
+interval, and the wait is bounded by the tool's ctx plus a 1.5s cap. Two
+twists the task registry doesn't need: the waiter list is keyed so a push
+for file A never wakes file B, and the loop breaks on the edited file's push
+plus one 50ms trailing wake (still deadline-bounded) for sibling frames —
+gopls fans pushes out across the whole package, so sibling errors land a
+tick after the edited file's.

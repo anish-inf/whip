@@ -35,6 +35,15 @@ type InteractiveRunner interface {
 // (which fast-fails sudo-style prompts instead of hanging).
 var InteractiveBash InteractiveRunner
 
+// LSP, when non-nil, feeds language-server diagnostics back to the model by
+// appending a <diagnostics> block to write/edit tool output (see
+// internal/lsp). Installed by the TUI at startup; nil in tests and headless
+// runs. Implementations must be safe for concurrent use (parallel tool
+// calls) and must honor ctx (ctrl+c cancels the wait).
+var LSP interface {
+	WaitDiagnostics(ctx context.Context, path string) string
+}
+
 // All returns the built-in tool set.
 func All() []Tool {
 	return []Tool{bashTool(), readTool(), writeTool(), editTool()}
@@ -92,6 +101,16 @@ func truncate(s string) string {
 		return s
 	}
 	return s[:maxOutput] + fmt.Sprintf("\n... [truncated %d bytes]", len(s)-maxOutput)
+}
+
+// lspDiagnostics appends the LSP diagnostics block for a just-written file.
+// Never fails the tool: a nil hook, an uncovered file, or a slow server all
+// yield "" (the wait is capped inside internal/lsp).
+func lspDiagnostics(ctx context.Context, path string) string {
+	if LSP == nil {
+		return ""
+	}
+	return LSP.WaitDiagnostics(ctx, path)
 }
 
 // TruncateTail caps tool output at maxOutput bytes, keeping the tail (the end
@@ -208,7 +227,7 @@ func writeTool() Tool {
 			if err := os.WriteFile(a.Path, []byte(a.Content), 0o644); err != nil {
 				return "", err
 			}
-			return fmt.Sprintf("Wrote %d bytes to %s", len(a.Content), a.Path), nil
+			return fmt.Sprintf("Wrote %d bytes to %s", len(a.Content), a.Path) + lspDiagnostics(ctx, a.Path), nil
 		},
 	}
 }
@@ -244,7 +263,7 @@ func editTool() Tool {
 			if err := os.WriteFile(a.Path, []byte(s), 0o644); err != nil {
 				return "", err
 			}
-			return fmt.Sprintf("Replaced %d occurrence(s) in %s", n, a.Path), nil
+			return fmt.Sprintf("Replaced %d occurrence(s) in %s", n, a.Path) + lspDiagnostics(ctx, a.Path), nil
 		},
 	}
 }

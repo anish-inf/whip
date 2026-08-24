@@ -136,17 +136,32 @@ func unregisterChromaStyle() {
 // auto mode with no reliable signal), it uses the neutral ASCII style so text
 // stays at the terminal's own default colors rather than being inverted by a
 // wrong dark/light guess.
+//
+// Tables: stock Dark/Light ship an empty StyleTable, leaving separator
+// choice to lipgloss defaults. Pin the separators explicitly (column pipes +
+// box-drawing joints on the header rule) so a lipgloss default change can't
+// silently unformat tables, and drop the per-cell margin to one space —
+// glamour's default cell padding wastes ~4 columns per cell, which is the
+// difference between a readable table and wrapped mush at narrow widths.
+// (The ASCII fallback style already carries its own separators.)
 func mdStyle() glamouransi.StyleConfig {
 	if !mdKnown {
 		return styles.ASCIIStyleConfig
 	}
+	var st glamouransi.StyleConfig
 	if mdLight {
-		st := styles.LightStyleConfig
+		st = styles.LightStyleConfig
 		st.Code.Color = strPtr("124")           // dark red
 		st.Code.BackgroundColor = strPtr("255") // lightest gray chip
-		return st
+	} else {
+		st = styles.DarkStyleConfig
 	}
-	return styles.DarkStyleConfig
+	st.Table.ColumnSeparator = strPtr("│")
+	st.Table.CenterSeparator = strPtr("┼")
+	st.Table.RowSeparator = strPtr("─")
+	zero := uint(0)
+	st.Table.Margin = &zero
+	return st
 }
 
 func strPtr(s string) *string { return &s }
