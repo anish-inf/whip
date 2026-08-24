@@ -351,6 +351,31 @@ func TestEnterOpensTaskViewAndEscBacksOut(t *testing.T) {
 	}
 }
 
+// dockTasks is time-dependent (settled tasks age out after dockSettledGrace),
+// so the focused dock can go empty — or shrink below the selection — between
+// the last paint and the keypress. Enter must not index the empty list.
+func TestEnterOnEmptyFocusedDockDoesNotPanic(t *testing.T) {
+	srv := sseTextServer(t, "ok")
+	defer srv.Close()
+	m := tasksModel(srv.URL)
+
+	m.tasksFocus = true
+	m.key(mkKey("enter")) // dock empty: was an index-out-of-range panic
+	if m.taskVP != nil {
+		t.Fatal("enter on an empty dock should open nothing")
+	}
+
+	// stale selection beyond the shrunk list clamps instead of panicking
+	task := m.agent.StartBackground(t.Context(), "probe", "p")
+	defer m.agent.Tasks().Cancel(task.ID)
+	m.tasksFocus = true
+	m.taskSel = 5 // beyond the single dock row
+	m.key(mkKey("enter"))
+	if m.taskVP == nil || m.taskVP.id != task.ID {
+		t.Fatalf("enter should clamp to the only task, got %+v", m.taskVP)
+	}
+}
+
 // Clicking a dock row opens THAT row's task: when the dock is focused its
 // hint row sits above the task rows, and must not be clickable itself — the
 // click hitbox used to start one row too high, opening the task above the
