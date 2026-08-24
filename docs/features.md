@@ -174,11 +174,13 @@ errors for the compaction retry, `Stream` returns the message + usage, and
   see the `ponytail` note in `shell.go`.
   Tests: `shell_test.go` (output/message routing idle+busy, queue-drain,
   truncation, echo rules, cd/pwd incl. `~` and bad dirs).
-- **`/goal-from-context`** distills the last two conversation messages into a
-  goal statement with one non-streaming call on the current model (the
-  compact-model override is deliberately ignored), then sets it exactly like
-  `/goal <text>` and starts the goal loop. Prompt building is pure
-  (`agent.BuildGoalFromContextPrompt` over the window from
+- **`/goal-from-context [n]`** distills the last *n* conversation messages
+  (default 8, clamped to the available history) into a detailed goal — a
+  concrete outcome line plus a bullet list of checkable completion criteria —
+  with one non-streaming call on the current model (the compact-model override
+  is deliberately ignored), then sets it exactly like `/goal <text>` and starts
+  the goal loop. The transcript note states the exact window used. Prompt
+  building is pure (`agent.BuildGoalFromContextPrompt` over the window from
   `agent.GoalFromContextMessages`); the TUI command mirrors `/compact`'s
   goroutine + `goalFromContextMsg` pattern, refusing while busy and running
   inline when headless. Tests: `goal_test.go` (`TestGoalFromContext*`).
