@@ -101,9 +101,13 @@ as a **steered message**, so the model sees it on the next loop boundary.
   actually clicked.
 - **Persisted across resume.** The session store's `tasks` table records
   every start/settle; `resume()` seeds the registry via `RestoreTask`
-  (settled, `Done` pre-closed). A row still `running` on disk means the
-  subagent died with the last process exit, so it comes back as
-  `error` — "interrupted — loopy exited".
+  (settled, `Done` pre-closed, marked `Restored`). A row still `running` on
+  disk means the subagent died with the last process exit, so it comes back
+  as `error` — "interrupted — loopy exited". Restored tasks are history:
+  `/tasks` lists them with a `(restored)` marker; the dock never shows them.
+  The dock itself shows running tasks plus ones settled within a one-minute
+  grace window (`dockSettledGrace`) — long enough to notice the ✓, then the
+  strip cleans itself.
 
 Background tasks use a context **not** tied to the current turn — they outlive
 it by design. Cancelling a task cancels its subagent's turn.
