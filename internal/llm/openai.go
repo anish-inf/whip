@@ -81,6 +81,75 @@ func stripAuthored(msgs []Message) []Message {
 	return out
 }
 
+// repairToolHistory patches message-pairing defects that strict providers
+// (Kimi K3, Gemini) reject with a 400 before the first token:
+//
+//   - assistant tool_calls with no following tool result (interrupted turn)
+//     get a synthetic "(interrupted before execution)" result per call
+//   - tool messages whose tool_call_id has no owning assistant tool_call
+//     (compaction/rewind trimmed the caller) are flattened into plain user
+//     context — the model loses the ID pairing but keeps the information
+//
+// Idempotent: a well-formed conversation comes through unchanged.
+func repairToolHistory(msgs []Message) []Message {
+	answered := make(map[string]bool, len(msgs))
+	for i, m := range msgs {
+		if m.Role != "assistant" {
+			continue
+		}
+		for _, tc := range m.ToolCalls {
+			answered[tc.ID] = false
+			for _, r := range msgs[i+1:] {
+				if r.Role == "tool" && r.ToolCallID == tc.ID {
+					answered[tc.ID] = true
+					break
+				}
+				if r.Role == "assistant" || r.Role == "user" {
+					break // results always immediately follow their call
+				}
+			}
+		}
+	}
+	out := make([]Message, 0, len(msgs))
+	var pending []string // unanswered call IDs from the last assistant message
+	flush := func() {    // synthetics land after any real results in the run
+		for _, id := range pending {
+			out = append(out, Message{
+				Role:       "tool",
+				Content:    "(interrupted before execution)",
+				ToolCallID: id,
+			})
+		}
+		pending = nil
+	}
+	for _, m := range msgs {
+		if m.Role == "tool" {
+			if _, ok := answered[m.ToolCallID]; !ok {
+				flush()
+				// orphan: flatten into user context rather than drop the info
+				out = append(out, Message{
+					Role:    "user",
+					Content: "[earlier tool result]\n" + m.Content,
+				})
+				continue
+			}
+			out = append(out, m)
+			continue
+		}
+		flush()
+		out = append(out, m)
+		if m.Role == "assistant" {
+			for _, tc := range m.ToolCalls {
+				if !answered[tc.ID] {
+					pending = append(pending, tc.ID)
+				}
+			}
+		}
+	}
+	flush()
+	return out
+}
+
 // Tool is a tool definition advertised to the model.
 type Tool struct {
 	Type     string `json:"type"`
@@ -271,7 +340,7 @@ func (c *Client) Stream(ctx context.Context, req Request, onText, onThink func(s
 	req.StreamOptions = &struct {
 		IncludeUsage bool `json:"include_usage"`
 	}{IncludeUsage: true}
-	req.Messages = stripAuthored(req.Messages)
+	req.Messages = repairToolHistory(stripAuthored(req.Messages))
 	body, err := json.Marshal(req)
 	if err != nil {
 		return Message{}, Usage{}, err
