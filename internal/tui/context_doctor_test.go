@@ -35,14 +35,17 @@ func TestDoctorFreshSession(t *testing.T) {
 
 func TestDoctorCommandWired(t *testing.T) {
 	m := tasksModel("http://unused")
-	m.command("/doctor")
-	if len(m.blocks) == 0 || !strings.Contains(m.blocks[len(m.blocks)-1].text, "context audit") {
-		t.Fatalf("/doctor produced no report: %+v", m.blocks)
-	}
 	m.command("/context-doctor")
-	if !strings.Contains(m.blocks[len(m.blocks)-1].text, "context audit") {
-		t.Error("/context-doctor alias broken")
+	if len(m.blocks) == 0 || !strings.Contains(m.blocks[len(m.blocks)-1].text, "context audit") {
+		t.Fatalf("/context-doctor produced no report: %+v", m.blocks)
 	}
+	// No /doctor shorthand: the full name is the command.
+	before := len(m.blocks)
+	m.command("/doctor")
+	if !strings.Contains(m.blocks[len(m.blocks)-1].text, "unknown command") {
+		t.Error("/doctor should not exist as a shorthand")
+	}
+	_ = before
 }
 
 func TestTok(t *testing.T) {

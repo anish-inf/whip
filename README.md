@@ -19,6 +19,25 @@ curl -fsSL https://raw.githubusercontent.com/context-labs/loopy/main/scripts/ins
 
 Both drop `loopy` into `~/go/bin`. From a cloned repo, `task install` does the same with the version stamped from git.
 
+## Setup (with inference.net)
+
+loopy defaults to inference.net models; the `inf` CLI provisions the key:
+
+```sh
+git clone https://github.com/context-labs/loopy && cd loopy
+task install                        # builds + installs loopy (version stamped from git)
+
+bun add -g @inference/cli           # the inf CLI
+inf auth login                      # log in
+inf team switch                     # pick your team
+inf project switch                  # pick your project
+inf claude on && inf claude off     # mints the API token loopy reads from ~/.inf/config.json
+```
+
+Then `loopy` and you're in. First things to try: `/context-doctor` (audit
+what a fresh session injects, in tokens), `/goal <text>` (work until done),
+drop a `.mcp.json` in the repo (MCP servers just appear — `/mcp` to see them).
+
 ## Run
 
 ```sh
@@ -89,7 +108,7 @@ existing setup:
 }
 ```
 
-`/doctor` audits what a fresh session injects (skills, MCP tool schemas,
+`/context-doctor` audits what a fresh session injects (skills, MCP tool schemas,
 server instructions, built-in tool schemas) with per-source token estimates —
 useful when arriving from a heavier harness.
 

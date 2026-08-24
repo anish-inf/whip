@@ -11,7 +11,7 @@ import (
 	"github.com/context-labs/loopy/internal/skills"
 )
 
-// /doctor (alias /context-doctor) — audit what a FRESH session injects before
+// /context-doctor — audit what a FRESH session injects before
 // the user types anything, and what each piece costs in estimated tokens.
 // The audience is someone arriving from claude/codex whose first call carries
 // tens of thousands of tokens of skill/MCP/tool-schema bloat they never asked
@@ -126,7 +126,7 @@ func (m *model) doctorReport() string {
 		b.WriteString(line + "\n")
 	}
 	fmt.Fprintf(&b, "  %-*s %7s\n", w, "TOTAL injected before you type", "~"+tok(total))
-	b.WriteString("\nTrim: /mcp <name> disable · remove a skill from .agents/skills · /doctor again")
+	b.WriteString("\nTrim: /mcp <name> disable · remove a skill from .agents/skills · /context-doctor again")
 	return b.String()
 }
 
