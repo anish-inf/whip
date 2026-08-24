@@ -63,8 +63,8 @@ sequenceDiagram
     D->>B: CDP WebSocket
     B-->>D: events (500-buffered)
     D-->>C: result
-    C-->>L: stdout (≤20k tail)
-    Note over C,D: browser + workspace persist;<br/>python variables do NOT
+    C-->>L: stdout (20k tail cap)
+    Note over C,D: browser + workspace persist across calls — python variables do NOT
 ```
 
 - **`daemon.py`** — one daemon per `BU_NAME`. Holds a CDP WebSocket to a
@@ -150,7 +150,7 @@ Two browser stacks coexist; the browser-use one is the **default**:
 flowchart TD
     Q{CDP endpoint for this exec?} -->|BU_CDP_WS / BU_CDP_URL already set| P[passthrough]
     Q -->|config browser.cdp_url<br/>/browser connect| O[user's Chrome override]
-    Q -->|cloud provider configured| C[provider session cache<br/>keyed bu-named-&#60;session&#62;<br/>+ expiry + reaper]
+    Q -->|cloud provider configured| C[provider session cache: keyed bu-named-session, expiry + reaper]
     Q -->|nothing configured| L[attach to local Chrome<br/>profile-dir DevToolsActivePort scan]
     Q -->|BROWSER_USE_API_KEY + BU_AUTOSPAWN| U[CLI manages BU cloud natively]
 ```
