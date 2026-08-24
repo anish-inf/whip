@@ -51,6 +51,12 @@ type Agent struct {
 	files *fileLocks // per-path mutation locks for parallel tool calls
 	bg    *taskRegistry
 
+	// toolsMu guards mcpTools: the MCP manager's OnChange can fire (server
+	// settled) while a Turn is streaming, and Turn reads the tool set per
+	// request.
+	toolsMu  sync.Mutex
+	mcpTools []tools.Tool
+
 	usageMu sync.Mutex
 	usage   llm.Usage // session totals across every API call (PromptTokens = input)
 }
@@ -115,6 +121,40 @@ func New(client *llm.Client, model string, maxTokens int, systemPrompt string) *
 	return a
 }
 
+// SetMCPTools swaps in the current MCP tool set (called by the MCP manager's
+// OnChange whenever a server settles). MCP tools live separately from
+// a.Tools so a settle mid-turn never mutates the slice a Turn is reading.
+// A Suggester is installed on first use so a stale/typo'd mcp__ call gets a
+// "did you mean?" nudge instead of a dead end.
+func (a *Agent) SetMCPTools(ts []tools.Tool) {
+	a.toolsMu.Lock()
+	a.mcpTools = ts
+	a.toolsMu.Unlock()
+	if tools.Suggester == nil {
+		tools.Suggester = func(name string) []string { return a.suggest(name) }
+	}
+}
+
+// suggest lists candidate names for tools.Suggester: built-ins + live MCP
+// tools, filtered by the mcp package's edit-distance logic.
+func (a *Agent) suggest(name string) []string {
+	a.toolsMu.Lock()
+	all := append(append([]tools.Tool(nil), a.Tools...), a.mcpTools...)
+	a.toolsMu.Unlock()
+	names := make([]string, len(all))
+	for i, t := range all {
+		names[i] = t.Def.Function.Name
+	}
+	return tools.SuggestTool(name, names)
+}
+
+// AllTools returns built-ins + the current MCP set.
+func (a *Agent) AllTools() []tools.Tool {
+	a.toolsMu.Lock()
+	defer a.toolsMu.Unlock()
+	return append(append([]tools.Tool(nil), a.Tools...), a.mcpTools...)
+}
+
 // Turn sends user input and loops until the model stops calling tools.
 // It returns the final assistant text. When the estimated conversation size
 // reaches 90% of the provider-advertised context limit, Turn compacts
@@ -143,7 +183,7 @@ func (a *Agent) turn(ctx context.Context, input string, authored bool, ev Events
 		msg, usage, err := a.Client.Stream(ctx, llm.Request{
 			Model:           a.Model,
 			Messages:        a.Messages,
-			Tools:           tools.Defs(a.Tools),
+			Tools:           tools.Defs(a.AllTools()),
 			MaxTokens:       a.MaxTokens,
 			ReasoningEffort: a.Effort,
 		}, ev.OnText, ev.OnThink)
@@ -240,7 +280,7 @@ func (a *Agent) runTools(ctx context.Context, calls []llm.ToolCall, ev Events) [
 			if ev.OnToolStart != nil {
 				ev.OnToolStart(name, args)
 			}
-			out := tools.Execute(ctx, a.Tools, name, json.RawMessage(args))
+			out := tools.Execute(ctx, a.AllTools(), name, json.RawMessage(args))
 			if ev.OnToolEnd != nil {
 				ev.OnToolEnd(name, out)
 			}

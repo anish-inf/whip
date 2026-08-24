@@ -49,6 +49,12 @@ func Defs(ts []Tool) []llm.Tool {
 	return defs
 }
 
+// Suggester returns the closest known tool names for an unknown one —
+// installed by the agent (which knows the live MCP tool set) so a stale or
+// typo'd tool call nudges the model toward the right name instead of
+// dead-ending the turn.
+var Suggester func(name string) []string
+
 // Execute runs the named tool. Errors are returned as strings so they can be
 // fed back to the model rather than aborting the loop.
 func Execute(ctx context.Context, ts []Tool, name string, args json.RawMessage) string {
@@ -64,10 +70,22 @@ func Execute(ctx context.Context, ts []Tool, name string, args json.RawMessage) 
 			return out
 		}
 	}
-	return fmt.Sprintf("Error: unknown tool %q", name)
+	msg := fmt.Sprintf("Error: unknown tool %q", name)
+	if Suggester != nil {
+		if hints := Suggester(name); len(hints) > 0 {
+			msg += " — did you mean " + strings.Join(hints, " or ") + "?"
+		}
+	}
+	return msg
 }
 
 const maxOutput = 50_000 // bytes of tool output fed back to the model
+
+// Truncate caps tool output at maxOutput with a marker; exported for the MCP
+// bridge, which flattens remote results into the same budget.
+func Truncate(s string) string {
+	return truncate(s)
+}
 
 func truncate(s string) string {
 	if len(s) <= maxOutput {

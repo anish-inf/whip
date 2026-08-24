@@ -14,6 +14,18 @@ type Skill struct {
 	Name        string
 	Description string
 	Path        string // path to the SKILL.md
+	// Warning is non-empty when the skill loaded but is degraded — e.g. the
+	// description exceeds maxDesc and is truncated in the system prompt.
+	// Surfaced in the startup report so a broken skill is never silent.
+	Warning string
+}
+
+// ScanProblem is a SKILL.md that failed to load (bad frontmatter, unreadable).
+// Scan used to skip these silently; pi's startup [Skill conflicts] block
+// showed how valuable naming them is.
+type ScanProblem struct {
+	Path string
+	Err  string
 }
 
 // DefaultDirs returns loopy's skill locations: project .agents/skills, then
@@ -29,27 +41,49 @@ func DefaultDirs() []string {
 	return dirs
 }
 
-// Scan reads <dir>/<skill>/SKILL.md for each dir, skipping anything unreadable.
+// Scan reads <dir>/<skill>/SKILL.md for each dir, skipping anything
+// unreadable. Loaded-but-degraded skills carry a Warning (e.g. description
+// truncated); anything that fails to parse is silently skipped (a SKILL.md
+// with no frontmatter is usually just a stray doc) but counted — callers
+// that want the conflicts view use ScanDetailed.
 func Scan(dirs ...string) []Skill {
+	sk, _ := ScanDetailed(dirs...)
+	return sk
+}
+
+// ScanDetailed is Scan plus the problems found: directories whose SKILL.md
+// exists but failed to parse, and parse-level warnings.
+func ScanDetailed(dirs ...string) ([]Skill, []ScanProblem) {
 	var out []Skill
+	var problems []ScanProblem
 	for _, d := range dirs {
 		entries, err := os.ReadDir(d)
 		if err != nil {
 			continue
 		}
 		for _, e := range entries {
+			if !e.IsDir() {
+				continue
+			}
 			p := filepath.Join(d, e.Name(), "SKILL.md")
+			if _, err := os.Stat(p); err != nil {
+				continue // no SKILL.md: not a skill, not a problem
+			}
 			s, err := parse(p)
 			if err != nil {
+				problems = append(problems, ScanProblem{Path: p, Err: err.Error()})
 				continue
 			}
 			if s.Name == "" {
 				s.Name = e.Name()
 			}
+			if len(s.Description) > maxDesc {
+				s.Warning = fmt.Sprintf("description exceeds %d characters (%d) — truncated in the system prompt", maxDesc, len(s.Description))
+			}
 			out = append(out, s)
 		}
 	}
-	return out
+	return out, problems
 }
 
 // parse reads name/description from the YAML frontmatter.

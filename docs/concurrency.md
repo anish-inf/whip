@@ -84,6 +84,27 @@ sees the report on the next loop boundary without polling.
 - **Race-checked.** `go test -race ./...` covers the fan-out, the lock, the
   broadcast, and cancel. The equivalent TS relies on convention.
 
+## 3. MCP server readiness = the same close-to-broadcast, with a generation guard
+
+`internal/mcp/manager.go` reuses the pattern for server connections: each
+server has a `ready chan struct{}` closed **once** when its first connect
+settles (success or failure), so a tool call blocks only on its own server
+and `/mcp` never blocks at all. Two twists the task registry doesn't need:
+
+- **Reconnects reuse the channel.** `ready` means "first attempt settled,"
+  not "connected"; after a reconnect, callers check the session under the
+  mutex instead of the channel. This keeps the close-once invariant
+  unbreakable (the first implementation re-closed on reconnect and panicked).
+- **Watchers carry a generation.** When a session drops, its watcher only
+  flips the server to failed if `s.gen` still matches the connect that
+  spawned it — opencode does the same check by client identity
+  (`mcp/index.ts:443`), and it's what makes `/mcp <name> reconnect` safe
+  against a stale close event arriving after the new session is up.
+
+Calls into a server serialize through a 1-capacity `calling` channel (many
+stdio servers are single-request-at-a-time), so "capacity is the contract"
+applies twice per server: one channel for readiness, one for in-flight calls.
+
 ## Process safety (not channels, but the same "don't leak" instinct)
 
 `internal/tools/bashrun/bashrun.go` tracks every spawned child in a registry

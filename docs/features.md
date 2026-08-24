@@ -134,6 +134,81 @@ errors for the compaction retry, `Stream` returns the message + usage, and
   `@file` mentions, `$skill` invocation, `/goal` loop, `/resume` session
   picker, `/effort` reasoning levels — see the roadmap for the full list.
 
+## MCP
+
+`internal/mcp/` — loopy is an MCP client (stdio + streamable HTTP) and, via
+`loopy mcp serve`, an MCP server. Three sources of server config merge with
+loopy's own on top (per-name, whole entry): a project `.mcp.json`
+(claude-style: `{"mcpServers": {name: {type, command, args, env, url,
+headers}}}`), `~/.codex/config.toml` `[mcp_servers.*]` (codex-style), and the
+`"mcp"` block in `~/.loopy/config.json`. Claude `type: sse` imports as
+disabled-with-note (legacy transport); `${VAR}` references in env/headers
+expand from loopy's environment.
+
+- **Manager** (`manager.go`) — one lifecycle goroutine per server; a
+  `ready chan struct{}` closes once on first settle (the BackgroundTask
+  close-to-broadcast pattern), so tool calls block only on *their* server and
+  startup never waits. Statuses: connecting → ready/failed (plus disabled);
+  a dropped session flips to failed via a generation-guarded watcher
+  (opencode's client-identity check, `mcp/index.ts:443`). Connect/list bounded
+  by `startupTimeout` (default 30s — opencode's DEFAULT_TIMEOUT).
+- **Tool bridge** — listed tools become agent tools named
+  `mcp__<server>__<tool>` (claude-code convention; double underscores keep
+  the split unambiguous since tool names contain `_`). Unsafe server-name
+  chars get an fnv hash suffix so sanitized names can't collide (an opencode
+  weakness). Calls serialize per server (1-cap channel — many stdio servers
+  are single-request), run under `toolTimeout` (default 60s), and respect
+  ctrl+c via ctx. Results flatten to text: images/audio/binary resources →
+  placeholders, `structuredContent` → JSON when there's no text, `IsError` →
+  `"Error: …"` fed back to the model — a broken MCP tool never kills a turn.
+  Output capped at the shared 50KB truncation. MCP tools take no file locks
+  and run in parallel with everything.
+- **Late arrivals** — `Manager.SetOnChange` pushes refreshed tool sets into
+  `Agent.SetMCPTools` (mutex-guarded; a settle mid-turn can't race the slice
+  a request reads), so a server connecting after turn 1 appears without a
+  restart.
+- **TUI** — `/mcp` shows the status table (`● N tools` / `✗ err` /
+  `○ disabled` / `◌ connecting…`); `/mcp <name> reconnect|enable|disable`
+  reconnects live or persists a toggle through the guarded `Config.Save`.
+- **CLI** — `loopy mcp list` (merged view with source labels), `loopy mcp
+  add <name> -- <cmd...>` / `--url`, `loopy mcp remove`. `loopy mcp serve`
+  (`serve.go`) exposes loopy's read/bash/edit/write as an MCP stdio server
+  for other harnesses.
+- **Shutdown** — `Manager.Close()` runs before `bashrun.KillAll()`; stdio
+  children spawn in their own process group, and the SDK terminates them
+  (stdin close → SIGTERM → SIGKILL after 3s).
+
+Polish (the "never stuck, always know why" pass):
+
+- **Fail-fast calls** — a call to a failed/disabled server returns instantly
+  with an actionable message (`/mcp <name> reconnect|enable`); a
+  still-connecting server caps the wait at a 5s grace then returns "retry in
+  a moment". No turn parks on a 30s startup timeout.
+- **Did-you-mean** — `tools.Suggester` (installed by `Agent.SetMCPTools`)
+  runs an early-exit Levenshtein over live tool names, so a stale/typo'd
+  `mcp__` call gets `did you mean mcp__docs__greet?` instead of a dead end.
+- **First-settle notes** — each server's first settle lands one transcript
+  line (`⚡ mcp: docs ready (4 tools)` / `✗ mcp: x failed: …`); later
+  transitions stay quiet.
+- **Auto-reconnect** — a dropped session retries in the background with
+  backoff (1s/2s/4s, cap 3), guarded against close/disable/dupes; manual
+  `/mcp reconnect` stays unlimited.
+- **Server instructions** — initialize-result instructions render into an
+  `<mcp_instructions>` block appended to the system prompt every turn
+  (alongside skills), tracking live sessions.
+- **`loopy mcp test <name>`** — the doctor: connect + list + timing + tool
+  names, stderr tail on failure, non-zero exit — CI-checkable `.mcp.json`.
+
+Tests: `config_test.go` (claude/codex parsing incl. a real-world codex
+config, merge precedence, discovery errors, tool-name round-trips),
+`manager_test.go` (connect/call, error-as-output, structured+media
+flattening, dead-server degradation, reconnect, parallel calls under `-race`,
+ctx cancel mid-connect), `loop_test.go` (model→MCP→model round trip against
+a fake provider; stale def on a dead server returns `"Error: …"` and the turn
+completes), `selfhost_test.go` (`loopy mcp serve` end-to-end, gated on
+`LOOPY_TEST_SELFHOST=1`), `tui/mcp_test.go` (status view, toggle persistence
+round-trip).
+
 ## Process safety
 
 `internal/tools/bashrun/bashrun.go` — every command the agent runs is tracked
@@ -158,6 +233,21 @@ Tests: `killall_test.go` — `TestKillAllReapsChildren` (kills a live `sleep 60`
 into the system prompt as an `<available_skills>` block. The model reads a
 SKILL.md with its own read tool when relevant. Skills re-index every turn, so
 new ones load without restarting.
+
+**`/context-doctor` (alias `/context-doctor`)** — fresh-session context audit: every
+automatic injection source with its estimated token cost (base system prompt,
+skills block with the 5 biggest offenders, per-server MCP tool schemas, server
+instructions, built-in tool schemas, conversation history, and actual session
+spend once requests have run), a TOTAL line, and trim pointers. Built for
+users arriving from heavier harnesses whose first call silently carries tens
+of thousands of tokens of skill/MCP bloat. Tests: `tui/context_doctor_test.go`.
+
+**Startup resource report** — first paint names what loopy loaded: `skills: N
+loaded`, one `⚠` line per degraded skill (description over maxDesc → truncated
+in the prompt) or unparseable SKILL.md (pi's [Skill conflicts] lesson — a
+broken skill is never silent), and one `mcp:` line with per-server status
+glyphs (`✓ N tools` / `✗` / `○ disabled` / `◌ connecting`). Skipped on resume.
+Tests: `tui/startup_report_test.go` (warnings, MCP glyphs, silence when empty).
 
 Installed: the `golang-*` skill set plus `i-have-adhd` (output-shaping for ADHD
 readers; invoke with `/i-have-adhd`, off with "stop adhd mode").

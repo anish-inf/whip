@@ -1,0 +1,79 @@
+package tui
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/context-labs/loopy/internal/mcp"
+)
+
+// TestStartupReportSkillsAndWarnings: the report names loaded skills, flags a
+// description that exceeds maxDesc (truncated in the system prompt), and
+// flags a SKILL.md that fails to parse — pi's [Skill conflicts] block.
+func TestStartupReportSkillsAndWarnings(t *testing.T) {
+	dir := t.TempDir()
+	mkSkill := func(name, desc string) {
+		d := filepath.Join(dir, ".agents", "skills", name)
+		os.MkdirAll(d, 0o755)
+		os.WriteFile(filepath.Join(d, "SKILL.md"), []byte("---\nname: "+name+"\ndescription: "+desc+"\n---\n"), 0o644)
+	}
+	mkSkill("good", "fine")
+	mkSkill("wordy", strings.Repeat("x", 400))
+	// A SKILL.md with no frontmatter = parse problem.
+	bad := filepath.Join(dir, ".agents", "skills", "broken")
+	os.MkdirAll(bad, 0o755)
+	os.WriteFile(filepath.Join(bad, "SKILL.md"), []byte("no frontmatter here"), 0o644)
+
+	wd, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(wd)
+
+	m := tasksModel("http://unused")
+	m.startupReport()
+	if len(m.blocks) == 0 {
+		t.Fatal("no report rendered")
+	}
+	out := m.blocks[0].text
+	if !strings.Contains(out, "skills: 2 loaded") {
+		t.Errorf("missing loaded count:\n%s", out)
+	}
+	if !strings.Contains(out, "wordy") || !strings.Contains(out, "truncated") {
+		t.Errorf("missing truncation warning:\n%s", out)
+	}
+	if !strings.Contains(out, "broken") {
+		t.Errorf("missing parse problem:\n%s", out)
+	}
+}
+
+// TestStartupReportMCP: ready/failed/disabled servers render with the right
+// glyphs in one line.
+func TestStartupReportMCP(t *testing.T) {
+	m := tasksModel("http://unused")
+	disabled := false
+	m.mcpMgr = mcp.NewManager(map[string]mcp.ServerConfig{
+		"off":     {Command: []string{"true"}, Enabled: &disabled},
+		"invalid": {},
+	})
+	m.startupReport()
+	out := m.blocks[0].text
+	if !strings.Contains(out, "mcp:") || !strings.Contains(out, "off ○") || !strings.Contains(out, "invalid ✗") {
+		t.Errorf("bad mcp line:\n%s", out)
+	}
+}
+
+// TestStartupReportSilent: nothing loaded, nothing said.
+func TestStartupReportSilent(t *testing.T) {
+	dir := t.TempDir()
+	wd, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(wd)
+	t.Setenv("HOME", t.TempDir()) // no ~/.loopy/skills either
+
+	m := tasksModel("http://unused")
+	m.startupReport()
+	if len(m.blocks) != 0 {
+		t.Errorf("expected silence, got %q", m.blocks[0].text)
+	}
+}

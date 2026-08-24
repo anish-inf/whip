@@ -19,6 +19,25 @@ curl -fsSL https://raw.githubusercontent.com/context-labs/loopy/main/scripts/ins
 
 Both drop `loopy` into `~/go/bin`. From a cloned repo, `task install` does the same with the version stamped from git.
 
+## Setup (with inference.net)
+
+loopy defaults to inference.net models; the `inf` CLI provisions the key:
+
+```sh
+git clone https://github.com/context-labs/loopy && cd loopy
+task install                        # builds + installs loopy (version stamped from git)
+
+bun add -g @inference/cli           # the inf CLI
+inf auth login                      # log in
+inf team switch                     # pick your team
+inf project switch                  # pick your project
+inf claude on && inf claude off     # mints the API token loopy reads from ~/.inf/config.json
+```
+
+Then `loopy` and you're in. First things to try: `/context-doctor` (audit
+what a fresh session injects, in tokens), `/goal <text>` (work until done),
+drop a `.mcp.json` in the repo (MCP servers just appear — `/mcp` to see them).
+
 ## Run
 
 ```sh
@@ -68,3 +87,38 @@ still parses (it always meant the context window) but is superseded by `context`
 Any OpenAI-compatible endpoint works as a provider. Key resolution:
 `apiKeyEnv` env var → `apiKey` literal → for api.inference.net, the key stored
 in `~/.inf/config.json` by the `inf` CLI.
+
+## MCP
+
+loopy connects to MCP servers and their tools appear in the agent as
+`mcp__<server>__<tool>`. Three config styles all work — loopy reads your
+existing setup:
+
+- **claude-style**: a `.mcp.json` in the project root (`{"mcpServers": {...}}`)
+- **codex-style**: `[mcp_servers.*]` tables in `~/.codex/config.toml`
+- **loopy-native**: an `"mcp"` block in `~/.loopy/config.json` (wins on
+  name conflicts):
+
+```json
+{
+  "mcp": {
+    "docs": { "command": ["npx", "-y", "@docs/mcp"], "env": { "API_KEY": "$DOCS_KEY" } },
+    "web":  { "url": "https://mcp.example.com/mcp", "headers": { "Authorization": "Bearer $TOKEN" } }
+  }
+}
+```
+
+`/context-doctor` audits what a fresh session injects (skills, MCP tool schemas,
+server instructions, built-in tool schemas) with per-source token estimates —
+useful when arriving from a heavier harness.
+
+Servers connect in the background at startup and lazily on first use — a
+slow or broken server never blocks the loop (calls fail fast with an
+actionable message, and dropped sessions auto-reconnect with backoff).
+`/mcp` shows live status; `/mcp <name> reconnect|enable|disable` manages
+servers without restarting. Server instructions teach the model how to use
+each server's tools automatically. CLI: `loopy mcp list|add|remove`, and
+`loopy mcp test <name>` to doctor one server (status, timing, tool names,
+stderr tail; non-zero exit — validate a `.mcp.json` in CI). `loopy mcp
+serve` runs loopy's own tools (read/bash/edit/write) as an MCP server for
+other harnesses.
