@@ -41,7 +41,14 @@ type Session struct {
 	sem     chan struct{}
 	mu      sync.Mutex
 	backend Backend
+	noticed bool // fallback notice already emitted for this backend
 }
+
+// fallbackNotice is the one-line heads-up prepended to the first tool
+// output when a live-mode session fell back to a launched loopy Chrome
+// (hermes /browser connect's "launched and listening" line, in-band so the
+// model relays it in context). Emitted once per session.
+const fallbackNotice = "[Note: no debuggable live browser found — using loopy's dedicated Chrome (logins live in its own profile). To drive your everyday browser instead: chrome://inspect/#remote-debugging, or set browser.mode/cdpUrl in config.]\n\n"
 
 // Session returns the named session (default name "default"), validating
 // the name. The mode is the manager's default; per-session mode override
@@ -91,9 +98,27 @@ func (s *Session) Do(ctx context.Context, fn func(b Backend) (string, error)) (s
 		if rerr != nil {
 			return "", err // original error is more useful than the reopen's
 		}
-		return fn(b)
+		out, err = fn(b)
+	}
+	// Only consume the once-per-session notice on success — an erroring call
+	// may drop out, and the notice must not be consumed unseen.
+	if err == nil && out != "" {
+		out = s.takeNotice(b) + out
 	}
 	return out, err
+}
+
+// takeNotice returns the fallback notice exactly once per session, and only
+// when a live-mode session is actually driving a launched/reattached loopy
+// Chrome (the user asked for live; they should hear they didn't get it).
+func (s *Session) takeNotice(b Backend) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.noticed || s.mode != ModeLive || b.Obtained() == ObtainedLive {
+		return ""
+	}
+	s.noticed = true
+	return fallbackNotice
 }
 
 func (s *Session) get(ctx context.Context) (Backend, error) {
@@ -102,12 +127,19 @@ func (s *Session) get(ctx context.Context) (Backend, error) {
 	if s.backend != nil {
 		return s.backend, nil
 	}
-	b, err := OpenNamed(ctx, s.mode, s.name)
+	b, err := openNamed(ctx, s.mode, s.name)
 	if err != nil {
 		return nil, err
 	}
 	s.backend = b
+	s.noticed = false // a fresh backend earns a fresh notice
 	return b, nil
+}
+
+// openNamed is the package-level OpenNamed, indirected so session tests
+// substitute fakes without launching a browser.
+var openNamed = func(ctx context.Context, mode Mode, name string) (Backend, error) {
+	return OpenNamed(ctx, mode, name)
 }
 
 func (s *Session) drop() {
@@ -127,8 +159,9 @@ func (m *Manager) SwitchDriver(d string) {
 	m.CloseAll()
 }
 
-// CloseAll closes every session's backend. Dedicated/headless sessions
-// kill their launched Chrome; live sessions only detach.
+// CloseAll closes every session's backend. Live/dedicated sessions detach
+// (the Chrome survives as a reattach target); headless sessions kill their
+// launched Chrome.
 func (m *Manager) CloseAll() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -140,8 +173,6 @@ func (m *Manager) CloseAll() {
 // isConnErr reports whether err looks like a dead CDP connection
 // (browser closed, tab crashed) rather than a page-level failure.
 func isConnErr(err error) bool {
-	var iface interface{ Unwrap() []error }
-	_ = iface
 	for e := err; e != nil; e = errors.Unwrap(e) {
 		msg := e.Error()
 		if strings.Contains(msg, "websocket") && (strings.Contains(msg, "closed") || strings.Contains(msg, "close 100")) {

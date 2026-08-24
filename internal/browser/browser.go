@@ -50,6 +50,11 @@ var ErrPermissionBlocked = errors.New("chrome permission-blocked")
 // reachable debug port was found running.
 var ErrNoLiveBrowser = errors.New("no live browser with remote debugging found")
 
+// errDetachFailed reports that Close could not sever the CDP socket — a rod
+// upgrade changed the unexported layout detach() reflects into. The browser
+// connection leaks rather than being torn down; loud so it's not silent.
+var errDetachFailed = errors.New("detach failed: rod internal layout changed")
+
 // Backend is the browser driver contract. *Browser implements it with rod;
 // tests substitute fakes, and chromedp is the drop-in backup (§5b).
 type Backend interface {
@@ -95,11 +100,18 @@ type Backend interface {
 	UseTab(ctx context.Context, targetID string) error
 	// UploadFiles sets files on a file input matched by selector.
 	UploadFiles(ctx context.Context, selector string, paths []string) error
-	// Close releases resources. Live mode detaches only (never closes the
-	// user's browser); dedicated/headless kill the launched process.
+	// Close releases resources. Live attach and dedicated detach (the browser
+	// stays alive as a reattach target; rod's Leakless guardian reaps a
+	// launched dedicated Chrome when the agent process exits). Headless kills
+	// its process — there's no reattach value in a windowless browser.
 	Close() error
 	// Mode returns the session's browser mode (for mode-dependent policy).
 	Mode() Mode
+	// Obtained reports how the connection was established: attached to the
+	// user's live browser, freshly launched, or reattached to a running
+	// loopy Chrome. Live-mode sessions that fell back report launched, so
+	// the session layer can tell the model which browser it's driving.
+	Obtained() Obtained
 	// HandleDialog accepts or dismisses the next pending native JS dialog,
 	// blocking briefly for one to appear.
 	HandleDialog(accept bool, promptText string) error
@@ -127,11 +139,23 @@ type Tab struct {
 
 // Browser owns one rod browser connection plus the controlled page.
 type Browser struct {
-	mode     Mode
-	browser  *rod.Browser
-	page     *rod.Page
-	launcher *launcher.Launcher // non-nil only when we launched (dedicated/headless)
+	mode       Mode
+	browser    *rod.Browser
+	page       *rod.Page
+	launcher   *launcher.Launcher // non-nil only when we launched (dedicated/headless)
+	obtained   Obtained           // how this connection was established
+	profileDir string             // dedicated/headless profile (reattach target)
 }
+
+// Obtained records how a Backend connection came about — the session layer
+// reports a live→launched fallback once per session.
+type Obtained int
+
+const (
+	ObtainedLive Obtained = iota
+	ObtainedLaunched
+	ObtainedReattached
+)
 
 // Driver names for the browser subsystem's two implementations.
 const (
@@ -183,13 +207,30 @@ func OpenNamed(ctx context.Context, mode Mode, sessionName string) (Backend, err
 }
 
 // openRod is the rod-backed Open (the default driver).
+//
+// Live mode falls back hermes-style (/browser connect): when no debuggable
+// browser is found (ErrNoLiveBrowser — includes a non-Chrome squatter on
+// the debug port), loopy launches its dedicated Chrome for this session
+// instead of dead-ending the tool call. ErrPermissionBlocked still surfaces
+// — only the user can click Chrome's Allow popup. Dedicated/headless
+// reattach to an already-running loopy Chrome for the same profile rather
+// than spawning a duplicate.
 func openRod(ctx context.Context, mode Mode, sessionName string) (*Browser, error) {
 	b := &Browser{mode: mode}
 	switch mode {
 	case ModeLive:
 		ws, err := DiscoverLiveWS(ctx)
 		if err != nil {
-			return nil, err
+			if !errors.Is(err, ErrNoLiveBrowser) {
+				return nil, err
+			}
+			// Fallback: launch the dedicated Chrome. Keep the original
+			// discovery error's guidance if the fallback also fails.
+			fb, ferr := openRod(ctx, ModeDedicated, sessionName)
+			if ferr != nil {
+				return nil, fmt.Errorf("%v; dedicated fallback failed: %w", err, ferr)
+			}
+			return fb, nil
 		}
 		b.browser = rod.New().ControlURL(ws)
 		if err := b.browser.Connect(); err != nil {
@@ -199,16 +240,28 @@ func openRod(ctx context.Context, mode Mode, sessionName string) (*Browser, erro
 			}
 			return nil, fmt.Errorf("connect to live browser: %w", err)
 		}
+		b.obtained = ObtainedLive
 	case ModeDedicated, ModeHeadless:
 		home, err := os.UserHomeDir()
 		if err != nil {
 			return nil, err
 		}
 		profileDir := dedicatedProfileDir(home, sessionName)
+		b.profileDir = profileDir
+		// Reattach to a still-running loopy Chrome for this profile (the
+		// prior backend died or was closed without killing the browser).
+		if ws, ok := DiscoverWSForProfile(ctx, profileDir); ok {
+			b.browser = rod.New().ControlURL(ws)
+			if err := b.browser.Connect(); err == nil {
+				b.obtained = ObtainedReattached
+				break
+			}
+			b.browser = nil // stale endpoint — fall through to a fresh launch
+		}
 		newLauncher := func() *launcher.Launcher {
 			l := launcher.New().
 				UserDataDir(profileDir).
-				Set("remote-debugging-port", "0"). // random free port
+				Set("remote-debugging-port", "0"). // random free port — a squatter on 9222 is irrelevant
 				Leakless(true).
 				Headless(mode == ModeHeadless)
 			if os.Getenv("LOOPY_BROWSER_DEBUG") != "" {
@@ -219,27 +272,16 @@ func openRod(ctx context.Context, mode Mode, sessionName string) (*Browser, erro
 			}
 			return l
 		}
-		l := newLauncher()
-		ws, err := l.Launch()
+		l, ws, err := launchDedicated(ctx, profileDir, newLauncher)
 		if err != nil {
-			// A crashed previous run leaves a locked/poisoned profile
-			// (SingletonLock, stale DevToolsActivePort) whose next launch
-			// wedges the renderer — the closed-connection regression other
-			// sessions hit. Quarantine the dir and retry once fresh.
-			quarantine := profileDir + ".stale-" + time.Now().Format("20060102150405")
-			if rerr := os.Rename(profileDir, quarantine); rerr != nil {
-				return nil, fmt.Errorf("launch dedicated chrome: %w", err)
-			}
-			l = newLauncher()
-			ws, err = l.Launch()
-			if err != nil {
-				return nil, fmt.Errorf("launch dedicated chrome after profile quarantine: %w", err)
-			}
+			return nil, err
 		}
 		b.launcher = l
+		b.obtained = ObtainedLaunched
 		b.browser = rod.New().ControlURL(ws)
 		if err := b.browser.Connect(); err != nil {
-			l.Cleanup()
+			l.Kill()    // unblock Cleanup: a healthy Chrome won't exit on its own
+			l.Cleanup() // remove the failed profile + process tree
 			return nil, fmt.Errorf("connect to launched chrome: %w", err)
 		}
 	default:
@@ -247,13 +289,65 @@ func openRod(ctx context.Context, mode Mode, sessionName string) (*Browser, erro
 	}
 	b.browser = b.browser.Context(ctx)
 	if err := b.attachPage(); err != nil {
-		b.browser.Close()
+		// detach, never b.browser.Close() — for a live/reattached browser we
+		// don't own the process, and Browser.close would kill a Chrome another
+		// backend (or the user) is driving.
+		detach(b.browser)
 		if b.launcher != nil {
+			b.launcher.Kill()
 			b.launcher.Cleanup()
 		}
 		return nil, err
 	}
 	return b, nil
+}
+
+// launchDedicated launches a dedicated/headless Chrome, recovering from a
+// wedged prior instance. On launch failure it first kills any *live* Chrome
+// still holding the profile (the detach-on-Close design intentionally leaves
+// one behind), and only quarantines the profile dir when it's genuinely dead
+// — renaming a live profile out from under a running Chrome would orphan its
+// cookies/logins.
+func launchDedicated(ctx context.Context, profileDir string, newLauncher func() *launcher.Launcher) (*launcher.Launcher, string, error) {
+	l := newLauncher()
+	ws, err := l.Launch()
+	if err == nil {
+		return l, ws, nil
+	}
+	if killProfileChromeQuiet(ctx, profileDir) {
+		if l2 := newLauncher(); l2 != nil {
+			if ws2, err2 := l2.Launch(); err2 == nil {
+				return l2, ws2, nil
+			}
+		}
+	}
+	quarantine := profileDir + ".stale-" + time.Now().Format("20060102150405")
+	if rerr := os.Rename(profileDir, quarantine); rerr != nil {
+		return nil, "", fmt.Errorf("launch dedicated chrome: %w", err)
+	}
+	l = newLauncher()
+	ws, err = l.Launch()
+	if err != nil {
+		return nil, "", fmt.Errorf("launch dedicated chrome after profile quarantine: %w", err)
+	}
+	return l, ws, nil
+}
+
+// killProfileChromeQuiet shuts down the Chrome behind a profile dir via its
+// debug port (proto.BrowserClose), best-effort. Reports whether a live
+// browser was found and told to close.
+func killProfileChromeQuiet(ctx context.Context, profileDir string) bool {
+	ws, ok := DiscoverWSForProfile(ctx, profileDir)
+	if !ok {
+		return false
+	}
+	b := rod.New().ControlURL(ws)
+	if err := b.Context(ctx).Connect(); err != nil {
+		return false
+	}
+	_ = b.Close() // Browser.close — intended: shut the wedged holder down
+	time.Sleep(300 * time.Millisecond)
+	return true
 }
 
 // internalURL matches browser-harness's INTERNAL prefix set.
@@ -310,15 +404,40 @@ func (b *Browser) attachPage() error {
 // Mode returns the session's browser mode (for mode-dependent policy).
 func (b *Browser) Mode() Mode { return b.mode }
 
+// Obtained reports how this connection was established (Backend).
+func (b *Browser) Obtained() Obtained { return b.obtained }
+
 // Close releases the connection; launched browsers are killed.
 func (b *Browser) Close() error {
 	if b.browser == nil {
 		return nil
 	}
-	err := b.browser.Close()
-	if b.launcher != nil {
-		b.launcher.Cleanup() // kills the launched process tree
+	var err error
+	switch {
+	case b.mode == ModeLive || b.obtained == ObtainedReattached:
+		// We don't own the process (the user's browser, or a dedicated
+		// Chrome another backend launched): detach only — rod's Close sends
+		// Browser.close, which would kill a browser we must not touch.
+		if !detach(b.browser) {
+			err = errDetachFailed
+		}
+	case b.mode == ModeDedicated:
+		// Launched dedicated Chrome: detach, leaving it alive so a later
+		// Open reattaches (the auto-launch fallback's reuse path) instead of
+		// paying a fresh launch per call. The process exits with the agent
+		// via the Leakless pid-guardian (launcher.Cleanup is only for the
+		// launch-failure error paths, which kill explicitly).
+		if !detach(b.browser) {
+			err = errDetachFailed
+		}
+	default: // headless: no reattach value, no window — kill outright.
+		err = b.browser.Close()
+		if b.launcher != nil {
+			b.launcher.Kill()
+			b.launcher.Cleanup()
+		}
 	}
+	b.browser = nil
 	return err
 }
 

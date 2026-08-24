@@ -10,6 +10,7 @@ package browser
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -131,20 +132,25 @@ func browserRunningForProfile(base string) bool {
 }
 
 // portLive is daemon.py's _devtools_port_live: a stale DevToolsActivePort
-// file left by a closed browser must not count.
+// file left by a closed browser must not count. Both loopbacks are probed
+// (hermes browser_connect.py's _LOOPBACK_PROBE_HOSTS): a squatter on
+// 127.0.0.1:<port> pushes Chrome to bind [::1] only.
 func portLive(port int) bool {
-	c, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)), 500*time.Millisecond)
-	if err != nil {
-		return false
+	for _, host := range []string{"127.0.0.1", "::1"} {
+		c, err := net.DialTimeout("tcp", net.JoinHostPort(host, strconv.Itoa(port)), 500*time.Millisecond)
+		if err == nil {
+			c.Close()
+			return true
+		}
 	}
-	c.Close()
-	return true
+	return false
 }
 
-// resolveWSURL turns an HTTP DevTools endpoint into the WebSocket debugger
-// URL, per daemon.py get_ws_url: /json/version normally; on 404 (Chrome
-// 147+ default profile) fall back to the DevToolsActivePort file contents.
-func resolveWSURL(ctx context.Context, base, host string, port int, wsPath string) (string, error) {
+// chromeWSURL reads base's /json/version and returns the browser-level WS
+// debugger URL, or "" when the endpoint isn't a debuggable Chromium (e.g. a
+// dev server squatting the port answers 404 HTML — a false positive here
+// would hand rod a bogus WebSocket URL).
+func chromeWSURL(ctx context.Context, base string) (string, error) {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, base+"/json/version", nil)
 	client := &http.Client{Timeout: 2 * time.Second}
 	resp, err := client.Do(req)
@@ -155,20 +161,111 @@ func resolveWSURL(ctx context.Context, base, host string, port int, wsPath strin
 	if resp.StatusCode == http.StatusForbidden {
 		return "", fmt.Errorf("%w: Chrome is reachable, but the per-session 'Allow remote debugging' popup has not been accepted — click Allow in Chrome, then retry", ErrPermissionBlocked)
 	}
-	if resp.StatusCode == http.StatusOK {
-		var v struct {
-			WebSocketDebuggerURL string `json:"webSocketDebuggerUrl"`
-		}
-		if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&v); err == nil && v.WebSocketDebuggerURL != "" {
-			return v.WebSocketDebuggerURL, nil
+	if resp.StatusCode != http.StatusOK {
+		return "", nil
+	}
+	var v struct {
+		Browser              string `json:"Browser"`
+		WebSocketDebuggerURL string `json:"webSocketDebuggerUrl"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&v); err != nil {
+		return "", nil
+	}
+	// The Browser field identifies a Chromium-family endpoint: Chrome,
+	// Chromium, HeadlessChrome — and the Chromium forks profileDirs scans
+	// (Edge answers "Edge/…", Brave "Brave/…" on some versions). Absent or
+	// unrecognised → not a browser we can drive (a squatter's JSON), so "".
+	family := []string{"Chrom", "Edge", "Brave"}
+	recognised := false
+	for _, f := range family {
+		if strings.Contains(v.Browser, f) {
+			recognised = true
+			break
 		}
 	}
-	// 404 (or undecodable): Chrome 147+ disables /json/* on the default
-	// user-data-dir; the ws path in DevToolsActivePort still works.
+	if !recognised {
+		return "", nil
+	}
+	return v.WebSocketDebuggerURL, nil
+}
+
+// resolveWSURL turns a DevTools endpoint into the WebSocket debugger URL,
+// per daemon.py get_ws_url with hermes browser_connect.py's dual-stack
+// hardening. scheme is "http" or "https" (explicit endpoints may be TLS);
+// empty defaults to http. host selects the probe family: "" probes v4 then
+// v6 loopbacks (a non-Chrome squatter on 127.0.0.1:<port> leaves Chrome
+// listening on [::1] only), any other value probes just that host.
+// /json/version normally answers; on a squatter's junk response (Chrome
+// 147+ also disables /json/* on the default profile) fall back to the
+// DevToolsActivePort file's WS path — trustworthy only in the profile-scan
+// path, where the file + live lock + live port come from the same profile.
+func resolveWSURL(ctx context.Context, scheme, host string, port int, wsPath string) (string, error) {
+	if scheme == "" {
+		scheme = "http"
+	}
+	wsScheme := "ws"
+	if scheme == "https" {
+		wsScheme = "wss"
+	}
+	var hosts []string
+	if host == "::1" {
+		hosts = []string{"::1"}
+	} else if host != "" {
+		hosts = []string{host}
+	} else {
+		hosts = []string{"127.0.0.1", "::1"}
+	}
+	var permErr error
+	for _, h := range hosts {
+		base := scheme + "://" + net.JoinHostPort(h, strconv.Itoa(port))
+		ws, err := chromeWSURL(ctx, base)
+		if err != nil {
+			if errors.Is(err, ErrPermissionBlocked) {
+				permErr = err
+			}
+			continue
+		}
+		if ws != "" {
+			return ws, nil
+		}
+	}
+	if permErr != nil {
+		return "", permErr
+	}
+	// Chrome 147+ disables /json/* on the default user-data-dir: fall back
+	// to the DevToolsActivePort file's WS path — but only after the path
+	// proves it's a real DevTools endpoint by answering a WebSocket upgrade
+	// (101). A non-Chrome squatter on the port (node dev server, IDE
+	// debugger) holds the file's port hostage and would otherwise be handed
+	// to rod as a bogus ws:// URL — the node-on-9222 failure class.
 	if wsPath != "" {
-		return "ws://" + net.JoinHostPort(host, strconv.Itoa(port)) + wsPath, nil
+		for _, h := range hosts {
+			if wsUpgradeAnswers(ctx, scheme, h, port, wsPath) {
+				return wsScheme + "://" + net.JoinHostPort(h, strconv.Itoa(port)) + wsPath, nil
+			}
+		}
 	}
-	return "", fmt.Errorf("%s/json/version: HTTP %d and no DevToolsActivePort ws path", base, resp.StatusCode)
+	return "", fmt.Errorf("%s: no debuggable Chromium endpoint", net.JoinHostPort(hosts[0], strconv.Itoa(port)))
+}
+
+// wsUpgradeAnswers reports whether http://host:port+path completes the
+// WebSocket handshake (101 Switching Protocols) — the minimum proof that a
+// DevToolsActivePort-file path still names a live DevTools endpoint and not
+// a squatter's HTTP server.
+func wsUpgradeAnswers(ctx context.Context, scheme, host string, port int, path string) bool {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet,
+		scheme+"://"+net.JoinHostPort(host, strconv.Itoa(port))+path, nil)
+	req.Header.Set("Connection", "Upgrade")
+	req.Header.Set("Upgrade", "websocket")
+	req.Header.Set("Sec-WebSocket-Version", "13")
+	req.Header.Set("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==") // fixed probe key; we never read the socket
+	client := &http.Client{Timeout: time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return false
+	}
+	resp.Body.Close()
+	return resp.StatusCode == http.StatusSwitchingProtocols
 }
 
 // DiscoverLiveWS finds a running Chromium-family browser with remote
@@ -180,31 +277,19 @@ func DiscoverLiveWS(ctx context.Context) (string, error) {
 		return ws, nil
 	}
 	if httpURL := os.Getenv("LOOPY_CDP_URL"); httpURL != "" {
-		host, port := splitHostPort(httpURL)
-		return resolveWSURL(ctx, strings.TrimRight(httpURL, "/"), host, port, "")
+		scheme, host, port := splitEndpoint(httpURL)
+		return resolveWSURL(ctx, scheme, host, port, "")
 	}
 	var sawStaleFile bool
 	for _, base := range profileDirs() {
-		data, err := os.ReadFile(filepath.Join(base, "DevToolsActivePort"))
-		if err != nil {
-			continue
-		}
-		port, wsPath, err := parseDevToolsActivePort(data)
-		if err != nil {
-			continue
-		}
-		if !portLive(port) {
-			sawStaleFile = true // closed browser leaves the file behind
-			continue
-		}
-		if !browserRunningForProfile(base) {
-			continue
-		}
-		ws, err := resolveWSURL(ctx, fmt.Sprintf("http://127.0.0.1:%d", port), "127.0.0.1", port, wsPath)
+		ws, stale, err := discoverProfileWS(ctx, base)
 		if err == nil {
 			return ws, nil
 		}
-		if strings.Contains(err.Error(), ErrPermissionBlocked.Error()) {
+		if stale {
+			sawStaleFile = true
+		}
+		if errors.Is(err, ErrPermissionBlocked) {
 			return "", err // permission beats continuing the scan
 		}
 	}
@@ -213,11 +298,11 @@ func DiscoverLiveWS(ctx context.Context) (string, error) {
 		if !portLive(port) {
 			continue
 		}
-		ws, err := resolveWSURL(ctx, fmt.Sprintf("http://127.0.0.1:%d", port), "127.0.0.1", port, "")
+		ws, err := resolveWSURL(ctx, "", "", port, "")
 		if err == nil {
 			return ws, nil
 		}
-		if strings.Contains(err.Error(), ErrPermissionBlocked.Error()) {
+		if errors.Is(err, ErrPermissionBlocked) {
 			return "", err
 		}
 	}
@@ -225,6 +310,38 @@ func DiscoverLiveWS(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("%w: a closed browser left a stale DevToolsActivePort file — reopen Chrome with remote debugging enabled (chrome://inspect/#remote-debugging), or run in dedicated/headless mode", ErrNoLiveBrowser)
 	}
 	return "", fmt.Errorf("%w: no supported Chromium-family browser with remote debugging is running — enable chrome://inspect/#remote-debugging in Chrome, start Chrome with --remote-debugging-port=9222, or use dedicated/headless mode", ErrNoLiveBrowser)
+}
+
+// DiscoverWSForProfile resolves a live browser's WS URL from one specific
+// user-data-dir's DevToolsActivePort — used to reattach to a previously
+// launched loopy Chrome instead of spawning a duplicate (hermes
+// /browser connect's already-listening check, via the profile file).
+// ok is false when the file is absent or the browser behind it is gone.
+func DiscoverWSForProfile(ctx context.Context, base string) (ws string, ok bool) {
+	ws, stale, err := discoverProfileWS(ctx, base)
+	return ws, err == nil && !stale
+}
+
+// discoverProfileWS is the shared scan body: read <base>/DevToolsActivePort,
+// verify the port answers and a live process holds the profile lock, then
+// resolve the WS URL. stale reports a port file whose browser is gone.
+func discoverProfileWS(ctx context.Context, base string) (ws string, stale bool, err error) {
+	data, err := os.ReadFile(filepath.Join(base, "DevToolsActivePort"))
+	if err != nil {
+		return "", false, err
+	}
+	port, wsPath, err := parseDevToolsActivePort(data)
+	if err != nil {
+		return "", false, err
+	}
+	if !portLive(port) {
+		return "", true, fmt.Errorf("stale DevToolsActivePort in %s", base)
+	}
+	if !browserRunningForProfile(base) {
+		return "", false, fmt.Errorf("no live process holds %s", base)
+	}
+	ws, err = resolveWSURL(ctx, "", "", port, wsPath)
+	return ws, false, err
 }
 
 func splitHostPort(httpURL string) (string, int) {
@@ -235,4 +352,18 @@ func splitHostPort(httpURL string) (string, int) {
 	}
 	port, _ := strconv.Atoi(portStr)
 	return host, port
+}
+
+// splitEndpoint splits an explicit CDP endpoint into scheme/host/port,
+// preserving https (a remote Chrome behind TLS) that splitHostPort strips.
+func splitEndpoint(rawurl string) (scheme, host string, port int) {
+	scheme = "http"
+	if strings.HasPrefix(rawurl, "https://") {
+		scheme = "https"
+	}
+	if strings.HasPrefix(rawurl, "wss://") {
+		scheme = "https" // wss endpoints resolve like https
+	}
+	host, port = splitHostPort(rawurl)
+	return scheme, host, port
 }

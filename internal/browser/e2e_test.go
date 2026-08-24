@@ -18,11 +18,17 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/go-rod/rod"
 )
 
 var chromiumCandidates = []string{
 	"~/.cache/ms-playwright/chromium-1234/chrome-linux64/chrome",
 	"~/.cache/ms-playwright/chromium_headless_shell-1234/chrome-headless-shell-linux64/chrome-headless-shell",
+	// macOS dev boxes: rod launches these headed/headless itself.
+	"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+	"/Applications/Chromium.app/Contents/MacOS/Chromium",
+	"/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
 }
 
 func chromiumPath(t *testing.T) string {
@@ -290,4 +296,142 @@ func TestEvalImmediatelyAfterAttach(t *testing.T) {
 		}
 		b.Close()
 	}
+}
+
+// TestE2ELiveFallsBackToLaunched exercises the hermes-style fallback: live
+// discovery finds nothing debuggable (HOME is a bare temp dir, no explicit
+// endpoint) and Open(ModeLive) transparently lands on a launched dedicated
+// Chrome instead of erroring.
+func TestE2ELiveFallsBackToLaunched(t *testing.T) {
+	if os.Getenv("LOOPY_CDP_WS") != "" || os.Getenv("LOOPY_CDP_URL") != "" {
+		t.Skip("explicit CDP endpoint set — fallback bypassed")
+	}
+	// Hermeticity: DiscoverLiveWS's last-resort probe of 9222/9223 could hit
+	// a real debug browser on this machine even with an empty HOME, which
+	// would attach live instead of falling back. Skip when one answers.
+	for _, p := range []int{9222, 9223} {
+		if portLive(p) {
+			t.Skipf("ambient browser on %d — fallback would not trigger", p)
+		}
+	}
+	_ = chromiumPath(t)
+	t.Setenv("HOME", t.TempDir()) // no profiles at all → live discovery fails
+	url := testPage(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	b, err := Open(ctx, ModeLive)
+	if err != nil {
+		t.Fatalf("live fallback must not error: %v", err)
+	}
+	defer b.Close()
+	if b.Obtained() != ObtainedLaunched {
+		t.Fatalf("fallback should have launched, got obtained=%v", b.Obtained())
+	}
+	if err := b.Navigate(ctx, url); err != nil {
+		t.Fatal(err)
+	}
+	info, err := b.Info(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(info.URL, url) {
+		t.Fatalf("url: %q", info.URL)
+	}
+}
+
+// TestE2EDedicatedReattach verifies a still-running loopy Chrome is reused:
+// close the backend's CDP connection (simulating a dead/stale backend)
+// while keeping the browser process alive, then Open again — it must
+// reattach to the SAME browser rather than spawn a duplicate, and the
+// profile's cookies survive.
+func TestE2EDedicatedReattach(t *testing.T) {
+	_ = chromiumPath(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	url := testPage(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+
+	b1, err := Open(ctx, ModeDedicated)
+	if err != nil {
+		t.Fatalf("launch dedicated: %v", err)
+	}
+	// Teardown first: any t.Fatal below must not leak a (headed) Chrome.
+	// Fresh context — the test's ctx may be expired by cleanup time.
+	prof := dedicatedProfileDir(home, "default")
+	t.Cleanup(func() {
+		cctx, ccancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer ccancel()
+		killProfileChrome(cctx, t, prof)
+	})
+	if b1.Obtained() != ObtainedLaunched {
+		t.Fatalf("first open should launch, got %v", b1.Obtained())
+	}
+	if err := b1.Navigate(ctx, url+"/set-cookie"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Detach: with the new Close semantics, b1.Close() severs our CDP
+	// connection without killing Chrome (b1 owns the launcher, but a
+	// detached live/reattached backend leaves the process alive — that's
+	// the point of reattach).
+	b1.Close()
+	if _, ok := DiscoverWSForProfile(ctx, prof); !ok {
+		t.Fatal("Close must leave the dedicated Chrome alive for reattach")
+	}
+
+	// Second open must reattach: same profile, cookie intact, no new launch.
+	b2, err := Open(ctx, ModeDedicated)
+	if err != nil {
+		t.Fatalf("reattach: %v", err)
+	}
+	if b2.Obtained() != ObtainedReattached {
+		t.Fatalf("second open should reattach, got %v", b2.Obtained())
+	}
+	if b2.(*Browser).launcher != nil {
+		t.Fatal("reattach must not own a launcher (that would be a new process)")
+	}
+	if err := b2.Navigate(ctx, url+"/"); err != nil {
+		t.Fatal(err)
+	}
+	cookie, err := b2.Eval(ctx, `document.getElementById("cookie").textContent`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cookie != `"real-session-42"` {
+		t.Fatalf("reattached browser lost profile cookies: %s", cookie)
+	}
+
+	// Closing the reattached backend detaches (Chrome survives); a third
+	// open reattaches again rather than stacking a second process.
+	b2.Close()
+	if _, ok := DiscoverWSForProfile(ctx, prof); !ok {
+		t.Fatal("reattached Close must leave Chrome alive")
+	}
+	b3, err := Open(ctx, ModeDedicated)
+	if err != nil {
+		t.Fatalf("third open: %v", err)
+	}
+	if b3.Obtained() != ObtainedReattached {
+		t.Fatalf("third open should reattach the surviving Chrome, got %v", b3.Obtained())
+	}
+	b3.Close()
+	// Chrome is killed by the t.Cleanup registered after the first Open.
+}
+
+// killProfileChrome terminates the Chrome behind a profile dir by closing
+// the launcher-owned process — used at test teardown after detach-style
+// Closes left it running.
+func killProfileChrome(ctx context.Context, t *testing.T, prof string) {
+	t.Helper()
+	ws, ok := DiscoverWSForProfile(ctx, prof)
+	if !ok {
+		return
+	}
+	// proto.BrowserClose over the WS shuts Chrome down cleanly.
+	if b := rod.New().ControlURL(ws); b.Connect() == nil {
+		_ = b.Close() // this one kills — intended at teardown
+	}
+	time.Sleep(500 * time.Millisecond)
 }

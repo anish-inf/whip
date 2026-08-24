@@ -462,12 +462,28 @@ code-shaped tool, `browser_exec`. Design: docs/learnings/browser-use-integration
 - **Three modes** (`config.Browser.Mode`): `live` attaches to the user's
   running Chromium-family browser (their real cookies/sessions) via
   DevToolsActivePort profile scan + SingletonLock liveness + `/json/version`
-  → WS resolution (Chrome 147+ 404 falls back to the file's WS path;
-  Chrome 144+ 403 surfaces as `ErrPermissionBlocked` with user-actionable
-  text). `dedicated` launches a separate Chrome with a loopy-owned
+  → WS resolution (Chrome 147+ 404 falls back to the file's WS path after
+  the path proves it answers a WebSocket upgrade; Chrome 144+ 403 surfaces
+  as `ErrPermissionBlocked` with user-actionable text). `dedicated`
+  launches a separate Chrome with a loopy-owned
   `~/.loopy/browser/dedicated-profile` (no popups); `headless` is the same
   without a window. Explicit endpoints win: `LOOPY_CDP_WS`/`LOOPY_CDP_URL`
   env or `browser.cdpUrl` config.
+- **Auto-launch fallback** (hermes `/browser connect` model, ported in
+  `.ai-docs/plans/browser-auto-launch`): when live discovery finds no
+  debuggable browser (`ErrNoLiveBrowser` — including a non-Chrome process
+  squatting the debug port), `Open`/`openRod` silently launch the dedicated
+  Chrome for that session instead of dead-ending the tool call. Discovery
+  probes both loopbacks (127.0.0.1 + [::1]) and verifies `/json/version`'s
+  `Browser` field, so a squatter on 9222 no longer resolves to a bogus WS
+  URL — it triggers the fallback. A still-running loopy Chrome is reattached
+  via `DiscoverWSForProfile` (its profile's DevToolsActivePort) rather than
+  re-launched; `Browser.Obtained()` reports live/launched/reattached, and
+  `Session.Do` prepends a one-line notice to the first tool output when a
+  live session fell back (the model relays which browser it's driving).
+  `Close` detaches (severs the CDP socket via `detach.go`, no Browser.close)
+  for live/reattached/dedicated so a reattach target survives; headless
+  still kills its process.
 - **One tool, per hermes's benchmark** (36/36 task success at ~60% fewer
   schema tokens vs a 12-tool granular set): the `code` argument is a line/
   semicolon-separated helper-call program (`goto`, `js`, `click`, `type`,
@@ -502,10 +518,13 @@ code-shaped tool, `browser_exec`. Design: docs/learnings/browser-use-integration
   block type; no agent-loop changes needed.
 
 Tests: `internal/browser/browser_test.go` (DevToolsActivePort parsing,
-profile scan with fake dirs, /json/version + 404-fallback + 403-permission
-discovery, SSRF floor, session/mode selection), `e2e_test.go` (real Chrome
-× all three modes — cookie round-trip, AX-tree→click, screenshot JPEG,
-dedicated-profile isolation, live-attach survival after Close),
+profile scan with fake dirs, /json/version + 404-upgrade-fallback +
+403-permission discovery, dual-stack portLive, squatter rejection,
+per-profile reattach discovery, fallback notice once-per-session, SSRF
+floor, session/mode selection), `e2e_test.go` (real Chrome × all three
+modes — cookie round-trip, AX-tree→click, screenshot JPEG,
+dedicated-profile isolation, live-attach survival after Close, live→launched
+fallback, dedicated reattach-no-duplicate),
 `internal/tools/browser_lang_test.go` (parser), `schema_test.go` (all
 built-in tool schemas parse — ratchet for the request-corrupting malformed
 schema class), `browser_e2e_test.go` (tool-level E2E),

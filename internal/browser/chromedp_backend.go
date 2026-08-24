@@ -8,6 +8,7 @@ package browser
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -32,11 +33,14 @@ type chromedpBackend struct {
 	targetCtx context.Context
 	targetOff context.CancelFunc
 	closed    bool
+	obtained  Obtained
 }
 
 // openChromedp connects per mode: live attaches via the discovered WS URL
-// (remote allocator); dedicated/headless launch via the default allocator
-// (chromedp's own launcher, headed off in headless mode).
+// (remote allocator), falling back hermes-style to a launched dedicated
+// instance when none is debuggable; dedicated/headless reattach to a
+// still-running loopy Chrome for the profile, else launch via the default
+// allocator (chromedp's own launcher, headed off in headless mode).
 func openChromedp(ctx context.Context, mode Mode, sessionName string) (*chromedpBackend, error) {
 	b := &chromedpBackend{mode: mode}
 	var allocCtx context.Context
@@ -45,10 +49,18 @@ func openChromedp(ctx context.Context, mode Mode, sessionName string) (*chromedp
 	case ModeLive:
 		ws, err := DiscoverLiveWS(ctx)
 		if err != nil {
-			return nil, err
+			if !errors.Is(err, ErrNoLiveBrowser) {
+				return nil, err
+			}
+			return openChromedp(ctx, ModeDedicated, sessionName) // fallback
 		}
 		allocCtx, cancel = chromedp.NewRemoteAllocator(ctx, ws)
+		b.obtained = ObtainedLive
 	case ModeDedicated, ModeHeadless:
+		// Note: chromedp dedicated does NOT reattach — Close kills its Chrome
+		// (ExecAllocator cancel kills the process; there's no detach-only
+		// path as with rod). A prior detached dedicated Chrome belongs to the
+		// rod driver; chromedp just launches fresh.
 		opts := append(chromedp.DefaultExecAllocatorOptions[:],
 			chromedp.Flag("headless", mode == ModeHeadless),
 			chromedp.Flag("remote-debugging-port", "0"), // string — int hits "invalid exec pool flag"
@@ -60,6 +72,7 @@ func openChromedp(ctx context.Context, mode Mode, sessionName string) (*chromedp
 			opts = append(opts, chromedp.ExecPath(bin))
 		}
 		allocCtx, cancel = chromedp.NewExecAllocator(ctx, opts...)
+		b.obtained = ObtainedLaunched
 	default:
 		return nil, fmt.Errorf("unknown browser mode %q", mode)
 	}
@@ -447,6 +460,12 @@ func (b *chromedpBackend) UploadFiles(ctx context.Context, selector string, path
 	}))
 }
 
+// chromedp's ExecAllocator kills Chrome when its context is cancelled —
+// there's no detach-only path as there is with rod (see detach.go), and
+// loopy's default driver is rod. So chromedp dedicated keeps kill-on-Close
+// semantics and does NOT reattach: reattach is a rod-driver behavior. This
+// preserves chromedp's role as the spike backup without the reflection
+// machinery the rod detach requires.
 func (b *chromedpBackend) Close() error {
 	if b.closed {
 		return nil
@@ -469,6 +488,9 @@ func (b *chromedpBackend) Close() error {
 
 // Mode returns the backend's mode.
 func (b *chromedpBackend) Mode() Mode { return b.mode }
+
+// Obtained reports how this connection was established (Backend).
+func (b *chromedpBackend) Obtained() Obtained { return b.obtained }
 
 // HandleDialog answers a pending native dialog. chromedp surfaces dialogs
 // through page events; answer the current one if any.

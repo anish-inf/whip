@@ -421,3 +421,37 @@ native-Go), Camofox, recordings (the CLI has them; revisit if users ask).
    boundary. And the anti-lesson: hermes's regex-based JS-vocabulary
    denylist (`document.cookie` etc., incl. deobfuscation attempts) is off
    by default and losing — guard egress (URL rechecks), not vocabulary.
+
+---
+
+## Addendum (2026-08): hermes `/browser connect` auto-launch port
+
+Shipped in `.ai-docs/plans/browser-auto-launch` — live mode no longer
+dead-ends on `ErrNoLiveBrowser`. Ported from hermes's
+`hermes_cli/browser_connect.py` + `cli_commands_mixin.py` `/browser connect`:
+
+- **Auto-fallback**: `Open`/`openRod` fall back from `live` to launching the
+  dedicated Chrome when discovery finds nothing debuggable. hermes does the
+  same on `/browser connect` ("isn't running with remote debugging —
+  attempting to launch..."), but into an isolated `~/.hermes/chrome-debug`
+  profile; loopy reuses its existing `~/.loopy/browser/dedicated-profile`.
+- **Dual-stack probe** (`_LOOPBACK_PROBE_HOSTS`): a non-Chrome squatter on
+  127.0.0.1:9222 pushes Chrome's debug port to [::1] only — probe both.
+- **Squatter rejection**: `/json/version` must return a Chromium `Browser`
+  field; a squatter's 404 HTML is not a browser. The Chrome-147+ wsPath
+  fallback now additionally requires the file's WS path to answer a
+  WebSocket upgrade (101) before trusting it — otherwise a stale
+  DevToolsActivePort pointing at a squatted port hands rod a bogus ws URL.
+- **Reattach-no-duplicate**: a still-running loopy Chrome is reattached via
+  its profile's DevToolsActivePort instead of spawning a second instance.
+  Two discoveries while building this: (1) rod's `Browser.Close()` always
+  sends CDP `Browser.close`, which kills the *whole* browser process even on
+  a remote attach — loopy now detaches (severs the socket via reflect+unsafe
+  into rod's unexported client) for live/reattached/dedicated modes and only
+  kills headless; (2) that detach survives because the launcher's Leakless
+  pid-guardian reaps the browser when the agent process exits, so detached
+  dedicated Chromes don't leak across runs.
+- The in-band fallback notice (prepended to the first tool output) is
+  hermes's `_pending_input` "browser connected to live browser" context
+  injection, adapted: loopy tells the model *which* browser it's driving
+  (launched dedicated vs attached live) so it can relay that to the user.
