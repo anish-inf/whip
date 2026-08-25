@@ -131,6 +131,7 @@ func (m *model) rewindKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m *model) applyRewind(cut int) string {
 	cut = max(cut, 1) // keep the system prompt
 	base := len(m.agent.Messages)
+	restored, restoreErr := 0, error(nil)
 	switch {
 	case cut > base: // forward: pull clipped messages back in
 		m.agent.Messages = append(m.agent.Messages, m.future[:cut-base]...)
@@ -145,9 +146,35 @@ func (m *model) applyRewind(cut int) string {
 				m.append(errStyle.Render("session save failed: " + err.Error()))
 			}
 		}
+		// restore the workspace to the earliest snapshot being rewound past
+		// (the state before the oldest clipped turn ran). Consumed snapshots
+		// are dropped from map and DB (DeleteFrom trimmed the rows above) so
+		// a later rewind doesn't re-apply them.
+		best, bestIdx := "", -1
+		for idx, ref := range m.snapshots {
+			if idx >= cut && (bestIdx == -1 || idx < bestIdx) {
+				best, bestIdx = ref, idx
+			}
+		}
+		if best != "" {
+			restored, restoreErr = restoreWorkspace(best)
+			for idx := range m.snapshots {
+				if idx >= cut {
+					delete(m.snapshots, idx)
+				}
+			}
+		}
 	}
 	m.persist() // re-save any rows pulled back in; no-op otherwise
 	m.rebuildTranscript()
+	// the workspace note lands AFTER the rebuild — rebuildTranscript resets
+	// the block list, so anything appended before it is wiped
+	switch {
+	case restoreErr != nil:
+		m.append(errStyle.Render("workspace rewind failed: " + restoreErr.Error()))
+	case restored > 0:
+		m.append(dimStyle.Render(fmt.Sprintf("⟲ workspace rewound — %d file(s) restored", restored)))
+	}
 	text := ""
 	if cut < len(m.agent.Messages)+len(m.future) {
 		if msg := m.messageAt(cut); msg.Role == "user" && msg.Authored {

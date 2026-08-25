@@ -44,6 +44,17 @@ CREATE TABLE IF NOT EXISTS tasks (
 	started_at  TEXT NOT NULL,
 	ended_at    TEXT NOT NULL DEFAULT '',
 	PRIMARY KEY (session_id, task_id)
+);
+-- Workspace snapshots: one git stash ref per turn (keyed by the conversation
+-- index the turn started at), so a conversation rewind can also restore the
+-- files that turn changed. Same seq semantics as messages, so DeleteFrom
+-- trims both together.
+CREATE TABLE IF NOT EXISTS snapshots (
+	session_id TEXT NOT NULL REFERENCES sessions(id),
+	seq        INTEGER NOT NULL,
+	ref        TEXT NOT NULL,
+	created_at TEXT NOT NULL,
+	PRIMARY KEY (session_id, seq)
 );`
 
 // extraColumns are added idempotently after the base schema: SQLite's
@@ -419,12 +430,56 @@ func (s *Store) ClearMessages(id string) error {
 	return err
 }
 
-// DeleteFrom drops every stored message with seq >= from. seq equals the
-// conversation index (Save persists msgs[i] at seq i; the system prompt is
-// never persisted). Used by rewind: the clipped tail is deleted from disk
-// but kept in memory for forward travel.
+// DeleteFrom drops every stored message with seq >= from, plus the workspace
+// snapshots for those turns (their refs stop being restorable once the
+// conversation no longer contains the turn). seq equals the conversation
+// index (Save persists msgs[i] at seq i; the system prompt is never
+// persisted). Used by rewind: the clipped tail is deleted from disk but kept
+// in memory for forward travel.
 func (s *Store) DeleteFrom(id string, from int) error {
 	_, err := s.db.Exec(`DELETE FROM messages WHERE session_id=? AND seq>=?`, id, from)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.Exec(`DELETE FROM snapshots WHERE session_id=? AND seq>=?`, id, from)
+	return err
+}
+
+// SetSnapshot records the workspace snapshot ref for the turn starting at
+// conversation index seq ("" deletes: the turn's files were restored away).
+func (s *Store) SetSnapshot(id string, seq int, ref string) error {
+	if ref == "" {
+		_, err := s.db.Exec(`DELETE FROM snapshots WHERE session_id=? AND seq=?`, id, seq)
+		return err
+	}
+	_, err := s.db.Exec(`INSERT OR REPLACE INTO snapshots (session_id, seq, ref, created_at) VALUES (?,?,?,?)`,
+		id, seq, ref, now())
+	return err
+}
+
+// Snapshots returns the session's workspace snapshot refs keyed by
+// conversation index.
+func (s *Store) Snapshots(id string) map[int]string {
+	rows, err := s.db.Query(`SELECT seq, ref FROM snapshots WHERE session_id=?`, id)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	out := map[int]string{}
+	for rows.Next() {
+		var seq int
+		var ref string
+		if rows.Scan(&seq, &ref) == nil {
+			out[seq] = ref
+		}
+	}
+	return out
+}
+
+// ClearSnapshots drops all of a session's workspace snapshot rows (compaction
+// re-seqs messages, so the keys stop mapping to turns).
+func (s *Store) ClearSnapshots(id string) error {
+	_, err := s.db.Exec(`DELETE FROM snapshots WHERE session_id=?`, id)
 	return err
 }
 

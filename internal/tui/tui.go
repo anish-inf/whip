@@ -68,6 +68,9 @@ type compactMsg struct {
 type turnDoneMsg struct {
 	final string
 	err   error
+	at    int    // conversation index the turn started at (snapshot key)
+	snap  string // pre-turn workspace snapshot commit ("" = not a git repo)
+	clean bool   // the turn left the tree clean — snap is worthless, drop it
 }
 type catalogsMsg map[string]config.Catalog // background /models fetch result
 type usageMsg llm.Usage                    // one request's token usage
@@ -125,7 +128,8 @@ type model struct {
 
 	store     *session.Store
 	sessionID string
-	saved     int // messages already persisted (index into agent.Messages)
+	saved     int            // messages already persisted (index into agent.Messages)
+	snapshots map[int]string // workspace snapshot ref per turn-start index (mirrors the snapshots table)
 
 	hist    []string         // submitted inputs, for up/down recall
 	histIdx int              // len(hist) == not navigating
@@ -543,6 +547,7 @@ func (m *model) resume(id string) error {
 	}
 	m.agent.Messages = append(m.agent.Messages, msgs...)
 	m.agent.LoadTodosJSON(m.store.Todos(meta.ID))
+	m.snapshots = m.store.Snapshots(meta.ID)
 	// restore the cumulative token totals saved with the session; a row that
 	// pre-dates the usage columns reads zero, so rebuild by summing the
 	// per-message usage already stored on each assistant message. Either way
@@ -699,6 +704,10 @@ func (m *model) persistRewrite() {
 			m.append(errStyle.Render("session save failed: " + err.Error()))
 			return
 		}
+		// Compaction re-seqs messages, so snapshot keys no longer map to
+		// turns — drop them rather than restore the wrong files later.
+		m.snapshots = nil
+		m.store.ClearSnapshots(m.sessionID)
 	}
 	m.saved = 1 // re-save everything after the system prompt
 	m.persist()
@@ -1519,6 +1528,18 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.append(dimStyle.Render("(interrupted — any running tool calls will be recorded as interrupted; loopy can retry them next turn)"))
 		}
 		m.persist()
+		switch {
+		case msg.snap != "" && msg.clean:
+			dropSnapshot(msg.snap) // the turn changed no files; nothing to roll back
+		case msg.snap != "":
+			if m.snapshots == nil {
+				m.snapshots = map[int]string{}
+			}
+			m.snapshots[msg.at] = msg.snap
+			if m.store != nil && m.sessionID != "" {
+				m.store.SetSnapshot(m.sessionID, msg.at, msg.snap)
+			}
+		}
 		// codex-style follow-up: send queued messages one turn at a time;
 		// `!` shell escapes execute locally instead of starting a turn.
 		// A canceled turn also drains the queue: the empty-enter steer path
@@ -2631,6 +2652,10 @@ func (m *model) submitTurn(text string, authored bool) (tea.Model, tea.Cmd) {
 	m.busy = true
 	prepared, parts := m.prepareTurn(text)
 	userMsgIdx := len(m.agent.Messages) // where Turn will append this message
+	// Snapshot the pre-turn workspace so a rewind past this turn restores the
+	// files it is about to change. "" = not a git repo; a clean tree still
+	// snapshots here (as HEAD) — turnDone drops it if the turn changed nothing.
+	preSnap := snapshotWorkspace()
 	// Rewind bookkeeping: if a redo stack exists, this resubmission replaces a
 	// clipped message. Record the replaced text on the new message (internal,
 	// stripped before the provider) before discardFuture drops the stack.
@@ -2732,7 +2757,7 @@ func (m *model) submitTurn(text string, authored bool) (tea.Model, tea.Cmd) {
 		if rewoundFrom != "" && userMsgIdx < len(m.agent.Messages) {
 			m.agent.Messages[userMsgIdx].RewoundFrom = rewoundFrom
 		}
-		send(turnDoneMsg{final: final, err: err})
+		send(turnDoneMsg{final: final, err: err, at: userMsgIdx, snap: preSnap, clean: workspaceClean()})
 	}()
 	m.append(youStyle.Render("❯ ") + linkifyFilePaths(text, realFileExists))
 	if authored {
