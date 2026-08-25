@@ -70,7 +70,8 @@ func TestThemeBareOpensSwitcher(t *testing.T) {
 	if m.palette != nil {
 		t.Fatal("enter in a directly-opened switcher should close the palette")
 	}
-	m.setTheme("dark") // leave dark default for other tests
+	m.setTheme("dark")    // leave dark default for other tests
+	setSchemeOverride("") // theme state is process-global: restore detection mode
 }
 
 // Theme defaults to auto ("" in config) unless the user picks one.
@@ -102,4 +103,5 @@ func TestNoArtifactsBothThemes(t *testing.T) {
 		}
 		m.setTheme("dark")
 	}
+	setSchemeOverride("") // theme state is process-global: restore detection mode
 }

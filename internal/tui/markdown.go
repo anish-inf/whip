@@ -77,11 +77,17 @@ var (
 	mdAtLight     bool // theme the cached renderer was built for
 	mdAtKnown     bool // whether the cached renderer was built with a known bg
 	mdRendererC   *glamour.TermRenderer
-	mdRendererErr bool // style init failed once: don't retry per message
-	mdLight       bool // light terminal background detected (set at startup)
-	mdKnown       bool // background was actually determined; false = no good signal
+	mdRendererErr bool   // style init failed once: don't retry per message
+	mdLight       bool   // light terminal background detected (set at startup)
+	mdKnown       bool   // background was actually determined; false = no good signal
+	mdScheme      string // explicit scheme ("light"/"dark"); "" = follow detection
 )
 
+// applyLight/applyDark/applyUnknown drop the cached renderer so the next
+// render rebuilds with the matching style. They do NOT touch the detected
+// terminal background (mdLight/mdKnown) — that belongs to detectColorScheme.
+// Splitting the two is what lets an explicit /theme pick override detection
+// without corrupting it (auto must still resolve from the real background).
 // SetLightTheme records the terminal's background and drops the cached
 // renderer so the next render builds with the matching style. Called from
 // Run once the background is known (OSC query result or heuristic).
@@ -104,12 +110,24 @@ func SetUnknownTheme() {
 	mdMu.Unlock()
 }
 
+// setSchemeOverride records an explicit scheme pick ("light"/"dark", "" = back
+// to detection) for CurrentTheme reporting.
+func setSchemeOverride(s string) {
+	mdMu.Lock()
+	mdScheme = s
+	mdMu.Unlock()
+}
+
 // CurrentTheme reports the active scheme ("light"/"dark"/"auto") for the UI.
-// "auto" means the background wasn't determined and markdown is rendering in
-// the neutral default style.
+// An explicit pick wins; otherwise it follows detection, where "auto" means
+// the background wasn't determined and markdown is rendering in the neutral
+// default style.
 func CurrentTheme() string {
 	mdMu.Lock()
 	defer mdMu.Unlock()
+	if mdScheme != "" {
+		return mdScheme
+	}
 	if !mdKnown {
 		return "auto"
 	}

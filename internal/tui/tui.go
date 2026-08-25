@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -100,6 +101,12 @@ type model struct {
 	modelName string
 	provName  string
 	sysPrompt string
+	// cfgExtra pins scalar settings this session explicitly changed (theme,
+	// effort, …): the config watcher applies file values only for keys not
+	// pinned here, so a local pick this session survives another session's
+	// unrelated save while still syncing changes made elsewhere.
+	cfgExtra map[string]string
+	cfgMod   time.Time // last observed config.json mod time (watcher baseline)
 
 	input  textarea.Model
 	spin   spinner.Model
@@ -332,8 +339,16 @@ func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string) (s
 		enableClickWheelMouse(os.Stdout)
 		applyTmuxMouseFix()
 	}
-	cfgThemeValue = cfg.Theme // config override feeds detection
-	detectColorScheme()       // pick the glamour style that matches the terminal bg
+	// pick the glamour style that matches the pick/detection resolution
+	m.applyTheme(cfg.Theme)
+	if m.cfgExtra == nil {
+		m.cfgExtra = map[string]string{}
+	}
+	if dir, err := config.Dir(); err == nil { // watcher baseline: only later saves sync
+		if fi, err := os.Stat(filepath.Join(dir, "config.json")); err == nil {
+			m.cfgMod = fi.ModTime()
+		}
+	}
 	p := tea.NewProgram(m, opts...)
 	m.prog = p
 	// install the interactive bash runner so the agent's bash tool can hand
@@ -341,6 +356,7 @@ func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string) (s
 	m.irunner = newInteractiveRunner(p)
 	tools.InteractiveBash = m.irunner
 	go m.fetchCatalogs()
+	go func() { p.Send(cfgSyncTick{}) }() // start the config watcher
 	_, err = p.Run()
 	// The UI has exited (quit, /quit, or a signal). We enabled click/wheel mouse
 	// reporting directly on the TTY (bubbletea doesn't manage it), so release it.
@@ -714,30 +730,58 @@ func (m *model) persistRewrite() {
 }
 
 // setTheme switches the color scheme ("light"/"dark"/"auto") live and
-// persists it: markdown re-renders under the new glamour style and every
-// AdaptiveColor UI style follows lipgloss.
+// persists the pick to the global config: markdown re-renders under the new
+// glamour style and every AdaptiveColor UI style follows lipgloss. A theme
+// file change in ANOTHER running loopy session is picked up live via
+// syncThemeMsg.
 func (m *model) setTheme(theme string) {
-	switch theme {
-	case "light":
-		SetLightTheme(true)
-		lipgloss.SetHasDarkBackground(false)
-		m.cfg.Theme = "light"
-	case "dark":
-		SetLightTheme(false)
-		lipgloss.SetHasDarkBackground(true)
-		m.cfg.Theme = "dark"
-	default: // auto: re-detect, don't persist a choice
-		m.cfg.Theme = ""
-		how := detectColorScheme()
-		m.refreshVP()
-		m.append(dimStyle.Render(fmt.Sprintf("◐ theme: %s (auto: %s)", CurrentTheme(), how)))
-		return
+	if theme != "light" && theme != "dark" {
+		theme = "auto"
+	}
+	how := m.applyTheme(theme)
+	m.cfg.Theme = theme
+	if theme == "auto" {
+		m.cfg.Theme = "" // auto persists as "" (omitted = auto-detect)
+	}
+	if m.cfgExtra == nil {
+		m.cfgExtra = map[string]string{}
+	}
+	if theme == "auto" {
+		delete(m.cfgExtra, "theme") // explicit pick, not omission
+	} else {
+		m.cfgExtra["theme"] = theme
 	}
 	if err := m.cfg.Save(); err != nil {
 		m.append(errStyle.Render("config save failed: " + err.Error()))
 	}
 	m.refreshVP() // re-render the transcript under the new scheme
-	m.append(dimStyle.Render("◐ theme: " + CurrentTheme()))
+	if theme == "auto" {
+		m.append(dimStyle.Render(fmt.Sprintf("◐ theme: %s (auto: %s)", CurrentTheme(), how)))
+	} else {
+		m.append(dimStyle.Render("◐ theme: " + CurrentTheme()))
+	}
+}
+
+// applyTheme points rendering at a scheme WITHOUT persisting: auto re-detects
+// (re-reading the terminal background so switching dark→auto can't stay dark),
+// explicit picks override detection directly. Called by setTheme, startup, and
+// the config watcher. how (only meaningful for auto) names the detection
+// source so a wrong pick is diagnosable in the transcript note.
+func (m *model) applyTheme(theme string) (how string) {
+	switch theme {
+	case "light":
+		SetLightTheme(true)
+		lipgloss.SetHasDarkBackground(false)
+		setSchemeOverride("light")
+	case "dark":
+		SetLightTheme(false)
+		lipgloss.SetHasDarkBackground(true)
+		setSchemeOverride("dark")
+	default: // auto: don't touch m.cfg.Theme — setTheme owns persistence
+		setSchemeOverride("")
+		how = detectColorScheme()
+	}
+	return how
 }
 
 // setEffort changes the reasoning effort and stores it both ways: as the new
@@ -1074,32 +1118,22 @@ func cwd() string {
 	return "?"
 }
 
-// cfgThemeValue is the config's theme override, read at startup by
-// detectColorScheme (set from Run before calling it).
-var cfgThemeValue string
-
-func cfgTheme() string { return cfgThemeValue }
-
 // detectColorScheme figures out whether the terminal background is light and
 // calls SetLightTheme so markdown renders with a matching (high-contrast)
 // glamour style. Priority:
-//  1. config "theme" (set via /theme or the ctrl+p palette)
-//  2. LOOPY_THEME=light|dark (explicit env override)
-//  3. COLORFGBG (set by many terminals; last field is the bg color index)
-//  4. an OSC 11 background query on /dev/tty with a short timeout
-//  5. default: dark (the safe assumption for coding terminals)
+//  1. LOOPY_THEME=light|dark (explicit env override)
+//  2. COLORFGBG (set by many terminals; last field is the bg color index)
+//  3. an OSC 11 background query on /dev/tty with a short timeout
+//  4. default: dark (the safe assumption for coding terminals)
 //
-// detectColorScheme returns a short human-readable note naming the source of
-// the decision (shown by /theme auto so a wrong pick is diagnosable).
+// The config theme is NOT consulted here — applyTheme handles explicit picks
+// before auto ever reaches detection. detectColorScheme returns a short
+// human-readable note naming the source of the decision (shown by /theme auto
+// so a wrong pick is diagnosable).
 func detectColorScheme() string {
 	setScheme := func(light bool) {
 		SetLightTheme(light)                  // glamour markdown style
 		lipgloss.SetHasDarkBackground(!light) // AdaptiveColor picks
-	}
-	// config theme wins over env (it's set interactively via /theme)
-	if t := strings.ToLower(cfgTheme()); t == "light" || t == "dark" {
-		setScheme(t == "light")
-		return "config"
 	}
 	switch strings.ToLower(os.Getenv("LOOPY_THEME")) {
 	case "light":
@@ -1276,6 +1310,13 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	switch msg := msg.(type) {
+	case cfgSyncTick:
+		return m.cfgSync()
+
+	case cfgSyncMsg:
+		m.applyCfgSync(msg)
+		return m, nil
+
 	case tea.WindowSizeMsg:
 		resized := msg.Width != m.width // width change → re-wrap the whole transcript
 		m.width, m.height = msg.Width, msg.Height
