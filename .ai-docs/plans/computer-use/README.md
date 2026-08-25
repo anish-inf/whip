@@ -59,7 +59,21 @@ multi-line tab lists) and doesn't escape embedded quotes (injection
 hazard). Our helper fixes both. The rest of mack (dialogs, beep, say) is
 irrelevant.
 
-**Codex reality (task-2 deep read): the driver is NOT in their repo.**
+**Codex reality (task-2 deep read + binary reverse engineering):**
+
+*RE chain (for reproducibility):* the `codex-aarch64-apple-darwin` release
+binary (220MB) contains the plugin IDs and policy code but zero GUI/input
+symbols (no CGEvent/AXUIElement/screencapture anywhere). The package's
+`codex-code-mode-host` (57MB) is a bare V8 runtime, no GUI libs. The public
+plugins repo (`github.com/openai/plugins`, 120 plugins) excludes
+computer-use/chrome. The driver ships via the **auth-gated catalog**
+(`GET {chatgpt_base_url}/ps/plugins/{id}?includeDownloadUrls=true`,
+core-plugins/src/remote.rs:2204) — 404 without a ChatGPT token. So the
+mouse/keyboard/screen implementation is OpenAI-private, delivered at
+runtime to signed-in desktop app users. Nothing byte-for-byte to copy; the
+borrow is architectural (policy taxonomy, Guardian rules text, batching,
+evidence framing — all in-repo and quoted below).
+
 Computer-use is a server-delivered bundled plugin (`computer-use@openai-bundled`)
 driven through a REPL-style MCP server (`cua_repl`, sibling of the browser's
 `node_repl`) — the model emits one `{code: string}` JS cell per batch
