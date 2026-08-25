@@ -2805,7 +2805,7 @@ func (m *model) submitTurn(text string, authored bool) (tea.Model, tea.Cmd) {
 				send(steeredMsg(s))
 			},
 			OnCompacted: func(sum string, cutoff int) { send(compactMsg{summary: sum, cutoff: cutoff}) },
-			OnUsage:   func(u llm.Usage) { send(usageMsg(u)) },
+			OnUsage:     func(u llm.Usage) { send(usageMsg(u)) },
 		}
 		var final string
 		var err error

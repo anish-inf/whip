@@ -1,0 +1,79 @@
+name: ci
+
+# PR health gate: format, vet, lint, tests, build, dependency hygiene.
+# Mirrors `task check` (the pre-commit hook) plus the release workflow's
+# Swift driver build, so a PR can't break the next tag's release.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: gofmt -s (matches task check)
+        run: |
+          unformatted=$(gofmt -s -l .)
+          if [ -n "$unformatted" ]; then
+            echo "needs gofmt -s:"; echo "$unformatted"; exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v8
+        with:
+          version: latest
+          # No config file yet — defaults (errcheck, govet, ineffassign,
+          # staticcheck, unused) are a sensible floor. Add .golangci.yml
+          # when we want to tune.
+
+      # internal/browser e2e tests need a Chromium sandbox and internal/tui
+      # tests need a tty — neither exists on hosted runners. Same portable
+      # set the release gate runs; the full suite stays local (task test).
+      - name: go test (portable set)
+        run: go test -race $(go list ./... | grep -v -e /internal/browser -e /internal/tui)
+
+      - name: go mod tidy is a no-op
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum || { echo "run \`go mod tidy\` and commit"; exit 1; }
+
+      - name: Cross-compile check (release targets)
+        run: |
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
+            GOOS=${target%/*} GOARCH=${target#*/} CGO_ENABLED=0 \
+              go build -trimpath -o /dev/null ./cmd/loopy || exit 1
+          done
+
+  # The release pipeline builds the computer-use Swift driver on macOS and
+  # go:embeds it — build it here too so a driver-breaking change fails the
+  # PR, not the next release.
+  driver:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the loopy-computer Swift driver
+        run: |
+          swift build -c release --package-path driver
+          test -s driver/.build/release/loopy-computer
+
+      - name: Full build with the helper embedded
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: |
+          cp driver/.build/release/loopy-computer internal/computer/bin/loopy-computer
+          go build -trimpath -o /dev/null ./cmd/loopy

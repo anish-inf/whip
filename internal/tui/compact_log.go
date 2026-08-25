@@ -3,7 +3,6 @@ package tui
 import (
 	"strconv"
 	"strings"
-
 )
 
 // Compaction events are recorded in raw-log coordinates so Load never
