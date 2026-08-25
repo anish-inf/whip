@@ -854,6 +854,13 @@ const (
 // toolPreviewLines is how many lines of a tool result show when collapsed.
 const toolPreviewLines = 5
 
+// minRenderWidth is the smallest width blocks render at. A transient
+// degenerate WindowSizeMsg (1–4 cols from a tmux/PTY handshake) would
+// otherwise collapse blockTool/blockText into a one-char-per-line strip —
+// those wrap with no floor, and a cached bad render persists until a width
+// *change* forces a reflow. Below this the layout is unreadable either way.
+const minRenderWidth = 8
+
 // block is one finalized transcript entry. Text holds raw markdown for
 // blockAssistant, raw tool output for blockTool, and styled content
 // otherwise.
@@ -949,6 +956,12 @@ func (m *model) refreshVP() {
 	if m.width == 0 {
 		return // tea hasn't started (resume path): the first WindowSizeMsg renders once at the real width
 	}
+	// Clamp to a sane minimum so a degenerate WindowSizeMsg (a 1–4 col width,
+	// which tmux/PTY handshakes can emit transiently) never collapses blocks
+	// into a one-char-per-line strip: blockTool/blockText wrap with no floor,
+	// so width 1 renders one character per row. Below minRenderWidth the layout
+	// is unreadable either way — render at the floor instead.
+	width := max(m.width, minRenderWidth)
 	var b strings.Builder
 	if n := len(m.blocks); n > 0 {
 		b.Grow(n*24 + 1<<20) // one big allocation up front
@@ -959,7 +972,7 @@ func (m *model) refreshVP() {
 			b.WriteString("\n\n") // blank line between blocks
 			line += 2
 		}
-		r := m.blocks[i].renderAt(m.width)
+		r := m.blocks[i].renderAt(width)
 		m.blocks[i].y0 = line
 		m.blocks[i].y1 = line + m.blocks[i].lines - 1
 		b.WriteString(r)
@@ -1228,7 +1241,10 @@ func (m *model) layout() {
 		}
 		chrome += m.dockRows + 1 // strip + the blank line above the input
 	}
-	w, h := m.width, max(m.height-chrome, 1)
+	// Floor the viewport width too: a degenerate m.width (1–4 cols) would set
+	// the viewport to 1 col and re-slice the transcript into a one-char strip,
+	// regardless of the render floor in refreshVP.
+	w, h := max(m.width, minRenderWidth), max(m.height-chrome, 1)
 	if m.vp.Width != w || m.vp.Height != h {
 		m.vp.Width, m.vp.Height = w, h
 		m.refreshVP()
@@ -1256,7 +1272,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width, m.height = msg.Width, msg.Height
 		m.input.SetWidth(msg.Width - 2)
 		if resized {
-			m.refreshVP() // every block re-renders at the new width
+			m.refreshVP() // every block re-renders at the new width (floored at minRenderWidth)
 		}
 		return m, nil
 
