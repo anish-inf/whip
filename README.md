@@ -44,7 +44,7 @@ drop a `.mcp.json` in the repo (MCP servers just appear — `/mcp` to see them).
 task run                 # run locally from source
 task run -- -m glm-5.2-fast          # pass flags after --
 loopy                    # installed binary, default model
-loopy -m kimi-k3-fast -p inference   # pick model AND provider
+loopy -m kimi-k3 -p inference        # pick model AND provider
 ```
 
 `task --list` shows the rest (build, test, fmt, vet, tidy).
@@ -63,7 +63,7 @@ inference.net on first run:
 
 ```json
 {
-  "defaultModel": "kimi-k3-fast",
+  "defaultModel": "kimi-k3",
   "providers": {
     "inference": {
       "name": "Inference.net",
@@ -73,7 +73,7 @@ inference.net on first run:
     }
   },
   "models": {
-    "kimi-k3-fast": { "providers": ["inference"], "context": 131072 }
+    "kimi-k3": { "providers": ["inference"], "context": 1048576 }
   }
 }
 ```
