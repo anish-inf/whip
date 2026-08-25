@@ -197,6 +197,10 @@ func (m *model) paletteItems() []paletteItem {
 			dynDesc: func(m *model) string { return "audit what a fresh session injects, in tokens" },
 			dynHint: func(m *model) string { return "/context-doctor" },
 			run:     func(m *model) (tea.Model, tea.Cmd) { return m.command("/context-doctor") }},
+		{title: "Bug report", category: "Session",
+			dynDesc: func(m *model) string { return "prefilled GitHub-issue link + environment snippet" },
+			dynHint: func(m *model) string { return "/report" },
+			run:     func(m *model) (tea.Model, tea.Cmd) { return m.command("/report") }},
 		{title: "MCP servers", category: "Session",
 			dynDesc: func(m *model) string {
 				if m.mcpMgr == nil {

@@ -96,6 +96,7 @@ func main() {
 		_ = agent.New(llm.New(prov.BaseURL, "bench"), id, mdl.MaxTokens, systemPrompt())
 		return
 	}
+	tui.Version = version // /report names the build in the bug-report bundle
 	sessionID, err := tui.Run(cfg, *modelFlag, *providerFlag, systemPrompt(), *resumeFlag)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "whip:", err)

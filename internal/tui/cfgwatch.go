@@ -61,7 +61,7 @@ func (m *model) applyCfgSync(msg cfgSyncMsg) {
 	}
 	if msg.theme != m.cfg.Theme {
 		m.cfg.Theme = msg.theme
-		m.applyTheme(msg.theme)
-		m.refreshVP() // repaint under the new scheme without a terminal resize
+		m.themeHow = m.applyTheme(msg.theme) // keep /report's detection source current
+		m.refreshVP()                        // repaint under the new scheme without a terminal resize
 	}
 }

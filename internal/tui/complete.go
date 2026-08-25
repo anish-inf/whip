@@ -29,6 +29,7 @@ var commands = []cand{
 	{"/mouse", "Toggle mouse capture (off = native terminal selection)"},
 	{"/pwd", "Print working directory"},
 	{"/rename", "[title] — retitle this session"},
+	{"/report", "Bug-report bundle: prefilled GitHub-issue link + environment snippet"},
 	{"/theme", "[light|dark|auto] — color scheme (bare opens switcher)"},
 	{"/quit", "Exit whip"},
 	{"/resume", "[id] — browse and resume previous sessions"},
@@ -39,7 +40,7 @@ var commands = []cand{
 // sensibly with no arguments); others insert themselves for arguments.
 var execNow = map[string]bool{
 	"/clear": true, "/compact": true, "/computer-use": true, "/computer": true, "/context-doctor": true, "/effort": true, "/goal": true, "/goal-from-context": true, "/help": true,
-	"/mcp": true, "/model": true, "/mouse": true, "/pwd": true, "/quit": true, "/resume": true, "/tasks": true,
+	"/mcp": true, "/model": true, "/mouse": true, "/pwd": true, "/quit": true, "/report": true, "/resume": true, "/tasks": true,
 }
 
 // completions splits val into an untouched head and candidates for its last

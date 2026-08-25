@@ -158,6 +158,7 @@ type model struct {
 	goalRounds int    // continuation turns spent on the current goal
 
 	mouseOn      bool   // runtime mouse-capture state (toggle with /mouse)
+	themeHow     string // how auto theme detection resolved (env var, OSC query, …) — captured at startup/theme change for /report; never re-queried
 	compactModel string // config model name for compaction summaries; "" = the built-in default
 	compactProv  string
 	effortX      int                       // screen column where the clickable ⚡ effort control starts
@@ -353,8 +354,9 @@ func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string) (s
 		enableClickWheelMouse(os.Stdout)
 		applyTmuxMouseFix()
 	}
-	// pick the glamour style that matches the pick/detection resolution
-	m.applyTheme(cfg.Theme)
+	// pick the glamour style that matches the pick/detection resolution;
+	// keep how detection resolved so /report can name the source
+	m.themeHow = m.applyTheme(cfg.Theme)
 	if m.cfgExtra == nil {
 		m.cfgExtra = map[string]string{}
 	}
@@ -738,6 +740,7 @@ func (m *model) setTheme(theme string) {
 		theme = "auto"
 	}
 	how := m.applyTheme(theme)
+	m.themeHow = how // explicit picks return "" — detection source no longer applies
 	m.cfg.Theme = theme
 	if theme == "auto" {
 		m.cfg.Theme = "" // auto persists as "" (omitted = auto-detect)
@@ -2882,7 +2885,7 @@ func busyCmd(text string) bool {
 		return false
 	}
 	switch fields[0] {
-	case "/help", "/theme", "/mouse", "/effort", "/tasks", "/cd", "/pwd":
+	case "/help", "/theme", "/mouse", "/effort", "/tasks", "/cd", "/pwd", "/report":
 		return true
 	case "/goal": // status, clear, and rounds are settings; resume/<text> submit turns
 		return len(fields) == 1 || fields[1] == "clear" || fields[1] == "rounds"
@@ -3151,9 +3154,11 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 		m.openPicker()
 	case "/context-doctor":
 		m.append(m.doctorReport())
+	case "/report":
+		m.append(m.reportBlock())
 	case "/help":
 		m.append(dimStyle.Render(
-			"/model <name> [provider] — switch model (any provider-catalog model works; refresh pulls new announcements)\n/context-doctor — audit what a fresh session injects (skills, MCP, tool schemas) and its token cost\n/mcp [name] [reconnect|enable|disable] — MCP servers: status, reconnect, toggle\n/compact [model] [provider]|off — compact now, or pick the compaction model (off restores the default); retry undoes the last compaction, log lists them; compaction level: ctrl+p › Compaction level\n/mouse — toggle mouse capture (on = wheel scroll + clicks, drag to copy)\n/theme [light|dark|auto] — color scheme (bare opens the switcher)\n/tasks [id] — background subagents: focus the dock, or open one subagent's live view (ctrl+t toggles dock focus)\n/resume [id] — resume a previous session\n/fork [name] — copy this conversation into a new session (pick a point in the rewind picker with f)\n/rename [title] — retitle this session\n/goal <text> — keep working until the goal is met (resume | clear | rounds <n>|default [--global])\n/goal-from-context [n] — formulate a goal from the last n messages (default 8) and work until it's met\n/clear — reset conversation\n/memory [n] [session] — saved memories: list what's injected each turn, mark entry n done\n/me — edit your standing instructions (~/.whip/me.md) in $EDITOR\n/schedule @every 10m|<@at time> <prompt> — schedule a wakeup turn; list | cancel <n>\n/cd [dir] — change working directory (bare prints it)\n/pwd — print working directory\n!<cmd> — run a shell command locally; output lands in the transcript and the conversation\n/quit — exit\ntab — complete · ctrl+k — clear the conversation · ctrl+t — focus the subagents dock (↑/↓ select, enter opens, esc backs out) · ctrl+o — toggle thinking tokens · ctrl+e — expand the last tool result · ctrl+j / shift+enter — newline · ctrl+v — paste image · esc — interrupt the agent · esc esc (idle) — rewind the conversation (↑/↓ browse, enter rewinds, f forks) · while busy with queued messages: ↑/↓ select, del removes · PgUp/PgDn — scroll · wheel — scroll · drag — select/copy text · ctrl+c ctrl+c — quit"))
+			"/model <name> [provider] — switch model (any provider-catalog model works; refresh pulls new announcements)\n/context-doctor — audit what a fresh session injects (skills, MCP, tool schemas) and its token cost\n/report — bug-report bundle: prefilled GitHub-issue link + copy-pastable environment snippet (terminal, theme, versions)\n/mcp [name] [reconnect|enable|disable] — MCP servers: status, reconnect, toggle\n/compact [model] [provider]|off — compact now, or pick the compaction model (off restores the default); retry undoes the last compaction, log lists them; compaction level: ctrl+p › Compaction level\n/mouse — toggle mouse capture (on = wheel scroll + clicks, drag to copy)\n/theme [light|dark|auto] — color scheme (bare opens the switcher)\n/tasks [id] — background subagents: focus the dock, or open one subagent's live view (ctrl+t toggles dock focus)\n/resume [id] — resume a previous session\n/fork [name] — copy this conversation into a new session (pick a point in the rewind picker with f)\n/rename [title] — retitle this session\n/goal <text> — keep working until the goal is met (resume | clear | rounds <n>|default [--global])\n/goal-from-context [n] — formulate a goal from the last n messages (default 8) and work until it's met\n/clear — reset conversation\n/memory [n] [session] — saved memories: list what's injected each turn, mark entry n done\n/me — edit your standing instructions (~/.whip/me.md) in $EDITOR\n/schedule @every 10m|<@at time> <prompt> — schedule a wakeup turn; list | cancel <n>\n/cd [dir] — change working directory (bare prints it)\n/pwd — print working directory\n!<cmd> — run a shell command locally; output lands in the transcript and the conversation\n/quit — exit\ntab — complete · ctrl+k — clear the conversation · ctrl+t — focus the subagents dock (↑/↓ select, enter opens, esc backs out) · ctrl+o — toggle thinking tokens · ctrl+e — expand the last tool result · ctrl+j / shift+enter — newline · ctrl+v — paste image · esc — interrupt the agent · esc esc (idle) — rewind the conversation (↑/↓ browse, enter rewinds, f forks) · while busy with queued messages: ↑/↓ select, del removes · PgUp/PgDn — scroll · wheel — scroll · drag — select/copy text · ctrl+c ctrl+c — quit"))
 	case "/model":
 		if len(fields) < 2 {
 			m.openModelPicker()

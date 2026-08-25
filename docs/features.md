@@ -473,6 +473,19 @@ spend once requests have run), a TOTAL line, and trim pointers. Built for
 users arriving from heavier harnesses whose first call silently carries tens
 of thousands of tokens of skill/MCP bloat. Tests: `tui/context_doctor_test.go`.
 
+**`/report`** — bug-report bundle for terminal/rendering issues: one
+transcript block pairing a clickable OSC 8 link (opens a prefilled
+`context-labs/whip` issue with a What-happened/Expected skeleton + the
+environment bundle in a fenced block) with the same bundle as a
+copy-pastable fenced snippet. Strict env whitelist (whip version/model/
+provider, theme + *how it was detected* — captured at startup, never
+re-queried, mouse, session id; TERM/TERM_PROGRAM/COLORTERM/COLORFGBG, tmux +
+`tmux -V`, SHELL, locale, window size, ssh flag; OS/arch, uname, sw_vers, Go
+version) — no secrets, no conversation content. Nothing is submitted or
+persisted: the user clicks or pastes. Version is plumbed from `main.version`
+via `tui.Version`. Tests: `tui/report_cmd_test.go` (whitelist, no-secret
+leak, issue URL round-trip, fenced snippet, busy-safe).
+
 **Startup resource report** — first paint names what whip loaded: `skills: N
 loaded`, one `⚠` line per degraded skill (description over maxDesc → truncated
 in the prompt) or unparseable SKILL.md (pi's [Skill conflicts] lesson — a
