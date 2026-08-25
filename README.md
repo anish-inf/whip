@@ -3,6 +3,56 @@
 A minimal coding agent harness in Go. Interactive bubbletea session, an LLM
 tool-use loop (bash / read / write / edit), and provider-routable models.
 
+## Why whip
+
+Coding agents are converging on the same shape — a model, a handful of tools,
+a loop — but the popular harnesses pile on surface area: plugin marketplaces,
+opaque permission systems, config you can't read, runtimes you can't audit.
+whip is a bet that the interesting part is small, and that small is a feature:
+
+- **You should be able to read the whole thing.** ~10k lines of Go, one
+  binary, no framework magic. The agent loop is a single function
+  (`Agent.Turn`). If the harness does something surprising, the answer is a
+  file, not a forum post.
+- **The tools are the model's hands, not a product.** bash, read, write,
+  edit, a subagent runner. The model already knows how to code; the harness's
+  job is to get out of the way while keeping the loop honest.
+- **Boring where it can be, native where it pays.** SQLite for sessions,
+  JSON for config, Markdown for memory and skills — files you can diff, grep,
+  and back up. But where Go beats the TypeScript reference harnesses (pi,
+  opencode), whip takes the win: parallel tool calls with per-path file locks,
+  background subagents, a streaming TUI — all channel primitives the
+  reference designs hand-roll with promises
+  (see [docs/concurrency.md](docs/concurrency.md)).
+- **Provider-agnostic by construction.** Any OpenAI-compatible endpoint is a
+  provider; models route to providers and are discovered live from
+  `GET /models`. No vendor lock-in, no model registry to update.
+
+## Design decisions
+
+The short list — each links to the doc with the reasoning and the code:
+
+1. **One loop, one function.** `Agent.Turn`: append message → stream → run
+   tool calls → repeat. Steered messages inject at loop boundaries, never
+   mid-generation. → [docs/agent-loop.md](docs/agent-loop.md)
+2. **Channels, not promises.** File-mutation safety is a 1-capacity channel
+   per path; background task completion is a single channel close that wakes
+   every waiter. → [docs/concurrency.md](docs/concurrency.md)
+3. **Context is a budget, not a surprise.** Proactive compaction at a
+   configurable % of the window, orphan-safe tail keeping, reactive retry on
+   context-limit errors. → [docs/agent-loop.md](docs/agent-loop.md#compaction)
+4. **Everything inspectable lives in plain files.** Sessions in
+   `~/.whip/sessions.db`, config in `~/.whip/config.json`, model catalog
+   cache in `~/.whip/models.json`, memory as Markdown checkboxes.
+   → [docs/architecture.md](docs/architecture.md)
+5. **Drive the user's real environment.** The browser tool attaches to your
+   logged-in Chrome (four modes, including a CDP-extension relay for Chrome
+   ≥ 136); computer-use drives your actual Mac desktop.
+   → [docs/browser-computer-use.md](docs/browser-computer-use.md)
+6. **Interoperate, don't isolate.** whip reads claude-style `.mcp.json` and
+   codex-style `config.toml`, and `whip mcp serve` exposes whip's own tools
+   as an MCP server for other harnesses. → [docs/features.md](docs/features.md#mcp)
+
 ## Install
 
 Prebuilt binaries (Linux/macOS, x64/arm64) from GitHub Releases — checksum-verified:
@@ -176,3 +226,28 @@ loading):
 
 Per source: `enabled` kills the whole source, `only` is a name allowlist,
 `exclude` a denylist (wins over `only`). No block = import everything.
+
+## Docs
+
+How it works, from the top down:
+
+- [docs/architecture.md](docs/architecture.md) — the moving parts and how a
+  keystroke becomes a tool call: TUI, agent loop, LLM client, tools, MCP,
+  storage. Start here.
+- [docs/agent-loop.md](docs/agent-loop.md) — `Agent.Turn` in detail: the
+  stream-tools-repeat cycle, parallel tool execution, compaction, steering.
+- [docs/concurrency.md](docs/concurrency.md) — the two channel patterns
+  behind parallel tool calls (per-path locks) and background subagents.
+- [docs/tools.md](docs/tools.md) — the tool set the model gets: bash, file
+  tools, subagents, browser, computer-use, and how schemas are defined.
+- [docs/models-providers.md](docs/models-providers.md) — provider routing,
+  live model discovery, token/cost bookkeeping.
+- [docs/browser-computer-use.md](docs/browser-computer-use.md) — driving your
+  real Chrome (live / dedicated / headless / extension modes) and your Mac
+  desktop.
+- [docs/features.md](docs/features.md) — the full feature map, each section
+  linked to code and tests.
+- [docs/roadmap.md](docs/roadmap.md) — what's shipped vs. what's next,
+  cross-referenced to the harnesses that inspired each item.
+- [docs/learnings/](docs/learnings/) — exploration reports from other
+  harnesses (pi, opencode, exo) that informed the design.
