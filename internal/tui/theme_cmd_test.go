@@ -65,8 +65,10 @@ func TestThemeBareOpensSwitcher(t *testing.T) {
 	if CurrentTheme() != "light" {
 		t.Fatalf("selecting light in the switcher should apply it, got %q", CurrentTheme())
 	}
-	if m.palette.top() != nil {
-		t.Fatal("enter should pop back to the root list")
+	// the switcher came from /theme, not ctrl+p: commit-and-close, don't
+	// strand the user on a palette root they never opened
+	if m.palette != nil {
+		t.Fatal("enter in a directly-opened switcher should close the palette")
 	}
 	m.setTheme("dark") // leave dark default for other tests
 }

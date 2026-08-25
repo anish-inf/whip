@@ -74,6 +74,11 @@ type ppanel struct {
 	midx  int      // panelCompact: selection, 0 = the built-in default; panelTheme: selection
 
 	err string // inline error from a failed apply (bad compact model, …)
+
+	// direct marks a panel a slash command opened straight into (bare /effort,
+	// /theme): enter applies and closes the whole palette instead of popping
+	// back to the root list, since the user never asked for ctrl+p.
+	direct bool
 }
 
 // palette is the ctrl+p command palette: a modal full-screen dialog with its
@@ -341,13 +346,17 @@ func (m *model) openPalette() {
 
 // openPaletteOn opens the palette and drills straight into the named row's
 // sub-panel (used by bare slash commands like /theme that should land on a
-// switcher, not toggle blindly).
+// switcher, not toggle blindly). The invocation counts as being inside the
+// panel — not the palette — so enter applies AND closes; esc pops back to
+// the root list.
 func (m *model) openPaletteOn(title string) {
 	m.openPalette()
 	for i, it := range m.palette.items {
 		if strings.EqualFold(it.title, title) && it.panel != nil {
 			m.palette.idx = i
-			m.palette.stack = append(m.palette.stack, it.panel(m))
+			pp := it.panel(m)
+			pp.direct = true
+			m.palette.stack = append(m.palette.stack, pp)
 			return
 		}
 	}
@@ -521,7 +530,14 @@ func (m *model) pushPanel(it *paletteItem) {
 // just pops, ↑/↓ moves, enter applies.
 func (m *model) panelKey(msg tea.KeyMsg, pp *ppanel) (tea.Model, tea.Cmd) {
 	p := m.palette
-	pop := func() { p.stack = p.stack[:len(p.stack)-1] }
+	pop := func() {
+		p.stack = p.stack[:len(p.stack)-1]
+		// a slash command opened this panel directly (bare /effort, /theme):
+		// commit-and-close, never land on the root list the user didn't open
+		if pp.direct && len(p.stack) == 0 {
+			m.palette = nil
+		}
+	}
 
 	switch pp.kind {
 	case panelModel:

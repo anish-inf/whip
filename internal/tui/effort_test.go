@@ -113,6 +113,11 @@ func TestEffortBareOpensSelector(t *testing.T) {
 	if m.agent.Effort != "low" {
 		t.Fatalf("selecting low in the selector should apply it, got %q", m.agent.Effort)
 	}
+	// the selector came from /effort, not ctrl+p: commit-and-close, don't
+	// strand the user on a palette root they never opened
+	if m.palette != nil {
+		t.Fatal("enter in a directly-opened selector should close the palette")
+	}
 }
 
 // A user-picked effort is both the new global default (config.json) and the

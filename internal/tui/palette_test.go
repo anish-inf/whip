@@ -365,7 +365,9 @@ func TestPaletteCompactPanelDefaultRowRestores(t *testing.T) {
 	if m.compactModel != "" || m.agent.CompactModel != config.DefaultCompactModel {
 		t.Fatalf("the default row should restore the built-in default: %q / %q", m.compactModel, m.agent.CompactModel)
 	}
-	if m.palette.top() != nil {
+	// enter popped the panel — and since it was opened directly (not drilled
+	// into from the root list), the whole palette closed with it
+	if m.palette != nil && m.palette.top() != nil {
 		t.Fatal("enter should pop the panel")
 	}
 }
