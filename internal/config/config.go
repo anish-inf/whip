@@ -396,7 +396,7 @@ func keys[V any](m map[string]V) string {
 // Default returns the first-run config, wired for inference.net.
 func Default() *Config {
 	return &Config{
-		DefaultModel: "kimi-k3",
+		DefaultModel: "kimi-k3-fast",
 		CompactModel: DefaultCompactModel,
 		Providers: map[string]Provider{
 			"inference": {
