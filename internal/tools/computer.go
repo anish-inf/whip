@@ -243,6 +243,9 @@ func execComputerStmt(ctx context.Context, st helperStmt) (string, []byte, error
 		return h.Call(ctx, method, params, rpcOut)
 	}
 	// mutation runs a mutating RPC and returns the folded-in fresh state.
+	// When the helper can't re-read state (e.g. no AX grant) it returns an
+	// acknowledgement instead of a full AppState — surface that verbatim so a
+	// successfully-posted action isn't masked by the read-back's failure.
 	mutation := func(app, method string, params map[string]any) (string, []byte, error) {
 		if err := gateApp(app); err != nil {
 			return "", nil, err
@@ -254,8 +257,21 @@ func execComputerStmt(ctx context.Context, st helperStmt) (string, []byte, error
 		if g := genFor(app); g > 0 {
 			params["gen"] = g
 		}
+		var raw json.RawMessage
+		if err := call(method, params, &raw); err != nil {
+			return "", nil, err
+		}
+		// Acknowledgement path (state re-read unavailable in the helper).
+		var ack struct {
+			Action           string `json:"action"`
+			StateUnavailable string `json:"stateUnavailable"`
+			Hint             string `json:"hint"`
+		}
+		if err := json.Unmarshal(raw, &ack); err == nil && ack.StateUnavailable != "" {
+			return fmt.Sprintf("%s %s — %s (%s)", method, app, ack.Action, ack.StateUnavailable), nil, nil
+		}
 		var state computer.AppState
-		if err := call(method, params, &state); err != nil {
+		if err := json.Unmarshal(raw, &state); err != nil {
 			return "", nil, err
 		}
 		noteGeneration(app, &state)

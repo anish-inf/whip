@@ -243,13 +243,26 @@ public final class Dispatcher {
 
     /// Mutations return fresh state in-call: re-read the AX tree + a fresh
     /// screenshot after a beat so the model doesn't pay a second round trip.
+    /// The read-back is best-effort — if the AX tree can't be read (e.g. the
+    /// Accessibility grant is missing) the ACTION still stands; we return an
+    /// acknowledgement naming why state is unavailable rather than masking a
+    /// successfully-posted input event behind the read's error.
     private func stateAfter(_ app: String, gen: Int?) throws -> AnyCodable {
         // Let the UI settle (codex's SerialExecutor waited on observers; a
         // short settle covers the common cases for v1).
         Thread.sleep(forTimeInterval: 0.25)
-        let snap = try ax.snapshot(app: app)
-        let shot = try awaitCapture(pid: snap.pid)
-        return snapshotResult(snap, screenshot: shot)
+        do {
+            let snap = try ax.snapshot(app: app)
+            let shot = try awaitCapture(pid: snap.pid)
+            return snapshotResult(snap, screenshot: shot)
+        } catch let e as RPCError {
+            return .object([
+                "app": .string(app),
+                "action": .string("completed"),
+                "stateUnavailable": .string(e.message),
+                "hint": .string("action posted, but state re-read failed — call state(app) once permissions are granted to verify"),
+            ])
+        }
     }
 
     /// SCK is async; bridge it synchronously (we're in a sync stdio loop).
