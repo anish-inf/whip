@@ -227,7 +227,7 @@ func TestRewindPickerOrderAndArrows(t *testing.T) {
 	// rendered top-to-bottom: q1, q2, q3 — q3 (the latest) last
 	view := m.rewindView()
 	i1, i2, i3 := strings.Index(view, "q1"), strings.Index(view, "q2"), strings.Index(view, "q3")
-	if !(i1 >= 0 && i1 < i2 && i2 < i3) {
+	if i1 < 0 || i1 >= i2 || i2 >= i3 {
 		t.Fatalf("list should read oldest→latest top→bottom (q1 q2 q3)\n%s", view)
 	}
 	// exactly one row carries the cursor marker, and it is q3's

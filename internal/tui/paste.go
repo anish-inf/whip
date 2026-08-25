@@ -106,7 +106,7 @@ func pngpasteImage() (string, []byte, error) {
 		return "", nil, err
 	}
 	tmp.Close()
-	defer os.Remove(tmp.Name())
+	defer func() { _ = os.Remove(tmp.Name()) }()
 	if err := exec.Command("pngpaste", tmp.Name()).Run(); err != nil {
 		return "", nil, nil // no image on the clipboard
 	}

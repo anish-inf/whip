@@ -235,13 +235,3 @@ func sanitizeView(s string) string {
 	}
 	return strings.Join(lines, "\n")
 }
-
-// renderAssistant renders one assistant text segment for the transcript:
-// markdown when it parses, else the raw text. The "● " prefix is applied by
-// the caller so it stays out of the markdown flow.
-func renderAssistant(s string, width int) string {
-	if mdRenderer(width) == nil {
-		return s // no renderer: plain text
-	}
-	return renderMarkdown(s, width)
-}

@@ -208,8 +208,8 @@ func runPiped(ctx context.Context, cmd *exec.Cmd) Result {
 	waitErr := cmd.Wait()
 	// The process exited. Close our read ends so the drain goroutines see EOF
 	// even if a detached grandchild still holds the write end open.
-	stdout.Close()
-	stderr.Close()
+	_ = stdout.Close()
+	_ = stderr.Close()
 	wg.Wait()
 
 	res := Result{Output: out.String()}

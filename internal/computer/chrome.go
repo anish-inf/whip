@@ -120,7 +120,7 @@ func ChromeReload() error {
 }
 
 // ErrJSFromAppleEvents surfaces the Chrome toggle requirement.
-var ErrJSFromAppleEvents = fmt.Errorf("Chrome's 'Allow JavaScript from Apple Events' is off — enable it in Chrome: View → Developer → Allow JavaScript from Apple Events")
+var ErrJSFromAppleEvents = fmt.Errorf("chrome's 'Allow JavaScript from Apple Events' is off — enable it in Chrome: View → Developer → Allow JavaScript from Apple Events")
 
 // ChromeJS evaluates JavaScript in the front window's active tab and returns
 // the result (AppleScript stringifies it). Requires the Chrome toggle; a

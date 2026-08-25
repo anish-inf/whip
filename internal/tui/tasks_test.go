@@ -563,13 +563,11 @@ func TestDockScrollsWithSelection(t *testing.T) {
 	srv := sseTextServer(t, "ok")
 	defer srv.Close()
 	m := tasksModel(srv.URL)
-	// match descriptions to index: task IDs come from a global counter, so
-	// tests can't rely on a fresh numbering
-	var tasks []*agent.BackgroundTask
+	// task IDs come from a global counter, so tests can't rely on a fresh
+	// numbering — the probe-N descriptions are what the dock shows
 	for i := 0; i < 8; i++ {
 		tk := m.agent.StartBackground(t.Context(), fmt.Sprintf("probe-%d", i), "p")
 		defer m.agent.Tasks().Cancel(tk.ID)
-		tasks = append(tasks, tk)
 	}
 
 	m.tasksFocus = true

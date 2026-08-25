@@ -43,7 +43,7 @@ func refreshFileIndex() {
 		return
 	}
 	var files []string
-	filepath.WalkDir(wd, func(path string, d fs.DirEntry, err error) error {
+	_ = filepath.WalkDir(wd, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil // unreadable entry; keep going
 		}

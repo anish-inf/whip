@@ -201,11 +201,11 @@ func upgrade(w http.ResponseWriter, req *http.Request) (*conn, error) {
 	key := req.Header.Get("Sec-WebSocket-Key")
 	accept := wsAccept(key)
 	if _, err := fmt.Fprintf(rw, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n", accept); err != nil {
-		nc.Close()
+		_ = nc.Close()
 		return nil, err
 	}
 	if err := rw.Flush(); err != nil {
-		nc.Close()
+		_ = nc.Close()
 		return nil, err
 	}
 	c := &conn{nc: nc, r: rw.Reader}

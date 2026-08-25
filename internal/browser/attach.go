@@ -139,7 +139,7 @@ func portLive(port int) bool {
 	for _, host := range []string{"127.0.0.1", "::1"} {
 		c, err := net.DialTimeout("tcp", net.JoinHostPort(host, strconv.Itoa(port)), 500*time.Millisecond)
 		if err == nil {
-			c.Close()
+			_ = c.Close()
 			return true
 		}
 	}
@@ -157,7 +157,7 @@ func chromeWSURL(ctx context.Context, base string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode == http.StatusForbidden {
 		return "", fmt.Errorf("%w: Chrome is reachable, but the per-session 'Allow remote debugging' popup has not been accepted — click Allow in Chrome, then retry", ErrPermissionBlocked)
 	}
@@ -264,7 +264,7 @@ func wsUpgradeAnswers(ctx context.Context, scheme, host string, port int, path s
 	if err != nil {
 		return false
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	return resp.StatusCode == http.StatusSwitchingProtocols
 }
 

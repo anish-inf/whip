@@ -47,7 +47,7 @@ func browserInstall() error {
 	if err != nil {
 		return fmt.Errorf("start relay to mint token: %w", err)
 	}
-	defer r.Close()
+	defer func() { _ = r.Close() }()
 	statePath, err := extrelay.WriteRelayState(home, r.Addr(), r.Token())
 	if err != nil {
 		return fmt.Errorf("write relay state: %w", err)

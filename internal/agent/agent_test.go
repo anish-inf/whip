@@ -396,10 +396,10 @@ func compactionServer(t *testing.T) (*httptest.Server, *int) {
 	call := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		call++
-		switch {
-		case call == 1:
+		switch call {
+		case 1:
 			http.Error(w, `{"error":{"code":"context_length_exceeded"}}`, http.StatusBadRequest)
-		case call == 2:
+		case 2:
 			var req llm.Request
 			json.NewDecoder(r.Body).Decode(&req)
 			if req.Stream {

@@ -306,7 +306,7 @@ func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string) (s
 	if dir, derr := config.Dir(); derr == nil {
 		if st, serr := session.Open(dir + "/sessions.db"); serr == nil {
 			m.store = st
-			defer st.Close()
+			defer func() { _ = st.Close() }()
 			// Seed input recall with user messages from ALL sessions (every
 			// folder), so ↑ cycles global history, not just this session's.
 			// UserHistory is newest-first; hist is oldest-first (up-arrow walks
@@ -522,7 +522,7 @@ func (m *model) fetchCatalogs() {
 		dirty = true
 	}
 	if dirty {
-		config.SaveCatalogs(cats) // best-effort; the TUI still gets the fresh data
+		_ = config.SaveCatalogs(cats) // best-effort; the TUI still gets the fresh data
 	}
 	m.prog.Send(catalogsMsg(cats))
 }
@@ -703,11 +703,11 @@ func (m *model) persist() {
 	// Bookkeeping re-stamps every persist — even one with no new messages —
 	// so a resume restores goal/effort, and the cumulative token totals that
 	// survive a compaction rewrite of the messages.
-	m.store.SetGoal(m.sessionID, m.goal)
-	m.store.SetEffort(m.sessionID, m.agent.Effort)
-	m.store.SetTodos(m.sessionID, m.agent.TodosJSON())
+	_ = m.store.SetGoal(m.sessionID, m.goal)
+	_ = m.store.SetEffort(m.sessionID, m.agent.Effort)
+	_ = m.store.SetTodos(m.sessionID, m.agent.TodosJSON())
 	if u := m.agent.Usage(); u.PromptTokens > 0 || u.CompletionTokens > 0 {
-		m.store.SetUsage(m.sessionID, u.PromptTokens, u.Cached(), u.CompletionTokens)
+		_ = m.store.SetUsage(m.sessionID, u.PromptTokens, u.Cached(), u.CompletionTokens)
 	}
 	if len(m.agent.Messages) <= m.saved {
 		return
@@ -788,7 +788,7 @@ func (m *model) setEffort(lv string) {
 		m.append(errStyle.Render("config save failed: " + err.Error()))
 	}
 	if m.store != nil && m.sessionID != "" {
-		m.store.SetEffort(m.sessionID, lv) // best-effort; persist() re-stamps
+		_ = m.store.SetEffort(m.sessionID, lv) // best-effort; persist() re-stamps
 	}
 }
 
@@ -796,7 +796,7 @@ func (m *model) setEffort(lv string) {
 func (m *model) resetEffort(lv string) {
 	m.agent.Effort = lv
 	if m.store != nil && m.sessionID != "" {
-		m.store.SetEffort(m.sessionID, lv)
+		_ = m.store.SetEffort(m.sessionID, lv)
 	}
 }
 
@@ -805,7 +805,7 @@ func (m *model) setGoal(goal string) {
 	m.goal = goal
 	m.goalRounds = 0
 	if m.store != nil && m.sessionID != "" {
-		m.store.SetGoal(m.sessionID, goal)
+		_ = m.store.SetGoal(m.sessionID, goal)
 	}
 }
 
@@ -871,7 +871,7 @@ func buildAgent(cfg *config.Config, modelName, provName, sysPrompt string) (*age
 		}
 		tools.Browser = browser.NewManager(mode)
 		if cfg.Browser.CDPURL != "" {
-			os.Setenv("LOOPY_CDP_URL", cfg.Browser.CDPURL)
+			_ = os.Setenv("LOOPY_CDP_URL", cfg.Browser.CDPURL)
 		}
 		browser.AllowPrivateURLs = cfg.Browser.AllowPrivateURLs
 	}
@@ -1600,7 +1600,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.snapshots[msg.at] = msg.snap
 			if m.store != nil && m.sessionID != "" {
-				m.store.SetSnapshot(m.sessionID, msg.at, msg.snap)
+				_ = m.store.SetSnapshot(m.sessionID, msg.at, msg.snap)
 			}
 		}
 		// codex-style follow-up: send queued messages one turn at a time;

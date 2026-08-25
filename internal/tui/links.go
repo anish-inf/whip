@@ -358,18 +358,6 @@ func hyperlinkGlamourLinks(s string, exists func(string) bool) string {
 	return b.String()
 }
 
-// sgrSpanAt returns the SGR span s starts with ("\x1b[38;5;252m"), or "".
-func sgrSpanAt(s string) string {
-	if !strings.HasPrefix(s, "\x1b[") {
-		return ""
-	}
-	j := strings.IndexByte(s, 'm')
-	if j < 0 || j > 12 { // SGR spans are short; don't run away on garbage
-		return ""
-	}
-	return s[:j+1]
-}
-
 // linkAtomAt reports whether s starts with a link SGR span, returning the
 // span and 't' (LinkText/label) or 'h' (Link/href).
 func linkAtomAt(s string) (string, byte) {
@@ -406,48 +394,6 @@ func scanAtom(s string, start int, sgr string) (end int, text string) {
 		return body + rs + len(sgrReset), rest[:nl]
 	}
 	return body + rs + len(sgrReset), rest[:rs]
-}
-
-// scanHrefAfter skips whitespace/newline/styling after a label atom and, if
-// the next atom is an href, returns its end offset, text, and SGR span.
-func scanHrefAfter(s string, from int) (end int, text, sgr string, ok bool) {
-	i := from
-	for i < len(s) {
-		c := s[i]
-		if c == ' ' || c == '\n' || c == '\t' {
-			i++
-			continue
-		}
-		if c == 0x1b {
-			if g, kind := linkAtomAt(s[i:]); kind != 0 {
-				if kind != 'h' {
-					return 0, "", "", false // another label: no href follows
-				}
-				e, t := scanAtom(s, i, g)
-				if e < 0 {
-					return 0, "", "", false
-				}
-				return e, t, g, true
-			}
-			// non-link escape: skip a bare reset, but any other styled span
-			// (the doc-colored space between label and href) is consumed
-			// whole so its spaces don't end the lookahead
-			if strings.HasPrefix(s[i:], sgrReset) {
-				i += len(sgrReset)
-				continue
-			}
-			if e, t := scanAtom(s, i, sgrSpanAt(s[i:])); e >= 0 {
-				if strings.Trim(t, " \t") != "" {
-					return 0, "", "", false // visible styled text, not a gap
-				}
-				i = e
-				continue
-			}
-			return 0, "", "", false
-		}
-		return 0, "", "", false // visible non-link text between label and href
-	}
-	return 0, "", "", false
 }
 
 // linkifyRenderedFilePaths is linkifyFilePaths for glamour's output: the

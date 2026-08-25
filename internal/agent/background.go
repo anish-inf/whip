@@ -51,7 +51,6 @@ type BackgroundTask struct {
 type taskRegistry struct {
 	mu    sync.Mutex
 	tasks map[string]*BackgroundTask
-	seq   atomic.Int64
 	// subs are live event subscribers per task id (the TUI's per-task view).
 	// Events is all callbacks, so fan-out is a slice the worker walks per
 	// event — no channel to close, no per-subscriber goroutine. Kept here

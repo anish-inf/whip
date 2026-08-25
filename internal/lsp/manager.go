@@ -197,7 +197,6 @@ func (m *Manager) WaitDiagnostics(ctx context.Context, path string) string {
 	}
 
 	deadline := time.Now().Add(diagWait)
-	graced := false
 	for {
 		m.mu.Lock()
 		edited, ok := m.diags[abs]
@@ -210,10 +209,9 @@ func (m *Manager) WaitDiagnostics(ctx context.Context, path string) string {
 		// sibling errors make the same tool result.
 		arrived := pushed || ok != hadBefore || !diagsEqual(before, edited)
 		if arrived {
-			if graced {
-				break
-			}
-			graced = true
+			// One grace window, then out: the select below consumes a push
+			// that arrives during the window, so no second-arrival loop
+			// iteration is needed (and none happens — the path always breaks).
 			m.mu.Lock()
 			wch = make(chan struct{})
 			m.waiters[abs] = append(m.waiters[abs], wch)
@@ -229,7 +227,9 @@ func (m *Manager) WaitDiagnostics(ctx context.Context, path string) string {
 				if closing {
 					return ""
 				}
-				pushed = true
+				// The push that woke the grace window is the one the wait
+				// exists for; the grace path breaks below either way, so no
+				// pushed = true re-marking is needed here.
 			case <-ctx.Done():
 				grace.Stop()
 				return ""

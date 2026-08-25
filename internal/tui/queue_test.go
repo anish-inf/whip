@@ -221,8 +221,7 @@ func TestEscInterruptsMidResponse(t *testing.T) {
 	defer cancel()
 	m.cancel = cancel
 
-	tm, _ := m.key(tea.KeyMsg{Type: tea.KeyEsc})
-	m = tm.(*model)
+	m.key(tea.KeyMsg{Type: tea.KeyEsc})
 	if ctx.Err() != context.Canceled {
 		t.Fatalf("esc should cancel the in-flight turn, ctx.Err=%v", ctx.Err())
 	}
@@ -236,8 +235,7 @@ func TestEscDoesNotInterruptWhenIdle(t *testing.T) {
 	defer cancel()
 	m.cancel = cancel // set but not busy
 
-	tm, _ := m.key(tea.KeyMsg{Type: tea.KeyEsc})
-	m = tm.(*model)
+	m.key(tea.KeyMsg{Type: tea.KeyEsc})
 	if ctx.Err() == context.Canceled {
 		t.Fatal("esc while idle should not cancel")
 	}

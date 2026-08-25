@@ -58,7 +58,7 @@ func workspaceClean() bool {
 func dropSnapshot(ref string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	gitOut(ctx, "update-ref", "-d", "refs/loopy/snapshots/"+ref)
+	_, _ = gitOut(ctx, "update-ref", "-d", "refs/loopy/snapshots/"+ref)
 }
 
 // restoreWorkspace puts the working tree back to the snapshot's tracked-file

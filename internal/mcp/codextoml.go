@@ -160,16 +160,6 @@ func LoadCodex(path string) (map[string]ServerConfig, error) {
 	return ParseCodex(data)
 }
 
-func stringMap(m map[string]any) map[string]string {
-	out := make(map[string]string, len(m))
-	for k, v := range m {
-		if s, ok := v.(string); ok {
-			out[k] = s
-		}
-	}
-	return out
-}
-
 func toInt(v any) (int, bool) {
 	switch v := v.(type) {
 	case int64:

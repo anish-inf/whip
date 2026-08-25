@@ -1,0 +1,33 @@
+# golangci-lint config — the CI gate (see .github/workflows/ci.yml).
+# Keeps the default linters' signal while dropping findings this codebase
+# deliberately doesn't chase: errcheck on Close/Print cleanups (checked
+# where the error is actionable) and errcheck in tests (fixture plumbing).
+
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+  settings:
+    errcheck:
+      exclude-functions:
+        - (*net.Conn).Close
+        - (*net/http.Response).Body.Close
+        - (*os.File).Close
+        - (*os.Process).Kill
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - fmt.Sscanf
+  exclusions:
+    rules:
+      # Tests: cleanup and fixture plumbing doesn't check every error.
+      - path: _test\.go
+        linters: [errcheck]

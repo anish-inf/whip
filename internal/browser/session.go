@@ -146,7 +146,7 @@ func (s *Session) drop() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.backend != nil {
-		s.backend.Close()
+		_ = s.backend.Close()
 		s.backend = nil
 	}
 }

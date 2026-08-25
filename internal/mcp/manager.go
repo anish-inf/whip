@@ -271,7 +271,7 @@ func (s *server) connect(ctx context.Context, m *Manager) {
 				closed := m.closed
 				m.onChangeMu.Unlock()
 				if closed {
-					sess.Close() // manager is shutting down; don't store
+					_ = sess.Close() // manager is shutting down; don't store
 					return
 				}
 				var instr string
@@ -312,7 +312,7 @@ func (s *server) connect(ctx context.Context, m *Manager) {
 				}()
 				return
 			}
-			sess.Close()
+			_ = sess.Close()
 		}
 	}
 	msg := err.Error()
@@ -542,7 +542,7 @@ func (m *Manager) Disable(name string) bool {
 	s.gen++
 	s.mu.Unlock()
 	if old != nil {
-		old.Close()
+		_ = old.Close()
 	}
 	s.setState(m, StatusDisabled, "")
 	return true
@@ -677,7 +677,7 @@ func (m *Manager) Reconnect(name string) bool {
 	s.sess, s.defs = nil, nil
 	s.mu.Unlock()
 	if old != nil {
-		old.Close()
+		_ = old.Close()
 	}
 	select {
 	case s.reconnect <- struct{}{}:
@@ -697,7 +697,7 @@ func (m *Manager) Close() {
 		s.sess, s.defs = nil, nil
 		s.mu.Unlock()
 		if sess != nil {
-			sess.Close()
+			_ = sess.Close()
 		}
 	}
 }

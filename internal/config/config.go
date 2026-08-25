@@ -333,7 +333,7 @@ func (c *Config) Save() error {
 		return err
 	}
 	if err := os.Rename(tmp, p); err != nil {
-		os.Remove(tmp)
+		_ = os.Remove(tmp)
 		logf("config.save", "rename failed: %v", err)
 		return err
 	}

@@ -88,17 +88,20 @@ func TestCtrlCBusyInterruptsNotQuits(t *testing.T) {
 	cancelled := false
 	m.cancel = func() { cancelled = true }
 
-	tm, cmd := m.key(tea.KeyMsg{Type: tea.KeyCtrlC})
-	m = tm.(*model)
+	_, cmd := m.key(tea.KeyMsg{Type: tea.KeyCtrlC})
 	if !m.interrupt1 {
 		t.Fatal("busy first press should arm interrupt1")
 	}
 	if cancelled {
 		t.Fatal("busy first press must not cancel yet")
 	}
+	if cmd != nil {
+		if _, isQuit := cmd().(tea.QuitMsg); isQuit {
+			t.Fatal("busy path must never quit")
+		}
+	}
 
-	tm, cmd = m.key(tea.KeyMsg{Type: tea.KeyCtrlC})
-	m = tm.(*model)
+	_, cmd = m.key(tea.KeyMsg{Type: tea.KeyCtrlC})
 	if !cancelled {
 		t.Fatal("busy second press should cancel the turn")
 	}

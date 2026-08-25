@@ -33,7 +33,6 @@ type interactive struct {
 	output  string      // streamed PTY output rendered in the live pane
 	await   bool        // command is quiet and likely waiting for input
 	awaitcd int         // last reported seconds-left before inactivity timeout
-	exit    string      // exit status of the finished command, "" while running
 }
 
 // messages sent from the runner goroutine to the UI thread.
@@ -100,14 +99,6 @@ func interactiveOutput(res bashrun.Result) string {
 	default:
 		return res.Output + "\n(" + res.Exit + ")"
 	}
-}
-
-// getKeys returns the channel the TUI should push user keystrokes to, or nil if
-// no interactive command is running.
-func (r *interactiveRunner) getKeys() chan []byte {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.keys
 }
 
 // iactiveKey translates a bubbletea keystroke into PTY bytes and forwards it,

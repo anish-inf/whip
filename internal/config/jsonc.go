@@ -42,7 +42,7 @@ func stripJSONC(src []byte) ([]byte, error) {
 				i = j
 			} else if i+1 < n && src[i+1] == '*' { // block comment
 				j := i + 2
-				for j+1 < n && !(src[j] == '*' && src[j+1] == '/') {
+				for j+1 < n && (src[j] != '*' || src[j+1] != '/') {
 					j++
 				}
 				if j+1 >= n {

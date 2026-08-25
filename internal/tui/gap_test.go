@@ -54,10 +54,7 @@ func TestViewportViewHasNoTrailingBlankRows(t *testing.T) {
 
 	rendered := m.viewportView()
 	lines := strings.Split(rendered, "\n")
-	for i := len(lines) - 1; i >= 0; i-- {
-		if strings.TrimSpace(ansi.Strip(lines[i])) == "" {
-			t.Fatalf("viewport render still has a trailing blank row at index %d: %q", i, rendered)
-		}
-		break
+	if last := lines[len(lines)-1]; strings.TrimSpace(ansi.Strip(last)) == "" {
+		t.Fatalf("viewport render still has a trailing blank row: %q", rendered)
 	}
 }

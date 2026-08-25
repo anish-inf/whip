@@ -161,9 +161,10 @@ func (m *Message) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	for _, p := range parts {
-		if p.Type == "text" {
+		switch p.Type {
+		case "text":
 			m.Content = p.Text
-		} else if p.Type == "image_url" {
+		case "image_url":
 			m.Parts = append(m.Parts, p)
 		}
 	}
@@ -506,7 +507,7 @@ func (c *Client) Models(ctx context.Context) ([]ModelInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		return nil, &HTTPError{Status: resp.Status, Body: strings.TrimSpace(string(b))}
@@ -544,7 +545,7 @@ func (c *Client) Stream(ctx context.Context, req Request, onText, onThink func(s
 	if err != nil {
 		return Message{}, Usage{}, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		return Message{}, Usage{}, &HTTPError{Status: resp.Status, Body: strings.TrimSpace(string(b))}
@@ -641,7 +642,7 @@ func (c *Client) Complete(ctx context.Context, req Request) (string, Usage, erro
 	if err != nil {
 		return "", Usage{}, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		return "", Usage{}, &HTTPError{Status: resp.Status, Body: strings.TrimSpace(string(b))}

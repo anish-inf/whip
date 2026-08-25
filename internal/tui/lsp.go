@@ -36,11 +36,12 @@ func (m *model) lspCommand(fields []string) (tea.Model, tea.Cmd) {
 			detail = s.Err
 		}
 		line := fmt.Sprintf("  %s %-16s %s", icon, s.Name, detail)
-		if s.State == "failed" {
+		switch s.State {
+		case "failed":
 			b.WriteString(errStyle.Render(line) + "\n")
-		} else if s.State == "not started" {
+		case "not started":
 			b.WriteString(dimStyle.Render(line) + "\n")
-		} else {
+		default:
 			b.WriteString(line + "\n")
 		}
 	}

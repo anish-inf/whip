@@ -82,7 +82,7 @@ func openChromedp(ctx context.Context, mode Mode, sessionName string) (*chromedp
 	b.targetCtx, b.targetOff = targetCtx, targetOff
 	// Ensure the browser + first tab exist.
 	if err := chromedp.Run(targetCtx); err != nil {
-		b.Close()
+		_ = b.Close()
 		return nil, fmt.Errorf("chromedp connect: %w", err)
 	}
 	return b, nil

@@ -126,11 +126,11 @@ func Open(path string) (*Store, error) {
 		return nil, err
 	}
 	// migrate pre-goal databases; duplicate-column errors are expected
-	db.Exec(`ALTER TABLE sessions ADD COLUMN goal TEXT NOT NULL DEFAULT ''`)
+	_, _ = db.Exec(`ALTER TABLE sessions ADD COLUMN goal TEXT NOT NULL DEFAULT ''`)
 	// later per-session bookkeeping (fork linkage, tags, pinned); the same
 	// duplicate-column-tolerant migration as goal
 	for _, c := range extraColumns {
-		db.Exec(`ALTER TABLE sessions ADD COLUMN ` + c.def)
+		_, _ = db.Exec(`ALTER TABLE sessions ADD COLUMN ` + c.def)
 	}
 	return &Store{db: db}, nil
 }
@@ -153,7 +153,7 @@ func (s *Store) SetTodos(id, todosJSON string) error {
 // the session is unknown). The agent package owns the schema.
 func (s *Store) Todos(id string) string {
 	var v string
-	s.db.QueryRow(`SELECT todos FROM sessions WHERE id=?`, id).Scan(&v)
+	_ = s.db.QueryRow(`SELECT todos FROM sessions WHERE id=?`, id).Scan(&v)
 	return v
 }
 
@@ -209,7 +209,7 @@ func (s *Store) LoadTasks(sessionID string) ([]Task, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []Task
 	for rows.Next() {
 		var t Task
@@ -247,7 +247,7 @@ func (s *Store) Save(id string, from int, msgs []llm.Message, model, provider st
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	for i := from; i < len(msgs); i++ {
 		// Placeholder rows (zero-value messages the caller never meant to
 		// write, e.g. padding before a post-compaction tail) must not
@@ -300,13 +300,13 @@ func (s *Store) Load(idOrPrefix string) (Meta, []llm.Message, error) {
 	// pre-size the slice: a long session is hundreds of rows; the COUNT is
 	// one index scan and avoids O(log n) reallocs while scanning
 	var count int
-	s.db.QueryRow(`SELECT COUNT(*) FROM messages WHERE session_id=?`, meta.ID).Scan(&count)
+	_ = s.db.QueryRow(`SELECT COUNT(*) FROM messages WHERE session_id=?`, meta.ID).Scan(&count)
 
 	mrows, err := s.db.Query(`SELECT content FROM messages WHERE session_id=? ORDER BY seq`, meta.ID)
 	if err != nil {
 		return Meta{}, nil, err
 	}
-	defer mrows.Close()
+	defer func() { _ = mrows.Close() }()
 	msgs := make([]llm.Message, 0, count)
 	for mrows.Next() {
 		var data string
@@ -434,7 +434,7 @@ func (s *Store) UserHistory(limit int) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	seen := map[string]bool{}
 	var out []string
 	for rows.Next() {
@@ -523,7 +523,7 @@ func (s *Store) Snapshots(id string) map[int]string {
 	if err != nil {
 		return nil
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	out := map[int]string{}
 	for rows.Next() {
 		var seq int
@@ -563,7 +563,7 @@ func (s *Store) Compactions(id string) []Compaction {
 	if err != nil {
 		return nil
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []Compaction
 	for rows.Next() {
 		var c Compaction
@@ -588,7 +588,7 @@ func (s *Store) RawMessages(id string) []llm.Message {
 	if err != nil {
 		return nil
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var msgs []llm.Message
 	for rows.Next() {
 		var data string
@@ -623,7 +623,7 @@ func (s *Store) Fork(srcID string, uptoSeq int, title string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	if _, err := tx.Exec(`INSERT INTO sessions (id, created_at, updated_at, cwd, model, provider, title, goal, forked_from, fork_seq, effort)
 		SELECT ?, ?, ?, cwd, model, provider, ?, goal, ?, ?, effort FROM sessions WHERE id=?`,
 		newID, now(), now(), title, srcID, uptoSeq, srcID); err != nil {
@@ -690,7 +690,7 @@ func (s *Store) ForkTitle(base string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	n := 0
 	for rows.Next() {
 		var t string
@@ -714,7 +714,7 @@ func likeEscape(s string) string {
 }
 
 func scanMetas(rows *sql.Rows) ([]Meta, error) {
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []Meta
 	for rows.Next() {
 		var m Meta

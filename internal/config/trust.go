@@ -64,7 +64,7 @@ func Trust(dir string) error {
 		return err
 	}
 	if err := os.Rename(tmp, p); err != nil {
-		os.Remove(tmp)
+		_ = os.Remove(tmp)
 		return err
 	}
 	LogEvent("trust.grant", dir)
