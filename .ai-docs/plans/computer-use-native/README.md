@@ -1,6 +1,6 @@
 # computer-use: the ultimate version — native, embedded, semantic-first
 
-**Branch:** `computer-use-native` (off `main`) · **Status:** plan
+**Branch:** `computer-use-native` (off `main`) · **Status:** steps 1–4 built (INF-4999); TCC window (5) wired; granted-app E2E (6) pending the one-time user TCC grant
 
 The plan for the full-desktop tier: everything codex's native driver does
 (ScreenCaptureKit capture, CGEvent input, AX-tree reads), built into loopy as
@@ -138,16 +138,22 @@ shape on a different backend, behind the same JSON-RPC contract.
 
 ## Build order
 
-1. `driver/` Swift package: JSON-RPC stdio server + TCC preflight + AX tree
-   + CGEvent input + SCK capture. Tests on a mac runner.
-2. `internal/computer/embed*.go` + a `Helper` client (spawn, handshake,
-   JSON-RPC round-trips, crash-restart).
-3. Wire the new helpers into `computer_exec` (the mini-language grows the
-   verbs above; existing chrome_* helpers stay).
-4. The AX-generation staleness guard (per-action state gate, tighter than
-   codex's per-turn one).
-5. Permissions window (single window, three panes, in-turn wait).
-6. E2E on the Mac: drive Chrome and one native app (TextEdit) end-to-end.
+1. ✅ `driver/` Swift package: JSON-RPC stdio server + TCC preflight + AX tree
+   + CGEvent input + SCK capture. Tests on a mac runner. (INF-4999)
+2. ✅ `internal/computer/embed*.go` + a `Helper` client (spawn, handshake,
+   JSON-RPC round-trips, crash-restart). Fake-helper Go protocol tests.
+3. ✅ Wire the new helpers into `computer_exec` (the mini-language grows the
+   verbs above; existing chrome_* helpers stay). Screenshots ride the
+   existing `ScreenshotSink`.
+4. ✅ The AX-generation staleness guard (per-action state gate, tighter than
+   codex's per-turn one). Stale index → code 4 "state changed — re-read".
+5. ✅ Permissions window (single window, three panes, in-turn wait) —
+   `permissions.request` busy-waits in-turn up to 120s behind a deep-link
+   panel. Exercised: pending path verified; the grant-click is the user's.
+6. ⏳ E2E on the Mac: handshake/apps/error-gates verified against the real
+   helper. The granted AX walk + CGEvent input + SCK capture against
+   Chrome/TextEdit needs the one-time TCC grant for `~/.loopy/bin/
+   loopy-computer` (a user System Settings click — the design's whole point).
 
 ## What we do NOT copy
 

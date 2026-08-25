@@ -1,0 +1,5 @@
+# `task driver` overwrites the tracked zero-byte placeholder with the real
+# Swift helper before `go build` (go:embed reads the file at build time).
+# The placeholder stays committed so a fresh clone builds; the built binary
+# itself must never be committed — it's a local build product.
+# (the placeholder is force-added once; .gitignore does not untrack it)

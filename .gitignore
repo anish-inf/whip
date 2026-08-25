@@ -1,2 +1,7 @@
 /loopy
 /vendor/
+
+# Swift driver build artifacts (task driver rebuilds; go:embed uses the
+# copy at internal/computer/bin/, which stays ignored too — the placeholder
+# is force-added instead).
+driver/.build/
