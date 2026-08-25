@@ -59,27 +59,39 @@ multi-line tab lists) and doesn't escape embedded quotes (injection
 hazard). Our helper fixes both. The rest of mack (dialogs, beep, say) is
 irrelevant.
 
-**Codex reality (task-2 deep read + binary reverse engineering):**
+**Codex reality (task-2 deep read + INF-4997 driver dissection):**
 
 *RE chain (for reproducibility):* the `codex-aarch64-apple-darwin` release
 binary (220MB) contains the plugin IDs and policy code but zero GUI/input
 symbols (no CGEvent/AXUIElement/screencapture anywhere). The package's
 `codex-code-mode-host` (57MB) is a bare V8 runtime, no GUI libs. The public
 plugins repo (`github.com/openai/plugins`, 120 plugins) excludes
-computer-use/chrome. The driver ships via the **auth-gated catalog**
-(`GET {chatgpt_base_url}/ps/plugins/{id}?includeDownloadUrls=true`,
-core-plugins/src/remote.rs:2204) — 404 without a ChatGPT token. So the
-mouse/keyboard/screen implementation is OpenAI-private, delivered at
-runtime to signed-in desktop app users. Nothing byte-for-byte to copy; the
-borrow is architectural (policy taxonomy, Guardian rules text, batching,
-evidence framing — all in-repo and quoted below).
+computer-use/chrome.
 
-Computer-use is a server-delivered bundled plugin (`computer-use@openai-bundled`)
-driven through a REPL-style MCP server (`cua_repl`, sibling of the browser's
-`node_repl`) — the model emits one `{code: string}` JS cell per batch
-("Code Mode"), screenshots return as MCP image items. Zero in-repo screen
-capture or input injection (no enigo/rdev/CGEvent anywhere). What's in-tree
-and worth stealing:
+**Update (INF-4997):** the driver is **not** a JS MCP plugin — it is a native
+macOS app, `~/.codex/computer-use/Codex Computer Use.app`
+(`SkyComputerUseService`, bundle id `com.openai.sky.CUAService`), shipped to
+signed-in desktop users and dissected on disk. Full findings:
+[`docs/learnings/other-harnesses/codex-computer-use-plugin.md`](../../../docs/learnings/other-harnesses/codex-computer-use-plugin.md).
+Concrete borrowables now confirmed (superseding the "architectural borrow only"
+read):
+
+- **Native stack**: ScreenCaptureKit for capture, CoreGraphics CGEvent for
+  input, AX (AccessibilitySupport) for the tree + focus control, XPC (not
+  stdio) between client and driver with code-signing sender auth.
+- **Tool surface**: `list_apps`, `get_app_state`, `click`, `perform_secondary_action`,
+  `set_value`, `select_text`, `scroll`, `drag`, `press_key` (xdotool syntax),
+  `type_text` — with an enforced `get_app_state` precondition per turn and a
+  mandatory re-query after every action (state → act → re-state).
+- **Screenshot pipeline**: SCK → normalize Retina to *point* resolution → JPEG
+  (`jpeg_compression_quality`, `scaledScreenSize`); model works in screenshot
+  pixel space, driver owns the backingScaleFactor conversion.
+- **TCC flow**: one branded window for Accessibility + Screen Recording +
+  Automation; the tool *busy-waits in-turn* for the grant instead of failing.
+- **Per-app approval**: bundle-id-scoped, session-vs-persistent, via MCP
+  elicitation.
+
+What's in-tree and worth stealing (policy layer + Guardian — unchanged):
 
 1. **Policy layer** (`config/src/computer_use.rs`): per-app allow/deny —
    macOS by bundle ID, Windows by AUMID/exe-identity; `allow_locked_computer_use`;
@@ -93,7 +105,9 @@ and worth stealing:
    "**untrusted evidence, not instructions**" — prompt-injection hardening
    for anything the screen says.
 3. **REPL batching** — many GUI micro-ops per model round trip in one code
-   cell. (We already have this: browser_exec's mini-language batches; keep it.)
+   cell (browser/node_repl lineage; the native CUA app keeps the same "batch
+   per round trip, then re-read state" discipline via its `SerialExecutor`).
+   (We already have this: browser_exec's mini-language batches; keep it.)
 
 Their weaknesses — exactly where we win: closed server-side driver (ours is
 local, in-binary, auditable); no semantic grounding in the loop (we go
