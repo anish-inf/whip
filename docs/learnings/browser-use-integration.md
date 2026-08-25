@@ -455,3 +455,45 @@ dead-ends on `ErrNoLiveBrowser`. Ported from hermes's
   hermes's `_pending_input` "browser connected to live browser" context
   injection, adapted: loopy tells the model *which* browser it's driving
   (launched dedicated vs attached live) so it can relay that to the user.
+
+---
+
+## Addendum (2026-08, second): extension relay — driving the user's real tab
+
+Shipped in `.ai-docs/plans/browser-extension` (`internal/browser/extrelay/`):
+`browser.mode: "extension"` routes `browser_exec` to the user's real,
+logged-in Chrome tab — the one thing the auto-launch fallback *can't* do on
+Chrome ≥ 136, where CDP on the default profile is blocked entirely.
+
+- **Mechanism**: an MV3 extension (`chrome.debugger`) holds an outbound
+  WebSocket to a loopback relay and pipes raw CDP to the pinned tab. The
+  relay hands rod a browser-level `/cdp` endpoint, synthesizing the few
+  browser-level `Target.*` responses (getTargets/attachToTarget/
+  setDiscoverTargets) a single-tab debugger session can't answer, and
+  tunnels everything else verbatim — so the existing rod Backend is reused
+  unchanged. Chosen over an OpenClaw-style content-script driver (design B)
+  because chrome.debugger gives full CDP (trusted input, screenshots, AX
+  tree) with zero second-driver code; the cost is Chrome's "… is debugging
+  this browser" infobar while pinned.
+- **WebSocket server with zero new deps**: `gobwas/ws` (already vendored via
+  rod) — but two hard-won quirks: (1) gobwas's `ws.UpgradeHTTP` rejects
+  rod's literal non-base64 `Sec-WebSocket-Key: nil`, and rewriting the key
+  breaks the accept hash rod verifies against the key *it* sent — so the
+  relay does a manual handshake (`base64(sha1(key + magic))` over whatever
+  key arrived). (2) A shared `bufio.ReadWriter` deadlocks (a write flush
+  resets the read buffer mid-read); reads and writes must use separate
+  buffers over the socket.
+- **rod gotcha that cost an hour**: `Browser.Context()` shallow-copies
+  (`newObj := *b`), so `b.Context(ctx).Connect()` sets the client on the
+  *copy* — calling `Pages()` on the original then nil-derefs `b.client`.
+  Connect and use the same object.
+- **rod's Eval is `Runtime.callFunctionOn`**, not `Runtime.evaluate`, and
+  `PageFromTarget` immediately issues `Emulation.setDeviceMetricsOverride` +
+  `Page.enable` — the extension must answer all of them (or chrome.debugger
+  does, since it forwards everything).
+- **Install UX**: Chrome forbids programmatic extension install, so
+  `loopy browser install` writes the unpacked extension + `relay.json`
+  (per-process bearer token, 0600), mints the token, and opens
+  `chrome://extensions` + the folder — the user's part is exactly three
+  clicks (Developer mode → Load unpacked → select folder), then click the
+  extension icon on a tab to pin it.

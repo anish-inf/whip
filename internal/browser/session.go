@@ -58,10 +58,10 @@ func (m *Manager) Session(name string) (*Session, error) {
 	if i := strings.Index(name, ":"); i > 0 {
 		prefix := Mode(name[:i])
 		switch prefix {
-		case ModeLive, ModeDedicated, ModeHeadless:
+		case ModeLive, ModeDedicated, ModeHeadless, ModeExtension:
 			mode, name = prefix, name[i+1:]
 		default:
-			return nil, fmt.Errorf("invalid session %q: unknown mode prefix %q (live|dedicated|headless)", name, prefix)
+			return nil, fmt.Errorf("invalid session %q: unknown mode prefix %q (live|dedicated|headless|extension)", name, prefix)
 		}
 	}
 	if name == "" {

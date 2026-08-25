@@ -62,6 +62,15 @@ func main() {
 		return
 	}
 
+	// `loopy browser ...` — browser tooling (install the drive-my-tab extension).
+	if flag.NArg() > 0 && flag.Arg(0) == "browser" {
+		if err := browserCLI(flag.Args()[1:]); err != nil {
+			fmt.Fprintln(os.Stderr, "loopy:", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	cfg, err := config.Load()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "loopy:", err)

@@ -122,3 +122,29 @@ each server's tools automatically. CLI: `loopy mcp list|add|remove`, and
 stderr tail; non-zero exit — validate a `.mcp.json` in CI). `loopy mcp
 serve` runs loopy's own tools (read/bash/edit/write) as an MCP server for
 other harnesses.
+
+## Browser — drive your real, logged-in Chrome
+
+`browser_exec` can drive your everyday browser (real cookies/sessions) four
+ways via `browser.mode` in `~/.loopy/config.json`: `live` (attach to a
+running Chrome with debugging on), `dedicated`/`headless` (a loopy-owned
+Chrome, auto-launched as a fallback when nothing debuggable is running), and
+`extension` — the only one that works on Chrome ≥ 136's default profile,
+where direct CDP is blocked.
+
+Extension mode uses a tiny unpacked Chrome extension: loopy runs a local
+relay, the extension pipes raw CDP through `chrome.debugger` on the tab you
+pin. Set it up once:
+
+```
+loopy browser install
+```
+
+That writes the extension to `~/.loopy/browser/extension/`, mints the relay
+token, and opens `chrome://extensions` + the folder. Then three clicks
+(Chrome forbids programmatic install): **Developer mode on → Load unpacked →
+select the folder**. Set `"browser": { "mode": "extension" }` in
+`~/.loopy/config.json`, open the tab you want, and click the loopy extension
+icon (a green ● appears) to let loopy drive it; click again to detach. While
+pinned, Chrome shows a "loopy is debugging this browser" bar — that's the
+mechanism doing the work.

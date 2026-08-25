@@ -130,7 +130,9 @@ type Config struct {
 // private-address policy for non-live backends.
 type BrowserConfig struct {
 	// Mode: "live" (attach to the user's running Chrome, default),
-	// "dedicated" (loopy-owned profile), or "headless".
+	// "dedicated" (loopy-owned profile), "headless", or "extension" (drive
+	// the user's real logged-in tab through the loopy extension — the only
+	// way onto the default profile on Chrome ≥ 136).
 	Mode string `json:"mode,omitempty"`
 	// CDPURL attaches live mode to an explicit DevTools endpoint instead of
 	// the profile scan (http:// or ws://).

@@ -38,6 +38,12 @@ const (
 	ModeDedicated Mode = "dedicated"
 	// ModeHeadless is ModeDedicated without a window.
 	ModeHeadless Mode = "headless"
+	// ModeExtension drives the user's real, logged-in Chrome tab through the
+	// loopy extension (chrome.debugger CDP tunnel via extrelay). The only way
+	// to drive the default profile on Chrome ≥ 136, where direct CDP is
+	// blocked. Requires the unpacked extension loaded + a tab pinned via the
+	// toolbar icon (`loopy browser install` sets it up).
+	ModeExtension Mode = "extension"
 )
 
 // ErrPermissionBlocked reports Chrome 144+'s per-connection "Allow remote
@@ -198,8 +204,13 @@ func Open(ctx context.Context, mode Mode) (Backend, error) {
 	return OpenNamed(ctx, mode, "default")
 }
 
-// OpenNamed is Open with a session name for profile isolation.
+// OpenNamed is Open with a session name for profile isolation. Extension
+// mode ignores the name (one pinned tab per relay) and always uses rod — the
+// relay speaks CDP, and chromedp is only the spike backup for local launches.
 func OpenNamed(ctx context.Context, mode Mode, sessionName string) (Backend, error) {
+	if mode == ModeExtension {
+		return openExtension(ctx)
+	}
 	if Driver == "chromedp" {
 		return openChromedp(ctx, mode, sessionName)
 	}

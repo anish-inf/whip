@@ -815,6 +815,8 @@ func buildAgent(cfg *config.Config, modelName, provName, sysPrompt string) (*age
 			mode = browser.ModeDedicated
 		case "headless":
 			mode = browser.ModeHeadless
+		case "extension":
+			mode = browser.ModeExtension
 		}
 		tools.Browser = browser.NewManager(mode)
 		if cfg.Browser.CDPURL != "" {

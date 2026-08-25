@@ -484,6 +484,24 @@ code-shaped tool, `browser_exec`. Design: docs/learnings/browser-use-integration
   `Close` detaches (severs the CDP socket via `detach.go`, no Browser.close)
   for live/reattached/dedicated so a reattach target survives; headless
   still kills its process.
+- **Extension relay** (`config.Browser.Mode: "extension"`,
+  `internal/browser/extrelay/`): drives the user's real, logged-in Chrome
+  tab — the only way onto the default profile on Chrome ≥ 136, where direct
+  CDP is blocked. The unpacked MV3 extension (`extension/manifest.json` +
+  `background.js`, go:embed'd) holds an outbound WebSocket to a loopback
+  relay (`relay.go`, gobwas/ws — already vendored via rod, no new deps) and
+  pipes raw CDP through `chrome.debugger` on the pinned tab. The relay
+  synthesizes the few browser-level `Target.*` responses rod's attach needs
+  (one attached page target) and tunnels everything else verbatim, so the
+  existing rod Backend is reused unchanged (navigate/click/type/screenshot/
+  AX tree). Security: loopback only, per-process bearer token in
+  `~/.loopy/browser/extension/relay.json` (0600), and only a tab the user
+  pinned by clicking the extension icon is drivable. Accepted trade-off:
+  Chrome shows a "loopy is debugging this browser" infobar while pinned.
+  Setup: `loopy browser install` writes the extension + relay.json, mints
+  the token, and opens `chrome://extensions` + the folder (the 3 manual
+  clicks — Developer mode → Load unpacked → select folder — are on the user;
+  Chrome forbids programmatic install).
 - **One tool, per hermes's benchmark** (36/36 task success at ~60% fewer
   schema tokens vs a 12-tool granular set): the `code` argument is a line/
   semicolon-separated helper-call program (`goto`, `js`, `click`, `type`,
@@ -525,6 +543,10 @@ floor, session/mode selection), `e2e_test.go` (real Chrome × all three
 modes — cookie round-trip, AX-tree→click, screenshot JPEG,
 dedicated-profile isolation, live-attach survival after Close, live→launched
 fallback, dedicated reattach-no-duplicate),
+`internal/browser/extrelay/relay_test.go` (token auth, CDP tunnel
+round-trip, Target.* synthesis, no-tab error, disconnect-detach) +
+`rod_e2e_test.go` (a real rod.Browser drives attach + Eval through the relay
+against a fake extension — proves the tunnel + Target synth end-to-end),
 `internal/tools/browser_lang_test.go` (parser), `schema_test.go` (all
 built-in tool schemas parse — ratchet for the request-corrupting malformed
 schema class), `browser_e2e_test.go` (tool-level E2E),

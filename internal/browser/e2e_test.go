@@ -31,6 +31,18 @@ var chromiumCandidates = []string{
 	"/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
 }
 
+// chromeForTestingPath returns Playwright's full Chrome-for-Testing build —
+// the only locally-available build that honors --load-extension (branded
+// Google Chrome ignores it). Used by the extension E2E; "" when absent.
+func chromeForTestingPath() string {
+	home, _ := os.UserHomeDir()
+	p := filepath.Join(home, "Library/Caches/ms-playwright/chromium-1234/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing")
+	if _, err := os.Stat(p); err == nil {
+		return p
+	}
+	return ""
+}
+
 func chromiumPath(t *testing.T) string {
 	t.Helper()
 	// Unpacked Ubuntu debs for Chrome's shared libs (no sudo on this box).
