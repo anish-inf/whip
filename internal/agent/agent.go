@@ -75,6 +75,10 @@ type Agent struct {
 	// (config browser.enabled=false) even when the manager hook exists.
 	BrowserDisabled bool
 
+	// ComputerDisabled, when true, keeps computer_exec out of the tool set
+	// (config computer.enabled=false).
+	ComputerDisabled bool
+
 	usageMu sync.Mutex
 	usage   llm.Usage // session totals across every API call (PromptTokens = input)
 }
@@ -180,6 +184,9 @@ func New(client *llm.Client, model string, maxTokens int, systemPrompt string) *
 	a.Tools = tools.All()
 	if !a.BrowserDisabled {
 		a.Tools = append(a.Tools, tools.BrowserExec())
+	}
+	if !a.ComputerDisabled {
+		a.Tools = append(a.Tools, tools.ComputerExec())
 	}
 	a.Tools = append(a.Tools, taskTool(a))
 	a.Tools = append(a.Tools, todoTool(a))

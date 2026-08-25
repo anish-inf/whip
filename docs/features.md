@@ -539,3 +539,43 @@ environment quirk, not a rod/loopy bug; verified on real Chrome.
 
 The browser-use CLI-over-MCP escape hatch remains available via config for
 anyone wanting the Python ecosystem (§4 option B).
+
+## Computer-use (macOS)
+
+`internal/computer/` + `internal/tools/computer.go` — `computer_exec` drives
+the user's Mac via AppleScript (osascript), with the already-open Chrome as
+the flagship path: their real tabs and logins, zero CDP setup. Design and the
+codex/mack borrow rationale: .ai-docs/plans/computer-use/README.md and
+docs/learnings/other-harnesses/codex-computer-use-plugin.md (dissected from
+the on-disk driver).
+
+- **Chrome via AppleScript** (`internal/computer/chrome.go`) — the user's
+  running Chrome answers AppleScript: active-tab URL/title, every tab of
+  every window, goto/new-tab/activate/close/back/reload, and
+  `execute javascript` (needs Chrome's View→Developer→"Allow JavaScript
+  from Apple Events" toggle; the error surfaces it). Our osascript helper
+  fixes mack's flaws: newlines preserved (tab lists stay readable), quotes
+  escaped (no injection).
+- **Per-app consent gate** (`policy.go`, ported from codex's
+  computer_use.rs): every action targets an app; the app must be in
+  `computer.allow` config, or session-approved. `computer.deny` always wins.
+  Default-deny is on. The TUI installs the consent hook (v1: a transcript
+  note + the model surfaces the ask; an interactive approve-prompt is the
+  follow-up — no turn-pausing modal exists yet).
+- **Tool shape** — the same helper-call mini-language as browser_exec
+  (`internal/tools/browser_lang.go`, now shared): `chrome_state`,
+  `chrome_tabs`, `chrome_goto`, `chrome_new_tab`, `chrome_activate`,
+  `chrome_close`, `chrome_back`, `chrome_reload`, `chrome_js`,
+  `chrome_find`, and the `tell(app, script)` escape hatch. Step-label
+  `# comment` convention carried over (the TUI row shows it).
+- **Safety**: URLs pass the browser SSRF floor (`browser.CheckURL`) before
+  any navigation; login walls → stop and ask (in the tool description).
+- macOS-only for now (`computer.Available()` gates on darwin); Linux/Windows
+  backends are follow-ups. The AX/CGEvent/ScreenCaptureKit tier (full
+  desktop control) is v2 — a signed embedded helper binary extracted to a
+  stable path so TCC grants stick.
+
+Tests: `internal/computer/computer_test.go` (quote escaping, policy
+allow/deny/session-approval, tab-list parse), `internal/tools/computer_test.go`
+(tool gating, policy enforcement, approver flow); the schema ratchet
+(`schema_test.go`) now covers computer_exec.

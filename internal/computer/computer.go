@@ -1,0 +1,65 @@
+// Package computer is loopy's computer-use subsystem: drive the user's
+// actual desktop (apps, windows, mouse, keyboard, screen) — with browsers
+// as the flagship case. macOS-first; the design and borrow rationale live
+// in .ai-docs/plans/computer-use/README.md and
+// docs/learnings/other-harnesses/codex-computer-use-plugin.md.
+//
+// v1 is pure osascript (AppleScript via subprocess): Chrome control needs no
+// CDP setup and no compilation — the user's already-open Chrome is
+// scriptable through its AppleScript dictionary. AX-tree reads and CGEvent
+// input are v2 (System Events UI scripting for v1.5, a signed embedded
+// helper for the full tier).
+package computer
+
+import (
+	"fmt"
+	"os/exec"
+	"runtime"
+	"strings"
+)
+
+// ErrUnsupportedPlatform gates every backend call on non-macOS.
+var ErrUnsupportedPlatform = fmt.Errorf("computer-use is macOS-only for now (linux/windows backends are follow-ups)")
+
+// Available reports whether this platform can drive the desktop.
+func Available() bool { return runtime.GOOS == "darwin" }
+
+// osascript runs one AppleScript snippet and returns stdout.
+// Unlike mack's run(), this preserves newlines (multi-line results like tab
+// lists stay readable) and does not swallow non-cancel errors.
+func osascript(script string) (string, error) {
+	if !Available() {
+		return "", ErrUnsupportedPlatform
+	}
+	cmd := exec.Command("osascript", "-e", script)
+	out, err := cmd.CombinedOutput()
+	s := strings.TrimRight(string(out), "\n")
+	if err != nil {
+		if strings.Contains(s, "User canceled") {
+			return s, nil // user dismissed a dialog — not a failure
+		}
+		return s, fmt.Errorf("osascript: %w: %s", err, s)
+	}
+	return s, nil
+}
+
+// quote escapes a Go string for embedding inside an AppleScript "…" literal.
+// mack doesn't do this; a `"` in user input would break the script.
+func quote(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, `"`, `\"`)
+	return `"` + s + `"`
+}
+
+// Tell runs `tell application <app>` with the given commands — the general
+// escape hatch (mack's Tell, fixed). app is an app name ("Google Chrome") or
+// bundle id; commands are AppleScript statements.
+func Tell(app string, commands ...string) (string, error) {
+	var b strings.Builder
+	b.WriteString("tell application " + quote(app) + "\n")
+	for _, c := range commands {
+		b.WriteString(c + "\n")
+	}
+	b.WriteString("end tell")
+	return osascript(b.String())
+}
