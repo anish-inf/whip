@@ -154,7 +154,7 @@ worth doing now.
 
 **Later (needs `/goal` usage to justify the always-on turn):**
 
-- [ ] Minimal scheduler + generic wakeup channel: `@every 10m` / `@at <rfc3339>` / `*/N * * * *` tasks firing machine-authored user-message turns; grid-anchored fires, missed-fire policy skip/once/all-cap-100, per-task `reportPrompt`, record-then-deliver outbox so a crash between run and wakeup redelivers on startup. One internal `Wakeup{source, prompt}` channel serves cron, webhooks, and post-restart notices alike (exo `scheduler_runtime.rs`, `conversation_wakeup.rs` — the grammar is ~70 lines, an in-process goroutine ticker is enough)
+- [x] Minimal scheduler + generic wakeup channel: `@every 10m` / `@at <rfc3339>` tasks firing machine-authored user-message turns; grid-anchored fires (slow runs don't drift), one-shot completion stays listed as (fired), fires defer while busy without drifting the grid. Cron syntax deliberately cut (two forms cover the use); the record-then-deliver outbox and `reportPrompt` routing remain future work if external channels land (exo `scheduler_runtime.rs`, `conversation_wakeup.rs`) — `internal/schedule` (parser, ~70 lines), `schedules` table in sessions.db, 5s ticker in the TUI, `/schedule @every|@at <prompt> | list | cancel <n>`, ⏰ transcript marker
 
 **Deliberately cut** (exo needs them because it's long-running and edits itself in production; a coding TUI doesn't):
 

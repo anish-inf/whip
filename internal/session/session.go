@@ -56,6 +56,19 @@ CREATE TABLE IF NOT EXISTS snapshots (
 	created_at TEXT NOT NULL,
 	PRIMARY KEY (session_id, seq)
 );
+-- Scheduled tasks: the wakeup channel's durable records. One row per task,
+-- keyed by the session it fires into. The store keeps the schedule
+-- expression, anchor, and last fire; the TUI's ticker evaluates due tasks.
+CREATE TABLE IF NOT EXISTS schedules (
+	session_id TEXT NOT NULL REFERENCES sessions(id),
+	id         INTEGER NOT NULL,
+	schedule   TEXT NOT NULL,      -- '@every 10m' | '@at <rfc3339>'
+	prompt     TEXT NOT NULL,      -- the machine-authored turn to submit on fire
+	anchor     TEXT NOT NULL,      -- grid origin (RFC3339)
+	last_fire  TEXT NOT NULL DEFAULT '', -- last fire time ("" = never); one-shots complete here
+	created_at TEXT NOT NULL,
+	PRIMARY KEY (session_id, id)
+);
 -- Compaction events: append-only. Each row records a compaction as summary +
 -- cutoff (the raw-log seq it folded). The messages table is never rewritten
 -- by a compaction — Load derives the compacted view from the latest event,
@@ -533,6 +546,59 @@ func (s *Store) Snapshots(id string) map[int]string {
 		}
 	}
 	return out
+}
+
+// Schedule is one scheduled task's durable record.
+type Schedule struct {
+	ID       int
+	Schedule string    // '@every 10m' | '@at <rfc3339>'
+	Prompt   string    // the machine-authored turn submitted on fire
+	Anchor   time.Time // grid origin
+	LastFire time.Time // zero = never fired
+}
+
+// AddSchedule records a scheduled task and returns its id.
+func (s *Store) AddSchedule(sessionID, schedule, prompt string, anchor time.Time) (int, error) {
+	var id int
+	err := s.db.QueryRow(`INSERT INTO schedules (session_id, id, schedule, prompt, anchor, created_at)
+		SELECT ?, COALESCE(MAX(id),0)+1, ?, ?, ?, ? FROM schedules WHERE session_id=? RETURNING id`,
+		sessionID, schedule, prompt, anchor.UTC().Format(time.RFC3339), now(), sessionID).Scan(&id)
+	return id, err
+}
+
+// Schedules returns a session's scheduled tasks, id order.
+func (s *Store) Schedules(sessionID string) []Schedule {
+	rows, err := s.db.Query(`SELECT id, schedule, prompt, anchor, last_fire FROM schedules WHERE session_id=? ORDER BY id`, sessionID)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var out []Schedule
+	for rows.Next() {
+		var sc Schedule
+		var anchor, lastFire string
+		if rows.Scan(&sc.ID, &sc.Schedule, &sc.Prompt, &anchor, &lastFire) != nil {
+			continue
+		}
+		sc.Anchor, _ = time.Parse(time.RFC3339, anchor)
+		sc.LastFire, _ = time.Parse(time.RFC3339, lastFire)
+		out = append(out, sc)
+	}
+	return out
+}
+
+// MarkFired stamps a task's last fire (a fired one-shot stays listed but
+// never fires again).
+func (s *Store) MarkFired(sessionID string, id int, at time.Time) error {
+	_, err := s.db.Exec(`UPDATE schedules SET last_fire=? WHERE session_id=? AND id=?`,
+		at.UTC().Format(time.RFC3339), sessionID, id)
+	return err
+}
+
+// DeleteSchedule removes a scheduled task.
+func (s *Store) DeleteSchedule(sessionID string, id int) error {
+	_, err := s.db.Exec(`DELETE FROM schedules WHERE session_id=? AND id=?`, sessionID, id)
+	return err
 }
 
 // ClearSnapshots drops all of a session's workspace snapshot rows (compaction
