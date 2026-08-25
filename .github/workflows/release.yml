@@ -1,0 +1,125 @@
+name: release
+
+# Cut a release by pushing a tag:  git tag v0.1.0 && git push origin v0.1.0
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go vet ./...
+      - run: go test ./...
+
+  # Each binary is built on a runner of its OWN platform. darwin-arm64 needs
+  # macOS anyway: the embedded loopy-computer Swift helper (computer-use
+  # native tier) is built with `task driver` on the runner and go:embed'd into
+  # the loopy binary — never committed. Each job smoke-tests `--version` so a
+  # broken binary fails here instead of shipping.
+  build:
+    needs: test
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - os: ubuntu-latest
+            goos: linux
+            goarch: amd64
+            asset: loopy-linux-x64
+            driver: false
+          - os: ubuntu-24.04-arm
+            goos: linux
+            goarch: arm64
+            asset: loopy-linux-arm64
+            driver: false
+          - os: macos-14
+            goos: darwin
+            goarch: arm64
+            asset: loopy-darwin-arm64
+            driver: true
+          # darwin-x64: the Swift helper only ships arm64 (Apple Silicon is
+          # the supported computer-use target); Intel macs get the core CLI
+          # with the osascript fallback tier.
+          - os: macos-13
+            goos: darwin
+            goarch: amd64
+            asset: loopy-darwin-x64
+            driver: false
+    runs-on: ${{ matrix.os }}
+    env:
+      GOOS: ${{ matrix.goos }}
+      GOARCH: ${{ matrix.goarch }}
+      CGO_ENABLED: "0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build the loopy-computer Swift driver (macOS arm64)
+        if: ${{ matrix.driver }}
+        run: |
+          xcodebuild -version >/dev/null 2>&1 || true # CLT is enough for swift build
+          swift build -c release --package-path driver
+          cp driver/.build/release/loopy-computer internal/computer/bin/loopy-computer
+          codesign --sign - --force internal/computer/bin/loopy-computer 2>/dev/null || true
+          test -s internal/computer/bin/loopy-computer
+
+      - name: Build ${{ matrix.asset }}
+        run: |
+          # The zero-byte placeholder keeps non-driver builds green: go:embed
+          # reads whatever is at internal/computer/bin/loopy-computer.
+          mkdir -p dist/release
+          go build -trimpath \
+            -ldflags "-s -w -X main.version=${{ github.ref_name }}" \
+            -o "dist/release/${{ matrix.asset }}" ./cmd/loopy
+
+      - name: Smoke test on a clean directory
+        run: |
+          bin="$RUNNER_TEMP/${{ matrix.asset }}"
+          cp "dist/release/${{ matrix.asset }}" "$bin"
+          chmod +x "$bin"
+          cd "$RUNNER_TEMP"
+          "$bin" --version | grep -F "${{ github.ref_name }}"
+          echo "OK: $bin runs and reports ${{ github.ref_name }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: dist/release/${{ matrix.asset }}
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Checksums
+        run: |
+          cd artifacts
+          sha256sum loopy-* > SHA256SUMS
+          cat SHA256SUMS
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            artifacts/loopy-* \
+            artifacts/SHA256SUMS \
+            install.sh \
+            --title "${{ github.ref_name }}" \
+            --generate-notes

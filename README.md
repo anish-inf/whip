@@ -5,19 +5,21 @@ tool-use loop (bash / read / write / edit), and provider-routable models.
 
 ## Install
 
-Requires Go ≥ 1.27. Install straight from the repo in one command:
+Prebuilt binaries (Linux/macOS, x64/arm64) from GitHub Releases — checksum-verified:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/context-labs/loopy/main/install.sh | sh
+```
+
+The script downloads the release asset for your platform, verifies it against the published `SHA256SUMS`, and drops `loopy` into the first writable directory on your `PATH`. Pin a version with `LOOPY_VERSION=v0.1.0`, force the install dir with `LOOPY_BIN_DIR`.
+
+From source instead (requires Go ≥ 1.27; macOS arm64 builds also embed the computer-use Swift helper via `task driver`):
 
 ```sh
 go install github.com/context-labs/loopy/cmd/loopy@latest
 ```
 
-or, if you prefer curl-pipe-to-sh:
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/context-labs/loopy/main/scripts/install.sh | sh
-```
-
-Both drop `loopy` into `~/go/bin`. From a cloned repo, `task install` does the same with the version stamped from git.
+From a cloned repo, `task install` does the same with the version stamped from git.
 
 ## Setup (with inference.net)
 
