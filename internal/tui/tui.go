@@ -593,6 +593,15 @@ func (m *model) resume(id string) error {
 	m.goal = meta.Goal
 	m.goalRounds = 0
 	m.append(dimStyle.Render(fmt.Sprintf("resumed %s · %s · %s @ %s", meta.ID, meta.Title, m.modelName, m.provName)))
+	interrupted := 0
+	for _, msg := range msgs {
+		if msg.Role == "tool" && strings.HasPrefix(msg.Content, "Error: tool call interrupted") {
+			interrupted++
+		}
+	}
+	if interrupted > 0 {
+		m.append(dimStyle.Render(fmt.Sprintf("⚠ %d tool call(s) were interrupted when this session last ended; the model knows and can retry them.", interrupted)))
+	}
 	if m.goal != "" {
 		m.append(dimStyle.Render("◎ goal restored — /goal resume to keep working on it"))
 	}
@@ -620,6 +629,13 @@ func (m *model) seedTranscript(msgs []llm.Message, base int) {
 			}
 			for _, tc := range msg.ToolCalls {
 				m.blocks = append(m.blocks, block{kind: blockText, text: toolStyle.Render("⚒ "+tc.Function.Name+" ") + dimStyle.Render(tc.Function.Arguments)})
+			}
+		case "tool":
+			// Synthetic results synthesized at load for interrupted calls get
+			// an inline row so the user sees what the model sees; real tool
+			// results stay folded under their assistant block.
+			if strings.HasPrefix(msg.Content, "Error: tool call interrupted") {
+				m.blocks = append(m.blocks, block{kind: blockText, text: errStyle.Render("⚒ "+msg.Name+" ") + dimStyle.Render("— interrupted: session ended before a result was recorded")})
 			}
 		}
 		for len(m.msgBlock) <= base+i {
@@ -1482,7 +1498,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil && !canceled {
 			m.append(errStyle.Render("error: " + msg.err.Error()))
 		} else if canceled {
-			m.append(dimStyle.Render("(interrupted)"))
+			m.append(dimStyle.Render("(interrupted — any running tool calls will be recorded as interrupted; loopy can retry them next turn)"))
 		}
 		m.persist()
 		// codex-style follow-up: send queued messages one turn at a time;
