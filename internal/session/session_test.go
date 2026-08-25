@@ -366,3 +366,90 @@ func TestLoadSynthesizesDanglingToolResults(t *testing.T) {
 		t.Fatalf("answered result changed: %+v", got[3])
 	}
 }
+
+// Compaction is an event, not a rewrite: the raw log survives, Load derives
+// the compacted view, and a bad compaction can be deleted and retried.
+func TestCompactionEvent(t *testing.T) {
+	st, err := Open(filepath.Join(t.TempDir(), "s.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	id, _ := st.Create("/tmp", "m", "p")
+	msgs := []llm.Message{
+		{Role: "system", Content: "sys"},
+		{Role: "user", Content: "q1"},
+		{Role: "assistant", Content: "a1"},
+		{Role: "user", Content: "q2"},
+		{Role: "assistant", Content: "a2"},
+		{Role: "user", Content: "q3"},
+		{Role: "assistant", Content: "a3"},
+	}
+	if err := st.Save(id, 0, msgs, "m", "p"); err != nil {
+		t.Fatal(err)
+	}
+	rawBefore := len(st.RawMessages(id))
+
+	// compact: fold q1/a1/q2 into a summary, keep the tail from seq 4
+	if err := st.RecordCompaction(id, 4, "q1/q2 were about testing"); err != nil {
+		t.Fatal(err)
+	}
+
+	// the raw log is untouched
+	if got := len(st.RawMessages(id)); got != rawBefore {
+		t.Fatalf("raw log must survive compaction: %d → %d", rawBefore, got)
+	}
+
+	// Load derives the view: system + summary + tail from cutoff
+	// (raw: sys q1 a1 q2 a2 q3 a3; cutoff 4 keeps a2 q3 a3)
+	_, got, err := st.Load(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantRoles := []string{"system", "system", "assistant", "user", "assistant"}
+	if len(got) != len(wantRoles) {
+		t.Fatalf("derived view: %d messages, want %d: %+v", len(got), len(wantRoles), got)
+	}
+	for i, role := range wantRoles {
+		if got[i].Role != role {
+			t.Fatalf("view message %d: role %q, want %q", i, got[i].Role, role)
+		}
+	}
+	if !strings.Contains(got[1].Content, "q1/q2 were about testing") {
+		t.Fatalf("summary message: %q", got[1].Content)
+	}
+
+	// a later turn appends new rows to the raw log (the TUI only ever saves
+	// the compacted in-memory history's NEW tail, which is raw rows)
+	if err := st.Save(id, 7, []llm.Message{
+		{}, {}, {}, {}, {}, {}, {}, // placeholder rows 0..6 (already stored)
+		{Role: "user", Content: "q4"},
+		{Role: "assistant", Content: "a4"},
+	}, "m", "p"); err != nil {
+		t.Fatal(err)
+	}
+	if raw := st.RawMessages(id); len(raw) != 9 {
+		t.Fatalf("post-compaction save should append, not rewrite: %d raw rows", len(raw))
+	}
+	// the view still holds (cutoff still points at the raw boundary)
+	_, got, _ = st.Load(id)
+	if len(got) != 7 || got[2].Content != "a2" || got[6].Content != "a4" {
+		t.Fatalf("view after save: %+v", got)
+	}
+
+	// the event is inspectable
+	events := st.Compactions(id)
+	if len(events) != 1 || events[0].Cutoff != 4 || events[0].Summary != "q1/q2 were about testing" {
+		t.Fatalf("compaction events: %+v", events)
+	}
+
+	// retry: delete the bad event, the raw log loads verbatim again
+	if err := st.DeleteCompaction(id, 1); err != nil {
+		t.Fatal(err)
+	}
+	_, got, _ = st.Load(id)
+	if len(got) != 9 || got[1].Content != "q1" || got[8].Content != "a4" {
+		t.Fatalf("after deleting the event, raw history should load: %+v", got)
+	}
+}

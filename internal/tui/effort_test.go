@@ -262,9 +262,9 @@ func TestResumeRestoresUsage(t *testing.T) {
 
 	// new spend accumulates on top of the restored totals…
 	m.agent.AddUsage(llm.Usage{PromptTokens: 3000, CompletionTokens: 500})
-	// …and persists: the stored row is absolute, so compaction's ClearMessages
-	// rewrite can't zero it
-	m.persistRewrite()
+	// …and persists: the stored row is absolute, so a compaction (now a
+	// recorded event, no rewrite) can't zero it
+	m.persist()
 	meta, _, _ := st.Load(id)
 	if meta.UsageIn != 15000 || meta.UsageOut != 2000 {
 		t.Fatalf("persist should store cumulative totals, got in=%d out=%d", meta.UsageIn, meta.UsageOut)

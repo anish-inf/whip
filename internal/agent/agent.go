@@ -22,6 +22,7 @@ type Events struct {
 	OnToolEnd   func(name string, result string) // a tool call finished
 	OnSteer     func(text string)                // a steered message was injected
 	OnCompact   func(took, kept int)             // context was auto-compacted (messages removed/kept)
+	OnCompacted func(summary string, cutoff int) // a compaction ran; record it (raw log survives)
 	OnUsage     func(u llm.Usage)                // a request reported its token usage
 }
 
@@ -303,7 +304,8 @@ func (a *Agent) turn(ctx context.Context, input string, parts []llm.ContentPart,
 			if !a.compacted && llm.IsContextLimit(err) && ctx.Err() == nil {
 				a.compacted = true
 				took := len(a.Messages)
-				if cerr := a.compact(ctx); cerr != nil {
+				sum, cutoff, cerr := a.compact(ctx)
+				if cerr != nil {
 					// restore the guard on hard errors so a manual /compact
 					// can still attempt a compaction for the next turn
 					a.compacted = false
@@ -311,6 +313,9 @@ func (a *Agent) turn(ctx context.Context, input string, parts []llm.ContentPart,
 				}
 				if ev.OnCompact != nil {
 					ev.OnCompact(took-len(a.Messages), len(a.Messages))
+				}
+				if ev.OnCompacted != nil {
+					ev.OnCompacted(sum, cutoff)
 				}
 				continue // retry the (now-smaller) request
 			}
@@ -464,7 +469,8 @@ func (a *Agent) maybeCompact(ctx context.Context, ev Events) error {
 		return nil
 	}
 	took := len(a.Messages)
-	if err := a.compact(ctx); err != nil {
+	sum, cutoff, err := a.compact(ctx)
+	if err != nil {
 		if err.Error() == "not enough history to compact" {
 			return nil // too little history to fold; rely on the reactive retry
 		}
@@ -472,6 +478,9 @@ func (a *Agent) maybeCompact(ctx context.Context, ev Events) error {
 	}
 	if ev.OnCompact != nil {
 		ev.OnCompact(took-len(a.Messages), len(a.Messages))
+	}
+	if ev.OnCompacted != nil {
+		ev.OnCompacted(sum, cutoff)
 	}
 	return nil
 }
@@ -500,9 +509,13 @@ func EstimateTokens(msgs []llm.Message) int {
 // on the conversation's own client and model — and stores the summary as a
 // system-role message (it must carry no tool_call IDs that the kept tail
 // would orphan).
-func (a *Agent) compact(ctx context.Context) error {
+//
+// It returns the summary text and the cutoff (the index in the pre-compaction
+// Messages the summary replaces, i.e. where the kept tail began). The caller
+// records those as a compaction event so the raw log survives on disk.
+func (a *Agent) compact(ctx context.Context) (summary string, cutoff int, err error) {
 	if len(a.Messages) <= compactKeepBack+2 { // system + ≥1 user + tail: nothing to fold
-		return errors.New("not enough history to compact")
+		return "", 0, errors.New("not enough history to compact")
 	}
 	const sysIdx = 0
 	sysPrompt := a.Messages[sysIdx]
@@ -527,7 +540,7 @@ func (a *Agent) compact(ctx context.Context) error {
 	if mdl == "" {
 		mdl = a.Model
 	}
-	summary, usage, err := cli.Complete(ctx, llm.Request{
+	sum, usage, cerr := cli.Complete(ctx, llm.Request{
 		Model:     mdl,
 		MaxTokens: 1024,
 		Messages: []llm.Message{
@@ -536,16 +549,17 @@ func (a *Agent) compact(ctx context.Context) error {
 		},
 	})
 	a.AddUsage(usage) // the summary call is session spend too
-	if err != nil {
-		return fmt.Errorf("compaction summary failed: %w", err)
+	if cerr != nil {
+		return "", 0, fmt.Errorf("compaction summary failed: %w", cerr)
 	}
+	summary = strings.TrimSpace(sum)
 	kept := append([]llm.Message(nil), tail...)
 	a.msgsMu.Lock()
 	a.Messages = append(append([]llm.Message{}, sysPrompt,
-		llm.Message{Role: "system", Content: "Summary of the conversation so far:\n\n" + strings.TrimSpace(summary)},
+		llm.Message{Role: "system", Content: "Summary of the conversation so far:\n\n" + summary},
 	), kept...)
 	a.msgsMu.Unlock()
-	return nil
+	return summary, tailStart, nil
 }
 
 // buildSummaryPrompt renders the unsummarized turns as a transcript the model
@@ -638,11 +652,15 @@ func truncateField(s string, n int) string {
 // OnCompact and reports whether compaction ran (false when there's too
 // little history). It is safe to call while a turn is not in flight.
 func (a *Agent) ManualCompact(ctx context.Context, ev Events) error {
-	if err := a.compact(ctx); err != nil {
+	sum, cutoff, err := a.compact(ctx)
+	if err != nil {
 		return err
 	}
 	if ev.OnCompact != nil {
 		ev.OnCompact(0, len(a.Messages))
+	}
+	if ev.OnCompacted != nil {
+		ev.OnCompacted(sum, cutoff)
 	}
 	return nil
 }

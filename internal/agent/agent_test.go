@@ -634,7 +634,7 @@ func TestCompactUsesCompactModel(t *testing.T) {
 func TestCompactTooLittleHistory(t *testing.T) {
 	ag := New(llm.New("http://unused", "k"), "m", 100, "sys")
 	ag.Messages = append(ag.Messages, llm.Message{Role: "user", Content: "hi"})
-	if err := ag.compact(context.Background()); err == nil {
+	if _, _, err := ag.compact(context.Background()); err == nil {
 		t.Fatal("expected error compacting a tiny history")
 	}
 }
@@ -660,7 +660,7 @@ func TestCompactKeepsToolCallPair(t *testing.T) {
 		}
 	}
 	before := len(ag.Messages)
-	if err := ag.compact(context.Background()); err != nil {
+	if _, _, err := ag.compact(context.Background()); err != nil {
 		t.Fatalf("compact: %v", err)
 	}
 	if len(ag.Messages) >= before {

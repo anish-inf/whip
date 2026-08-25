@@ -66,6 +66,8 @@ type goalFromContextMsg struct {
 
 type compactMsg struct {
 	took, kept int // messages removed / kept after compaction
+	summary    string
+	cutoff     int // index in the pre-compaction history the summary replaces
 	err        error
 }
 type turnDoneMsg struct {
@@ -716,27 +718,6 @@ func (m *model) persist() {
 		return
 	}
 	m.saved = len(m.agent.Messages)
-}
-
-// persistRewrite clears the stored message rows and re-saves the entire
-// compacted history. Compaction reorders/shrinks Messages (old rows under
-// different seq numbers), so the incremental Save path would duplicate them.
-func (m *model) persistRewrite() {
-	if m.store == nil {
-		return
-	}
-	if m.sessionID != "" {
-		if err := m.store.ClearMessages(m.sessionID); err != nil {
-			m.append(errStyle.Render("session save failed: " + err.Error()))
-			return
-		}
-		// Compaction re-seqs messages, so snapshot keys no longer map to
-		// turns — drop them rather than restore the wrong files later.
-		m.snapshots = nil
-		m.store.ClearSnapshots(m.sessionID)
-	}
-	m.saved = 1 // re-save everything after the system prompt
-	m.persist()
 }
 
 // setTheme switches the color scheme ("light"/"dark"/"auto") live and
@@ -1565,18 +1546,32 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case compactMsg:
-		// compaction lands between turns: append an inline note and rewrite
-		// the session record so the stored history matches the memory
+		// compaction lands between turns: record it as an event and note it
+		// inline. The raw message log stays on disk — Load derives the
+		// compacted view from the event, so a bad summary is inspectable and
+		// retryable (/compact retry). A live turn fires two compactMsgs per
+		// compaction (OnCompact's counts, then OnCompacted's summary+cutoff);
+		// only the one carrying the summary records/notes.
 		m.flushThink()
 		m.flushCurrent()
 		switch {
 		case msg.err != nil:
 			m.append(errStyle.Render("compact failed: " + msg.err.Error()))
+		case msg.summary == "":
+			// counts-only path (no summary means no event was produced);
+			// nothing to record
 		default:
-			m.append(dimStyle.Render(fmt.Sprintf("◎ compacted — summarized %d msgs, %d kept", msg.took, msg.kept)))
-			m.future = nil     // compaction rewrote history; stale redo entries would resurrect it
-			m.msgBlock = nil   // indices no longer match; rebuilt as blocks stream in
-			m.persistRewrite() // reset the stored history to the compacted form
+			if m.store != nil && m.sessionID != "" {
+				// the agent's cutoff is in compacted coordinates; store the raw
+				// seq so Load never double-folds a summary
+				if err := m.store.RecordCompaction(m.sessionID, m.rawCutoff(msg.cutoff), msg.summary); err != nil {
+					config.LogEvent("session.compact", "record failed: "+err.Error())
+				}
+			}
+			m.append(dimStyle.Render(fmt.Sprintf("◎ compacted — summarized %d msgs, %d kept · raw history preserved", msg.took, msg.kept)))
+			m.future = nil   // compaction rewrote history; stale redo entries would resurrect it
+			m.msgBlock = nil // indices no longer match; rebuilt as blocks stream in
+			m.persist()      // append the new (compacted) rows; raw rows stay
 		}
 		return m, nil
 
@@ -2809,7 +2804,7 @@ func (m *model) submitTurn(text string, authored bool) (tea.Model, tea.Cmd) {
 				flush()
 				send(steeredMsg(s))
 			},
-			OnCompact: func(took, kept int) { send(compactMsg{took: took, kept: kept}) },
+			OnCompacted: func(sum string, cutoff int) { send(compactMsg{summary: sum, cutoff: cutoff}) },
 			OnUsage:   func(u llm.Usage) { send(usageMsg(u)) },
 		}
 		var final string
@@ -2886,6 +2881,14 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 		return m, m.openMe()
 	case "/compact":
 		if len(fields) > 1 {
+			switch fields[1] {
+			case "retry":
+				m.compactRetry()
+				return m, nil
+			case "log":
+				m.compactLog()
+				return m, nil
+			}
 			m.compactCommand(fields[1:])
 			return m, nil
 		}
@@ -2901,9 +2904,13 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 		m.cancel = cancel
 		go func() {
 			took := len(ag.Messages)
-			err := ag.ManualCompact(ctx, agent.Events{})
+			var summary string
+			var cutoff int
+			err := ag.ManualCompact(ctx, agent.Events{
+				OnCompacted: func(s string, c int) { summary, cutoff = s, c },
+			})
 			if p != nil { // nil in headless tests; compaction still ran
-				p.Send(compactMsg{took: took - len(ag.Messages), kept: len(ag.Messages), err: err})
+				p.Send(compactMsg{took: took - len(ag.Messages), kept: len(ag.Messages), summary: summary, cutoff: cutoff, err: err})
 				p.Send(turnDoneMsg{}) // clear busy state
 			}
 		}()
@@ -3108,7 +3115,7 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 		m.append(m.doctorReport())
 	case "/help":
 		m.append(dimStyle.Render(
-			"/model <name> [provider] — switch model\n/context-doctor — audit what a fresh session injects (skills, MCP, tool schemas) and its token cost\n/mcp [name] [reconnect|enable|disable] — MCP servers: status, reconnect, toggle\n/compact [model] [provider]|off — compact now, or pick the compaction model (off restores the default); compaction level: ctrl+p › Compaction level\n/mouse — toggle mouse capture (on = wheel scroll + clicks, drag to copy)\n/theme [light|dark|auto] — color scheme (bare opens the switcher)\n/tasks [id] — background subagents: focus the dock, or open one subagent's live view (ctrl+t toggles dock focus)\n/resume [id] — resume a previous session\n/fork [name] — copy this conversation into a new session (pick a point in the rewind picker with f)\n/rename [title] — retitle this session\n/goal <text> — keep working until the goal is met (resume | clear | rounds <n>|default [--global])\n/goal-from-context [n] — formulate a goal from the last n messages (default 8) and work until it's met\n/clear — reset conversation\n/memory [n] [session] — saved memories: list what's injected each turn, mark entry n done\n/me — edit your standing instructions (~/.loopy/me.md) in $EDITOR\n/cd [dir] — change working directory (bare prints it)\n/pwd — print working directory\n!<cmd> — run a shell command locally; output lands in the transcript and the conversation\n/quit — exit\ntab — complete · ctrl+t — focus the subagents dock (↑/↓ select, enter opens, esc backs out) · ctrl+o — toggle thinking tokens · ctrl+e — expand the last tool result · ctrl+j / shift+enter — newline · ctrl+v — paste image · esc — interrupt the agent · esc esc (idle) — rewind the conversation (↑/↓ browse, enter rewinds, f forks) · while busy with queued messages: ↑/↓ select, del removes · PgUp/PgDn — scroll · wheel — scroll · drag — select/copy text · ctrl+c ctrl+c — quit"))
+			"/model <name> [provider] — switch model\n/context-doctor — audit what a fresh session injects (skills, MCP, tool schemas) and its token cost\n/mcp [name] [reconnect|enable|disable] — MCP servers: status, reconnect, toggle\n/compact [model] [provider]|off — compact now, or pick the compaction model (off restores the default); retry undoes the last compaction, log lists them; compaction level: ctrl+p › Compaction level\n/mouse — toggle mouse capture (on = wheel scroll + clicks, drag to copy)\n/theme [light|dark|auto] — color scheme (bare opens the switcher)\n/tasks [id] — background subagents: focus the dock, or open one subagent's live view (ctrl+t toggles dock focus)\n/resume [id] — resume a previous session\n/fork [name] — copy this conversation into a new session (pick a point in the rewind picker with f)\n/rename [title] — retitle this session\n/goal <text> — keep working until the goal is met (resume | clear | rounds <n>|default [--global])\n/goal-from-context [n] — formulate a goal from the last n messages (default 8) and work until it's met\n/clear — reset conversation\n/memory [n] [session] — saved memories: list what's injected each turn, mark entry n done\n/me — edit your standing instructions (~/.loopy/me.md) in $EDITOR\n/cd [dir] — change working directory (bare prints it)\n/pwd — print working directory\n!<cmd> — run a shell command locally; output lands in the transcript and the conversation\n/quit — exit\ntab — complete · ctrl+t — focus the subagents dock (↑/↓ select, enter opens, esc backs out) · ctrl+o — toggle thinking tokens · ctrl+e — expand the last tool result · ctrl+j / shift+enter — newline · ctrl+v — paste image · esc — interrupt the agent · esc esc (idle) — rewind the conversation (↑/↓ browse, enter rewinds, f forks) · while busy with queued messages: ↑/↓ select, del removes · PgUp/PgDn — scroll · wheel — scroll · drag — select/copy text · ctrl+c ctrl+c — quit"))
 	case "/model":
 		if len(fields) < 2 {
 			m.openModelPicker()

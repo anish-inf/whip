@@ -55,6 +55,18 @@ CREATE TABLE IF NOT EXISTS snapshots (
 	ref        TEXT NOT NULL,
 	created_at TEXT NOT NULL,
 	PRIMARY KEY (session_id, seq)
+);
+-- Compaction events: append-only. Each row records a compaction as summary +
+-- cutoff (the raw-log seq it folded). The messages table is never rewritten
+-- by a compaction — Load derives the compacted view from the latest event,
+-- so a bad compaction is inspectable and retryable.
+CREATE TABLE IF NOT EXISTS compactions (
+	session_id TEXT NOT NULL REFERENCES sessions(id),
+	seq        INTEGER NOT NULL, -- compaction generation, 1-based
+	cutoff     INTEGER NOT NULL, -- raw-log seq the summary replaces (1..cutoff-1)
+	summary    TEXT NOT NULL,
+	created_at TEXT NOT NULL,
+	PRIMARY KEY (session_id, seq)
 );`
 
 // extraColumns are added idempotently after the base schema: SQLite's
@@ -237,6 +249,12 @@ func (s *Store) Save(id string, from int, msgs []llm.Message, model, provider st
 	}
 	defer tx.Rollback()
 	for i := from; i < len(msgs); i++ {
+		// Placeholder rows (zero-value messages the caller never meant to
+		// write, e.g. padding before a post-compaction tail) must not
+		// clobber the raw log — skip them.
+		if msgs[i].Role == "" {
+			continue
+		}
 		data, err := json.Marshal(msgs[i])
 		if err != nil {
 			return err
@@ -301,7 +319,48 @@ func (s *Store) Load(idOrPrefix string) (Meta, []llm.Message, error) {
 		}
 		msgs = append(msgs, m)
 	}
-	return meta, answerDanglingToolCalls(msgs), mrows.Err()
+	return meta, answerDanglingToolCalls(applyCompaction(s.db, meta.ID, msgs)), mrows.Err()
+}
+
+// applyCompaction derives the compacted view from the raw log: the latest
+// compaction event's summary replaces raw messages [1, cutoff), keeping the
+// system prompt (seq 0) and the raw tail. "Raw" matters: a stored row that is
+// itself a summary (system role past index 0) is a *derived* row saved after
+// a compaction — folding it again would nest summaries — so the cutoff only
+// ever applies to non-system rows. No event → the log loads verbatim. This is
+// what makes a compaction non-destructive: the event is metadata, the raw
+// rows are the history.
+func applyCompaction(db *sql.DB, sessionID string, msgs []llm.Message) []llm.Message {
+	var cutoff int
+	var summary string
+	err := db.QueryRow(`SELECT cutoff, summary FROM compactions WHERE session_id=? ORDER BY seq DESC LIMIT 1`,
+		sessionID).Scan(&cutoff, &summary)
+	if err != nil || cutoff <= 1 || cutoff > len(msgs) {
+		return msgs // no event, or one that post-dates the raw log
+	}
+	// the fold point is the first raw (non-system) row at or past cutoff
+	fold := len(msgs)
+	for i := cutoff; i < len(msgs); i++ {
+		if msgs[i].Role != "system" {
+			fold = i
+			break
+		}
+	}
+	out := make([]llm.Message, 0, len(msgs))
+	out = append(out, msgs[0],
+		llm.Message{Role: "system", Content: "Summary of the conversation so far:\n\n" + summary})
+	// keep the last derived summary before the fold (a second compaction's
+	// saved row — it summarizes history the new summary doesn't reach)
+	var prior []llm.Message
+	for i := 1; i < fold; i++ {
+		if msgs[i].Role == "system" {
+			prior = append(prior, msgs[i])
+		}
+	}
+	if len(prior) > 0 {
+		out = append(out, prior[len(prior)-1])
+	}
+	return append(out, msgs[fold:]...)
 }
 
 // answerDanglingToolCalls appends a synthetic error result for every
@@ -481,6 +540,67 @@ func (s *Store) Snapshots(id string) map[int]string {
 func (s *Store) ClearSnapshots(id string) error {
 	_, err := s.db.Exec(`DELETE FROM snapshots WHERE session_id=?`, id)
 	return err
+}
+
+// Compaction is one recorded compaction event.
+type Compaction struct {
+	Seq     int    // generation (1-based)
+	Cutoff  int    // raw-log seq the summary replaces
+	Summary string // the generated summary text
+}
+
+// RecordCompaction appends a compaction event. The raw messages stay.
+func (s *Store) RecordCompaction(id string, cutoff int, summary string) error {
+	_, err := s.db.Exec(`INSERT INTO compactions (session_id, seq, cutoff, summary, created_at)
+		SELECT ?, COALESCE(MAX(seq),0)+1, ?, ?, ? FROM compactions WHERE session_id=?`,
+		id, cutoff, summary, now(), id)
+	return err
+}
+
+// Compactions returns a session's compaction events, oldest first.
+func (s *Store) Compactions(id string) []Compaction {
+	rows, err := s.db.Query(`SELECT seq, cutoff, summary FROM compactions WHERE session_id=? ORDER BY seq`, id)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var out []Compaction
+	for rows.Next() {
+		var c Compaction
+		if rows.Scan(&c.Seq, &c.Cutoff, &c.Summary) == nil {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// DeleteCompaction removes one compaction event by generation (retry drops
+// the bad event before re-compacting from the raw log).
+func (s *Store) DeleteCompaction(id string, seq int) error {
+	_, err := s.db.Exec(`DELETE FROM compactions WHERE session_id=? AND seq=?`, id, seq)
+	return err
+}
+
+// RawMessages returns the full stored log (no compaction view applied) —
+// the inspection/retry surface for compactions.
+func (s *Store) RawMessages(id string) []llm.Message {
+	rows, err := s.db.Query(`SELECT content FROM messages WHERE session_id=? ORDER BY seq`, id)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var msgs []llm.Message
+	for rows.Next() {
+		var data string
+		if rows.Scan(&data) != nil {
+			continue
+		}
+		var m llm.Message
+		if json.Unmarshal([]byte(data), &m) == nil {
+			msgs = append(msgs, m)
+		}
+	}
+	return msgs
 }
 
 // SetTitle retitles a session (/rename).
