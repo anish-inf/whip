@@ -41,6 +41,9 @@ Operating rules:
 - Git hygiene: review the staged diff for secrets before committing, never run git add . — stage only the files you intend — and never force-push.
 
 Current working directory: %s`, wd)
+	if extra := config.MeInstructions(); extra != "" {
+		prompt += "\n\nStanding instructions from the user (~/.loopy/me.md — treat as user rules):\n" + extra
+	}
 	// the skills block is appended fresh each turn by the TUI, so newly added
 	// skills are picked up without restarting
 	return prompt

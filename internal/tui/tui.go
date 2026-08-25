@@ -1462,6 +1462,16 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.appendRaw(blockTool, msg.result)
 		return m, nil
 
+	case meEditedMsg:
+		if msg.err != nil {
+			m.append(errStyle.Render("/me: editor failed: " + msg.err.Error()))
+		} else if n := len(config.MeInstructions()); n > 0 {
+			m.append(dimStyle.Render("✓ me.md saved — standing instructions updated (" + fmt.Sprint(n) + " chars)"))
+		} else {
+			m.append(dimStyle.Render("me.md saved — no standing instructions set (all comments)"))
+		}
+		return m, nil
+
 	case interactiveStartMsg:
 		// passthrough mode: route keystrokes into the PTY. The output pane is
 		// shown by View(); a fresh toolStartMsg-style banner is appended so the
@@ -2869,6 +2879,8 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 		m.append(dimStyle.Render("(conversation cleared)"))
 	case "/memory":
 		m.memoryCommand(fields[1:])
+	case "/me":
+		return m, m.openMe()
 	case "/compact":
 		if len(fields) > 1 {
 			m.compactCommand(fields[1:])
@@ -3093,7 +3105,7 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 		m.append(m.doctorReport())
 	case "/help":
 		m.append(dimStyle.Render(
-			"/model <name> [provider] — switch model\n/context-doctor — audit what a fresh session injects (skills, MCP, tool schemas) and its token cost\n/mcp [name] [reconnect|enable|disable] — MCP servers: status, reconnect, toggle\n/compact [model] [provider]|off — compact now, or pick the compaction model (off restores the default); compaction level: ctrl+p › Compaction level\n/mouse — toggle mouse capture (on = wheel scroll + clicks, drag to copy)\n/theme [light|dark|auto] — color scheme (bare opens the switcher)\n/tasks [id] — background subagents: focus the dock, or open one subagent's live view (ctrl+t toggles dock focus)\n/resume [id] — resume a previous session\n/fork [name] — copy this conversation into a new session (pick a point in the rewind picker with f)\n/rename [title] — retitle this session\n/goal <text> — keep working until the goal is met (resume | clear | rounds <n>|default [--global])\n/goal-from-context [n] — formulate a goal from the last n messages (default 8) and work until it's met\n/clear — reset conversation\n/memory [n] [session] — saved memories: list what's injected each turn, mark entry n done\n/cd [dir] — change working directory (bare prints it)\n/pwd — print working directory\n!<cmd> — run a shell command locally; output lands in the transcript and the conversation\n/quit — exit\ntab — complete · ctrl+t — focus the subagents dock (↑/↓ select, enter opens, esc backs out) · ctrl+o — toggle thinking tokens · ctrl+e — expand the last tool result · ctrl+j / shift+enter — newline · ctrl+v — paste image · esc — interrupt the agent · esc esc (idle) — rewind the conversation (↑/↓ browse, enter rewinds, f forks) · while busy with queued messages: ↑/↓ select, del removes · PgUp/PgDn — scroll · wheel — scroll · drag — select/copy text · ctrl+c ctrl+c — quit"))
+			"/model <name> [provider] — switch model\n/context-doctor — audit what a fresh session injects (skills, MCP, tool schemas) and its token cost\n/mcp [name] [reconnect|enable|disable] — MCP servers: status, reconnect, toggle\n/compact [model] [provider]|off — compact now, or pick the compaction model (off restores the default); compaction level: ctrl+p › Compaction level\n/mouse — toggle mouse capture (on = wheel scroll + clicks, drag to copy)\n/theme [light|dark|auto] — color scheme (bare opens the switcher)\n/tasks [id] — background subagents: focus the dock, or open one subagent's live view (ctrl+t toggles dock focus)\n/resume [id] — resume a previous session\n/fork [name] — copy this conversation into a new session (pick a point in the rewind picker with f)\n/rename [title] — retitle this session\n/goal <text> — keep working until the goal is met (resume | clear | rounds <n>|default [--global])\n/goal-from-context [n] — formulate a goal from the last n messages (default 8) and work until it's met\n/clear — reset conversation\n/memory [n] [session] — saved memories: list what's injected each turn, mark entry n done\n/me — edit your standing instructions (~/.loopy/me.md) in $EDITOR\n/cd [dir] — change working directory (bare prints it)\n/pwd — print working directory\n!<cmd> — run a shell command locally; output lands in the transcript and the conversation\n/quit — exit\ntab — complete · ctrl+t — focus the subagents dock (↑/↓ select, enter opens, esc backs out) · ctrl+o — toggle thinking tokens · ctrl+e — expand the last tool result · ctrl+j / shift+enter — newline · ctrl+v — paste image · esc — interrupt the agent · esc esc (idle) — rewind the conversation (↑/↓ browse, enter rewinds, f forks) · while busy with queued messages: ↑/↓ select, del removes · PgUp/PgDn — scroll · wheel — scroll · drag — select/copy text · ctrl+c ctrl+c — quit"))
 	case "/model":
 		if len(fields) < 2 {
 			m.openModelPicker()
