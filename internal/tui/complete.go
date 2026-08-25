@@ -25,7 +25,7 @@ var commands = []cand{
 	{"/goal-from-context", "[n] — formulate a goal from the last n messages (default 8) and work until it's done"},
 	{"/help", "Show available commands"},
 	{"/mcp", "[name] [reconnect|enable|disable] — MCP servers: status, reconnect, toggle"},
-	{"/model", "<model> [provider] — switch model"},
+	{"/model", "<model> [provider] — switch model (refresh: pull provider catalogs now)"},
 	{"/mouse", "Toggle mouse capture (off = native terminal selection)"},
 	{"/pwd", "Print working directory"},
 	{"/rename", "[title] — retitle this session"},
@@ -56,8 +56,8 @@ func completions(val string, models, providers, skillCands, efforts []cand) (hea
 	case strings.HasPrefix(val, "/") && len(fields) == 0:
 		cands = filterPrefix(commands, token)
 	case len(fields) == 1 && fields[0] == "/model":
-		cands = filterPrefix(models, token)
-	case len(fields) == 2 && fields[0] == "/model":
+		cands = filterPrefix(append([]cand{{"refresh", "refetch provider model catalogs"}}, models...), token)
+	case len(fields) == 2 && fields[0] == "/model" && fields[1] != "refresh":
 		cands = filterPrefix(providers, token)
 	case len(fields) == 1 && fields[0] == "/effort":
 		cands = filterPrefix(efforts, token)

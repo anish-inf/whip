@@ -83,6 +83,16 @@ func (c Catalog) Pricing(id string) (in, out, cacheRead float64, ok bool) {
 	return 0, 0, 0, false
 }
 
+// Find returns the catalog entry for a model id (nil when unadvertised).
+func (c Catalog) Find(id string) *ModelInfoLite {
+	for i := range c.Models {
+		if c.Models[i].ID == id {
+			return &c.Models[i]
+		}
+	}
+	return nil
+}
+
 func catalogPath() (string, error) {
 	dir, err := Dir()
 	if err != nil {

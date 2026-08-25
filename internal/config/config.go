@@ -363,7 +363,13 @@ func (c *Config) Resolve(model, provider string) (Provider, Model, string, error
 	}
 	m, ok := c.Models[model]
 	if !ok {
-		return Provider{}, Model{}, "", fmt.Errorf("unknown model %q (models: %s)", model, keys(c.Models))
+		// Catalog fallback: a provider-advertised model needs no config entry;
+		// config entries stay authoritative overrides when present.
+		var err error
+		m, provider, err = c.resolveFromCatalog(model, provider)
+		if err != nil {
+			return Provider{}, Model{}, "", err
+		}
 	}
 	if provider == "" {
 		provider = c.DefaultProvider
@@ -380,6 +386,56 @@ func (c *Config) Resolve(model, provider string) (Provider, Model, string, error
 		id = model
 	}
 	return p, m, id, nil
+}
+
+// resolveFromCatalog synthesizes a Model for an id advertised in a provider's
+// cached /models catalog but absent from cfg.Models. Capabilities (context,
+// max output, vision) come from the catalog entry; the provider routing is the
+// catalog's owner. provider may pin the choice ("" scans all providers); when
+// several providers advertise the id and none is pinned, it errors naming the
+// candidates so the user can disambiguate with -p / a provider argument.
+func (c *Config) resolveFromCatalog(model, provider string) (Model, string, error) {
+	type hit struct {
+		prov string
+		mi   *ModelInfoLite
+	}
+	var hits []hit
+	for name, cat := range LoadCatalogs() {
+		if provider != "" && name != provider {
+			continue
+		}
+		if _, ok := c.Providers[name]; !ok {
+			continue // catalog for a provider no longer configured
+		}
+		if mi := cat.Find(model); mi != nil {
+			hits = append(hits, hit{name, mi})
+		}
+	}
+	if len(hits) == 0 {
+		return Model{}, "", fmt.Errorf("unknown model %q (models: %s)", model, keys(c.Models))
+	}
+	if len(hits) > 1 {
+		names := make([]string, len(hits))
+		for i, h := range hits {
+			names[i] = h.prov
+		}
+		return Model{}, "", fmt.Errorf("model %q is advertised by multiple providers (%s); pass a provider to disambiguate (-p / /model %s <provider>)",
+			model, strings.Join(names, ", "), model)
+	}
+	h := hits[0]
+	m := Model{
+		Providers: []string{h.prov},
+		ID:        model,
+		Context:   h.mi.ContextLength,
+		MaxOut:    h.mi.MaxCompletionTokens,
+	}
+	for _, mod := range h.mi.InputModalities {
+		if mod == "image" {
+			m.Vision = true
+			break
+		}
+	}
+	return m, h.prov, nil
 }
 
 func keys[V any](m map[string]V) string {

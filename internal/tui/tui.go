@@ -78,6 +78,7 @@ type turnDoneMsg struct {
 	clean bool   // the turn left the tree clean — snap is worthless, drop it
 }
 type catalogsMsg map[string]config.Catalog // background /models fetch result
+type noticeMsg string                      // dim one-liner appended to the transcript
 type usageMsg llm.Usage                    // one request's token usage
 type quitArmMsg struct{}                   // the idle ctrl+c arm window expired
 type taskUpdateMsg struct{}                // a background subagent started/settled — redraw
@@ -365,7 +366,7 @@ func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string) (s
 	// sudo/ssh-style prompts to the user with a 15s inactivity timeout.
 	m.irunner = newInteractiveRunner(p)
 	tools.InteractiveBash = m.irunner
-	go m.fetchCatalogs()
+	go m.fetchCatalogs(false)
 	go func() { p.Send(cfgSyncTick{}) }() // start the config watcher
 	_, err = p.Run()
 	// The UI has exited (quit, /quit, or a signal). We enabled click/wheel mouse
@@ -482,15 +483,16 @@ func applyTmuxMouseFix() {
 }
 
 // fetchCatalogs refreshes each provider's cached model list in the background
-// and sends the merged result to the UI.
-func (m *model) fetchCatalogs() {
+// and sends the merged result to the UI. force bypasses the 24h TTL
+// (/model refresh) so newly announced models appear immediately.
+func (m *model) fetchCatalogs(force bool) {
 	cats := config.LoadCatalogs()
 	if cats == nil { // defensive; LoadCatalogs already returns non-nil
 		cats = map[string]config.Catalog{}
 	}
 	dirty := false
 	for name, prov := range m.cfg.Providers {
-		if c, ok := cats[name]; ok && !c.Stale() && c.BaseURL == prov.BaseURL {
+		if c, ok := cats[name]; ok && !force && !c.Stale() && c.BaseURL == prov.BaseURL {
 			continue
 		}
 		key := prov.Key()
@@ -524,7 +526,9 @@ func (m *model) fetchCatalogs() {
 	if dirty {
 		_ = config.SaveCatalogs(cats) // best-effort; the TUI still gets the fresh data
 	}
-	m.prog.Send(catalogsMsg(cats))
+	if m.prog != nil { // nil in tests that drive the command dispatch directly
+		m.prog.Send(catalogsMsg(cats))
+	}
 }
 
 // resume replaces the conversation with a stored session.
@@ -1637,6 +1641,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.updateCatalogs(msg)
 		return m, nil
 
+	case noticeMsg:
+		m.append(dimStyle.Render(string(msg)))
+		return m, nil
+
 	case usageMsg:
 		// Turn already folds usage into the agent's session totals (header
 		// reads those); this message just forces a redraw mid-stream.
@@ -2509,6 +2517,13 @@ func (m *model) modelCands() []cand {
 	for name, mdl := range m.cfg.Models {
 		out = append(out, cand{name, "via " + strings.Join(mdl.Providers, ", ")})
 	}
+	// catalog-advertised models are usable without a config entry (catalog
+	// fallback in Resolve); offer them in completion too
+	for _, it := range buildModelItems(m.cfg) {
+		if it.fromCatalog {
+			out = append(out, cand{it.model, "via " + it.provider + " (catalog)"})
+		}
+	}
 	return out
 }
 
@@ -3115,10 +3130,20 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 		m.append(m.doctorReport())
 	case "/help":
 		m.append(dimStyle.Render(
-			"/model <name> [provider] — switch model\n/context-doctor — audit what a fresh session injects (skills, MCP, tool schemas) and its token cost\n/mcp [name] [reconnect|enable|disable] — MCP servers: status, reconnect, toggle\n/compact [model] [provider]|off — compact now, or pick the compaction model (off restores the default); retry undoes the last compaction, log lists them; compaction level: ctrl+p › Compaction level\n/mouse — toggle mouse capture (on = wheel scroll + clicks, drag to copy)\n/theme [light|dark|auto] — color scheme (bare opens the switcher)\n/tasks [id] — background subagents: focus the dock, or open one subagent's live view (ctrl+t toggles dock focus)\n/resume [id] — resume a previous session\n/fork [name] — copy this conversation into a new session (pick a point in the rewind picker with f)\n/rename [title] — retitle this session\n/goal <text> — keep working until the goal is met (resume | clear | rounds <n>|default [--global])\n/goal-from-context [n] — formulate a goal from the last n messages (default 8) and work until it's met\n/clear — reset conversation\n/memory [n] [session] — saved memories: list what's injected each turn, mark entry n done\n/me — edit your standing instructions (~/.loopy/me.md) in $EDITOR\n/cd [dir] — change working directory (bare prints it)\n/pwd — print working directory\n!<cmd> — run a shell command locally; output lands in the transcript and the conversation\n/quit — exit\ntab — complete · ctrl+t — focus the subagents dock (↑/↓ select, enter opens, esc backs out) · ctrl+o — toggle thinking tokens · ctrl+e — expand the last tool result · ctrl+j / shift+enter — newline · ctrl+v — paste image · esc — interrupt the agent · esc esc (idle) — rewind the conversation (↑/↓ browse, enter rewinds, f forks) · while busy with queued messages: ↑/↓ select, del removes · PgUp/PgDn — scroll · wheel — scroll · drag — select/copy text · ctrl+c ctrl+c — quit"))
+			"/model <name> [provider] — switch model (any provider-catalog model works; refresh pulls new announcements)\n/context-doctor — audit what a fresh session injects (skills, MCP, tool schemas) and its token cost\n/mcp [name] [reconnect|enable|disable] — MCP servers: status, reconnect, toggle\n/compact [model] [provider]|off — compact now, or pick the compaction model (off restores the default); retry undoes the last compaction, log lists them; compaction level: ctrl+p › Compaction level\n/mouse — toggle mouse capture (on = wheel scroll + clicks, drag to copy)\n/theme [light|dark|auto] — color scheme (bare opens the switcher)\n/tasks [id] — background subagents: focus the dock, or open one subagent's live view (ctrl+t toggles dock focus)\n/resume [id] — resume a previous session\n/fork [name] — copy this conversation into a new session (pick a point in the rewind picker with f)\n/rename [title] — retitle this session\n/goal <text> — keep working until the goal is met (resume | clear | rounds <n>|default [--global])\n/goal-from-context [n] — formulate a goal from the last n messages (default 8) and work until it's met\n/clear — reset conversation\n/memory [n] [session] — saved memories: list what's injected each turn, mark entry n done\n/me — edit your standing instructions (~/.loopy/me.md) in $EDITOR\n/cd [dir] — change working directory (bare prints it)\n/pwd — print working directory\n!<cmd> — run a shell command locally; output lands in the transcript and the conversation\n/quit — exit\ntab — complete · ctrl+t — focus the subagents dock (↑/↓ select, enter opens, esc backs out) · ctrl+o — toggle thinking tokens · ctrl+e — expand the last tool result · ctrl+j / shift+enter — newline · ctrl+v — paste image · esc — interrupt the agent · esc esc (idle) — rewind the conversation (↑/↓ browse, enter rewinds, f forks) · while busy with queued messages: ↑/↓ select, del removes · PgUp/PgDn — scroll · wheel — scroll · drag — select/copy text · ctrl+c ctrl+c — quit"))
 	case "/model":
 		if len(fields) < 2 {
 			m.openModelPicker()
+			break
+		}
+		if fields[1] == "refresh" {
+			m.append(dimStyle.Render("refreshing model catalogs…"))
+			go func() {
+				m.fetchCatalogs(true)
+				if m.prog != nil {
+					m.prog.Send(noticeMsg("model catalogs refreshed — /model shows newly announced models"))
+				}
+			}()
 			break
 		}
 		prov := ""

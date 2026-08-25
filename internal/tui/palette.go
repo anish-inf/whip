@@ -798,7 +798,11 @@ func (m *model) panelView(pp *ppanel) string {
 		lastModel := ""
 		for i, it := range pp.items {
 			if it.model != lastModel {
-				b.WriteString(" " + it.model + "\n")
+				heading := " " + it.model
+				if it.fromCatalog {
+					heading = dimStyle.Render(heading + dimNew)
+				}
+				b.WriteString(heading + "\n")
 				lastModel = it.model
 			}
 			cur := ""
@@ -806,6 +810,9 @@ func (m *model) panelView(pp *ppanel) string {
 				cur = dimStyle.Render("  (current)")
 			}
 			line := fmt.Sprintf("%-12s  ", it.provider) + dimStyle.Render(it.url)
+			if it.fromCatalog {
+				line = dimStyle.Render(line)
+			}
 			if i == pp.idx {
 				b.WriteString(botStyle.Render("   → "+line) + cur + "\n")
 			} else {

@@ -86,6 +86,15 @@ overrides it when advertised. `maxOut` (optional) caps **output** tokens; 0 uses
 the provider's `max_completion_tokens`, else `context`. The old `maxTokens` field
 still parses (it always meant the context window) but is superseded by `context`.
 
+**Catalog models need no config entry.** loopy caches each provider's
+`GET /models` (24h TTL in `~/.loopy/models.json`), and any advertised model is
+usable directly — `loopy -m deepseek-v4-pro` or `/model deepseek-v4-pro` — with
+context, vision, effort levels, and pricing taken from the catalog. Config
+entries are authoritative overrides when present. Newly announced models appear
+in the `/model` picker (dim, marked `(new)`) after `/model refresh` or the next
+TTL cycle. If several providers advertise the same id, pass a provider
+(`-p` / `/model <name> <provider>`) to disambiguate.
+
 Any OpenAI-compatible endpoint works as a provider. Key resolution:
 `apiKeyEnv` env var → `apiKey` literal → for api.inference.net, the key stored
 in `~/.inf/config.json` by the `inf` CLI.
