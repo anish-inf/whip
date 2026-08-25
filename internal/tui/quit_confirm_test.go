@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/context-labs/loopy/internal/agent"
+	"github.com/context-labs/whip/internal/agent"
 )
 
 // idleModel builds a model that is not busy (no agent turn running).

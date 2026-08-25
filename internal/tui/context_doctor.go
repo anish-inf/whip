@@ -6,9 +6,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/context-labs/loopy/internal/agent"
-	"github.com/context-labs/loopy/internal/mcp"
-	"github.com/context-labs/loopy/internal/skills"
+	"github.com/context-labs/whip/internal/agent"
+	"github.com/context-labs/whip/internal/mcp"
+	"github.com/context-labs/whip/internal/skills"
 )
 
 // /context-doctor — audit what a FRESH session injects before

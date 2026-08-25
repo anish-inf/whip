@@ -1,4 +1,4 @@
-// Package lsp implements loopy's Language Server Protocol support: a small
+// Package lsp implements whip's Language Server Protocol support: a small
 // stdlib-only LSP client over stdio that feeds compiler/linter diagnostics
 // back into the model's tool results after write/edit calls.
 //

@@ -27,29 +27,29 @@ func TestLightThemeRendersDarkText(t *testing.T) {
 	}
 }
 
-// LOOPY_THEME overrides detection.
+// WHIP_THEME overrides detection.
 func TestThemeOverride(t *testing.T) {
-	t.Setenv("LOOPY_THEME", "light")
+	t.Setenv("WHIP_THEME", "light")
 	detectColorScheme()
 	mdMu.Lock()
 	light := mdLight
 	mdMu.Unlock()
 	if !light {
-		t.Fatal("LOOPY_THEME=light should select the light style")
+		t.Fatal("WHIP_THEME=light should select the light style")
 	}
-	t.Setenv("LOOPY_THEME", "dark")
+	t.Setenv("WHIP_THEME", "dark")
 	detectColorScheme()
 	mdMu.Lock()
 	light = mdLight
 	mdMu.Unlock()
 	if light {
-		t.Fatal("LOOPY_THEME=dark should select the dark style")
+		t.Fatal("WHIP_THEME=dark should select the dark style")
 	}
 }
 
-// COLORFGBG is honored when LOOPY_THEME is unset.
+// COLORFGBG is honored when WHIP_THEME is unset.
 func TestColorFGBGDetection(t *testing.T) {
-	t.Setenv("LOOPY_THEME", "")
+	t.Setenv("WHIP_THEME", "")
 	t.Setenv("COLORFGBG", "0;15") // dark fg on white bg
 	detectColorScheme()
 	mdMu.Lock()

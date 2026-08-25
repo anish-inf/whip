@@ -5,9 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/context-labs/loopy/internal/llm"
-	"github.com/context-labs/loopy/internal/memory"
-	"github.com/context-labs/loopy/internal/tools"
+	"github.com/context-labs/whip/internal/llm"
+	"github.com/context-labs/whip/internal/memory"
+	"github.com/context-labs/whip/internal/tools"
 )
 
 // SessionID scopes the memory tools' per-session file. Set by the TUI once a

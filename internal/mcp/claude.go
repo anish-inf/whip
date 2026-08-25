@@ -14,7 +14,7 @@ import (
 // "type" is optional: entries with a command default to stdio, entries with a
 // url default to http. "sse" (legacy server-sent events transport) is
 // imported as disabled with a note — the ecosystem moved to streamable HTTP
-// and loopy doesn't ship the legacy transport.
+// and whip doesn't ship the legacy transport.
 type claudeFile struct {
 	MCPServers map[string]claudeServer `json:"mcpServers"`
 }

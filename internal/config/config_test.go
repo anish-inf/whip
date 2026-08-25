@@ -30,8 +30,8 @@ func TestLoadSaveDefaults(t *testing.T) {
 func TestLoadRejectsBadJSON(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	os.MkdirAll(filepath.Join(home, ".loopy"), 0o700)
-	os.WriteFile(filepath.Join(home, ".loopy", "config.json"), []byte("{nope"), 0o600)
+	os.MkdirAll(filepath.Join(home, ".whip"), 0o700)
+	os.WriteFile(filepath.Join(home, ".whip", "config.json"), []byte("{nope"), 0o600)
 	if _, err := Load(); err == nil {
 		t.Fatal("expected parse error")
 	}
@@ -39,12 +39,12 @@ func TestLoadRejectsBadJSON(t *testing.T) {
 
 func TestProviderKey(t *testing.T) {
 	t.Setenv("HOME", t.TempDir()) // no ~/.inf fallback available
-	t.Setenv("LOOPY_TEST_KEY", "from-env")
+	t.Setenv("WHIP_TEST_KEY", "from-env")
 
-	if k := (Provider{APIKeyEnv: "LOOPY_TEST_KEY", APIKey: "literal"}).Key(); k != "from-env" {
+	if k := (Provider{APIKeyEnv: "WHIP_TEST_KEY", APIKey: "literal"}).Key(); k != "from-env" {
 		t.Fatalf("env should win: %q", k)
 	}
-	if k := (Provider{APIKeyEnv: "LOOPY_UNSET_VAR", APIKey: "literal"}).Key(); k != "literal" {
+	if k := (Provider{APIKeyEnv: "WHIP_UNSET_VAR", APIKey: "literal"}).Key(); k != "literal" {
 		t.Fatalf("literal fallback: %q", k)
 	}
 	if k := (Provider{BaseURL: "https://other.example.com"}).Key(); k != "" {
@@ -126,7 +126,7 @@ func TestInfKeyBadJSON(t *testing.T) {
 func TestLoadJSONCCommentsAndTrailingCommas(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	os.MkdirAll(filepath.Join(home, ".loopy"), 0o700)
+	os.MkdirAll(filepath.Join(home, ".whip"), 0o700)
 	src := `{
   // default route
   "defaultModel": "m1",
@@ -139,7 +139,7 @@ func TestLoadJSONCCommentsAndTrailingCommas(t *testing.T) {
   },
 }
 `
-	os.WriteFile(filepath.Join(home, ".loopy", "config.json"), []byte(src), 0o600)
+	os.WriteFile(filepath.Join(home, ".whip", "config.json"), []byte(src), 0o600)
 	cfg, err := Load()
 	if err != nil {
 		t.Fatal(err)
@@ -158,7 +158,7 @@ func TestLoadJSONCCommentsAndTrailingCommas(t *testing.T) {
 func TestMCPImportRoundTrip(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	os.MkdirAll(filepath.Join(home, ".loopy"), 0o700)
+	os.MkdirAll(filepath.Join(home, ".whip"), 0o700)
 	src := `{
   "defaultModel": "m1",
   "providers": { "a": { "baseUrl": "https://a", "api": "openai-completions" } },
@@ -169,7 +169,7 @@ func TestMCPImportRoundTrip(t *testing.T) {
   }
 }
 `
-	os.WriteFile(filepath.Join(home, ".loopy", "config.json"), []byte(src), 0o600)
+	os.WriteFile(filepath.Join(home, ".whip", "config.json"), []byte(src), 0o600)
 	cfg, err := Load()
 	if err != nil {
 		t.Fatal(err)
@@ -191,7 +191,7 @@ func TestMCPImportRoundTrip(t *testing.T) {
 		t.Fatalf("mcpImport did not round-trip: %+v", reloaded.MCPImport)
 	}
 	// Absent block stays nil — zero-breakage default.
-	if err := os.WriteFile(filepath.Join(home, ".loopy", "config.json"), []byte(`{
+	if err := os.WriteFile(filepath.Join(home, ".whip", "config.json"), []byte(`{
   "defaultModel": "m1",
   "providers": { "a": { "baseUrl": "https://a", "api": "openai-completions" } },
   "models": { "m1": { "providers": ["a"] } }
@@ -212,7 +212,7 @@ func TestMCPImportRoundTrip(t *testing.T) {
 func TestLoadPreservesMCPImportOnClobber(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	dir := filepath.Join(home, ".loopy")
+	dir := filepath.Join(home, ".whip")
 	os.MkdirAll(dir, 0o700)
 	os.WriteFile(filepath.Join(dir, "config.json"), []byte(
 		`{"providers":null,"models":null,"mcpImport":{"codex":{"enabled":false}}}`), 0o600)
@@ -228,7 +228,7 @@ func TestLoadPreservesMCPImportOnClobber(t *testing.T) {
 func TestLoadRecoversFromClobberedConfig(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	dir := filepath.Join(home, ".loopy")
+	dir := filepath.Join(home, ".whip")
 	os.MkdirAll(dir, 0o700)
 	p := filepath.Join(dir, "config.json")
 	// a previously-clobbered config: parses fine but has no providers/models
@@ -248,7 +248,7 @@ func TestLoadRecoversFromClobberedConfig(t *testing.T) {
 func TestLoadRegeneratesDefaultsWhenEmptyAndNoBackup(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	dir := filepath.Join(home, ".loopy")
+	dir := filepath.Join(home, ".whip")
 	os.MkdirAll(dir, 0o700)
 	os.WriteFile(filepath.Join(dir, "config.json"), []byte(`{"providers":null,"models":null}`), 0o600)
 	cfg, err := Load()
@@ -263,7 +263,7 @@ func TestLoadRegeneratesDefaultsWhenEmptyAndNoBackup(t *testing.T) {
 func TestSaveRefusesToClobberHealthyConfig(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	dir := filepath.Join(home, ".loopy")
+	dir := filepath.Join(home, ".whip")
 	os.MkdirAll(dir, 0o700)
 	p := filepath.Join(dir, "config.json")
 	healthy := `{"defaultModel":"m1","providers":{"a":{"baseUrl":"https://a","api":"openai-completions"}},"models":{"m1":{"providers":["a"]}}}`
@@ -322,7 +322,7 @@ func TestSaveWritesJSONCHeader(t *testing.T) {
 }
 
 func TestLoadCatalogsAlwaysNonNil(t *testing.T) {
-	t.Setenv("HOME", t.TempDir()) // no ~/.loopy/models.json exists
+	t.Setenv("HOME", t.TempDir()) // no ~/.whip/models.json exists
 	cats := LoadCatalogs()
 	if cats == nil {
 		t.Fatal("LoadCatalogs must return a non-nil map so callers can write into it")
@@ -334,12 +334,12 @@ func TestLoadCatalogsAlwaysNonNil(t *testing.T) {
 }
 
 func TestLogEventWritesAndRotates(t *testing.T) {
-	t.Setenv("LOOPY_HOME", t.TempDir())
+	t.Setenv("WHIP_HOME", t.TempDir())
 
 	LogEvent("config.save", "before=(providers=1) after=(providers=1)")
 	LogEvent("catalog.fetch", "inference ok: 42 models")
 	dir, _ := Dir()
-	b, err := os.ReadFile(filepath.Join(dir, "loopy.log"))
+	b, err := os.ReadFile(filepath.Join(dir, "whip.log"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -348,20 +348,20 @@ func TestLogEventWritesAndRotates(t *testing.T) {
 		t.Fatalf("log content: %q", s)
 	}
 
-	// rotation: oversize log rolls to loopy.log.1
-	os.WriteFile(filepath.Join(dir, "loopy.log"), make([]byte, logMaxBytes+1), 0o600)
+	// rotation: oversize log rolls to whip.log.1
+	os.WriteFile(filepath.Join(dir, "whip.log"), make([]byte, logMaxBytes+1), 0o600)
 	LogEvent("config.load", "after rotation")
-	if _, err := os.Stat(filepath.Join(dir, "loopy.log.1")); err != nil {
+	if _, err := os.Stat(filepath.Join(dir, "whip.log.1")); err != nil {
 		t.Fatalf("expected rotation: %v", err)
 	}
-	b, _ = os.ReadFile(filepath.Join(dir, "loopy.log"))
+	b, _ = os.ReadFile(filepath.Join(dir, "whip.log"))
 	if !strings.Contains(string(b), "after rotation") {
 		t.Fatalf("fresh log should hold the new event: %q", b)
 	}
 }
 
 func TestLogEventNeverFails(t *testing.T) {
-	t.Setenv("LOOPY_HOME", "/nonexistent-\x7f-impossible") // Dir() will fail MkdirAll
+	t.Setenv("WHIP_HOME", "/nonexistent-\x7f-impossible") // Dir() will fail MkdirAll
 	LogEvent("config.load", "should not panic or error")
 }
 
@@ -407,7 +407,7 @@ func TestCatalogMaxCompletionTokens(t *testing.T) {
 func TestLoadMixedTokenFields(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	os.MkdirAll(filepath.Join(home, ".loopy"), 0o700)
+	os.MkdirAll(filepath.Join(home, ".whip"), 0o700)
 	src := `{
   "defaultModel": "m1",
   "providers": { "a": { "baseUrl": "https://a", "api": "openai-completions" } },
@@ -417,7 +417,7 @@ func TestLoadMixedTokenFields(t *testing.T) {
   }
 }
 `
-	os.WriteFile(filepath.Join(home, ".loopy", "config.json"), []byte(src), 0o600)
+	os.WriteFile(filepath.Join(home, ".whip", "config.json"), []byte(src), 0o600)
 	cfg, err := Load()
 	if err != nil {
 		t.Fatal(err)

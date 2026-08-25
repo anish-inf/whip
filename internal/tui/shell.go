@@ -24,8 +24,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/context-labs/loopy/internal/tools"
-	"github.com/context-labs/loopy/internal/tools/bashrun"
+	"github.com/context-labs/whip/internal/tools"
+	"github.com/context-labs/whip/internal/tools/bashrun"
 )
 
 // shellDoneMsg reports a finished `!` command: the transcript block and the
@@ -109,9 +109,9 @@ func (m *model) applyShellDone(msg shellDoneMsg) {
 	m.persist()
 }
 
-// cdCommand changes loopy's working directory for everything (bash tool,
+// cdCommand changes whip's working directory for everything (bash tool,
 // relative read/write/edit paths, @ file index). Bare prints it. A command
-// already running under the old cwd keeps it (POSIX); loopy's next spawns —
+// already running under the old cwd keeps it (POSIX); whip's next spawns —
 // and the next session record — use the new one.
 func (m *model) cdCommand(arg string) {
 	if arg == "" {

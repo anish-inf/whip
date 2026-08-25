@@ -9,8 +9,8 @@ import (
 )
 
 // TestBashSudoFastFail is an end-to-end regression for the original bug: running
-// sudo (which opens /dev/tty for a password) used to hang loopy until the 120s
-// bash timeout because the child shared loopy's controlling terminal. With the
+// sudo (which opens /dev/tty for a password) used to hang whip until the 120s
+// bash timeout because the child shared whip's controlling terminal. With the
 // Setsid isolation the child has no controlling tty, the /dev/tty open fails
 // immediately, and sudo returns at once. Skip when sudo isn't installed.
 func TestBashSudoFastFail(t *testing.T) {

@@ -1,11 +1,11 @@
 ---
 name: new-feature-development
-description: "Playbook for building a NET-NEW feature in loopy. Use when the user wants to add a feature, tool, slash command, integration, or UX behavior ('build…', 'add…', 'implement…'), even without the word 'feature'. Mines docs/roadmap.md + docs/learnings/. NOT for debugging or narrow golang-* changes."
+description: "Playbook for building a NET-NEW feature in whip. Use when the user wants to add a feature, tool, slash command, integration, or UX behavior ('build…', 'add…', 'implement…'), even without the word 'feature'. Mines docs/roadmap.md + docs/learnings/. NOT for debugging or narrow golang-* changes."
 ---
 
 # New Feature Development
 
-You are the **architect** for a new feature in loopy, a minimal coding-agent
+You are the **architect** for a new feature in whip, a minimal coding-agent
 harness in Go. Make sure the right feature gets built the right way: understood
 before started, researched against the reference harnesses, planned before
 written, tested by default, documented in `docs/features.md`, and green on
@@ -54,7 +54,7 @@ Read repo docs lazily, when the step needs them:
 - **Context flows, cancellation is real.** `ctx` threads from TUI keypress
   through `Agent.Turn` into every tool; ctrl+c must actually stop in-flight
   work. No `context.Background()` in library code.
-- **Config is guarded on write.** `~/.loopy/config.json` writes are atomic
+- **Config is guarded on write.** `~/.whip/config.json` writes are atomic
   (tmp+rename, `.bak` kept) with a clobber-refusal guard. Never bare
   `os.WriteFile` persisted state.
 - **Docs are part of the diff.** A feature without its `docs/features.md`

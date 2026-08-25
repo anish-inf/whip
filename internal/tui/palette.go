@@ -7,9 +7,9 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/context-labs/loopy/internal/browser"
-	"github.com/context-labs/loopy/internal/config"
-	"github.com/context-labs/loopy/internal/mcp"
+	"github.com/context-labs/whip/internal/browser"
+	"github.com/context-labs/whip/internal/config"
+	"github.com/context-labs/whip/internal/mcp"
 )
 
 // paletteItem is one row in the ctrl+p command palette. It mirrors opencode's
@@ -293,7 +293,7 @@ func (m *model) paletteItems() []paletteItem {
 			dynDesc: func(m *model) string {
 				return "current: " + browser.Driver + " — which automation engine drives Chrome"
 			},
-			dynHint: func(m *model) string { return "LOOPY_BROWSER_DRIVER" },
+			dynHint: func(m *model) string { return "WHIP_BROWSER_DRIVER" },
 			panel: func(m *model) *ppanel {
 				list := browser.Drivers
 				pp := &ppanel{kind: panelBrowser, title: "Browser driver", list: list}
@@ -323,7 +323,7 @@ func (m *model) paletteItems() []paletteItem {
 				return m.command("/help")
 			}},
 		{title: "Quit", category: "App",
-			dynDesc: func(m *model) string { return "exit loopy" },
+			dynDesc: func(m *model) string { return "exit whip" },
 			dynHint: func(m *model) string { return "/quit · ctrl+c" },
 			run:     func(m *model) (tea.Model, tea.Cmd) { return m, tea.Quit }},
 	}
@@ -520,7 +520,7 @@ func (m *model) paletteKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m *model) pushPanel(it *paletteItem) {
 	pp := it.panel(m)
 	if pp == nil {
-		m.append(errStyle.Render(it.title + ": nothing to choose from (check ~/.loopy/config.json)"))
+		m.append(errStyle.Render(it.title + ": nothing to choose from (check ~/.whip/config.json)"))
 		return
 	}
 	m.palette.stack = append(m.palette.stack, pp)

@@ -1,4 +1,4 @@
-module github.com/context-labs/loopy
+module github.com/context-labs/whip
 
 go 1.27.0
 

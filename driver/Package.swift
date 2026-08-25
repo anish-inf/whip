@@ -4,17 +4,17 @@ import PackageDescription
 // NOTE: tests require full Xcode (XCTest isn't in Command Line Tools).
 // On a CLT-only Mac, `swift build` works and `swift test` is a no-op stub —
 // the testTarget is excluded below. On machines with Xcode, re-add the
-// testTarget (see Tests/LoopyComputerTests).
+// testTarget (see Tests/WhipComputerTests).
 
 var targets: [Target] = [
     .target(
-        name: "LoopyComputerCore",
-        path: "Sources/LoopyComputerCore"
+        name: "WhipComputerCore",
+        path: "Sources/WhipComputerCore"
     ),
     .executableTarget(
-        name: "LoopyComputer",
-        dependencies: ["LoopyComputerCore"],
-        path: "Sources/LoopyComputer"
+        name: "WhipComputer",
+        dependencies: ["WhipComputerCore"],
+        path: "Sources/WhipComputer"
     ),
 ]
 
@@ -23,10 +23,10 @@ var targets: [Target] = [
 // CLT-buildable.
 
 let package = Package(
-    name: "loopy-computer",
+    name: "whip-computer",
     platforms: [.macOS(.v14)],
     products: [
-        .executable(name: "loopy-computer", targets: ["LoopyComputer"]),
+        .executable(name: "whip-computer", targets: ["WhipComputer"]),
     ],
     targets: targets
 )

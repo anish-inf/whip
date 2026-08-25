@@ -8,7 +8,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/context-labs/loopy/internal/llm"
+	"github.com/context-labs/whip/internal/llm"
 )
 
 // Same ctrl+j regression but with a populated transcript (the resume case):

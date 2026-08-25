@@ -1,6 +1,6 @@
 // policy.go ports codex's per-app consent gate (from the dissected
 // SkyComputerUseService / codex-rs computer_use.rs): every computer-use
-// action targets an app, and the app must be approved before loopy touches
+// action targets an app, and the app must be approved before whip touches
 // it. Approval is per bundle-id/app-name, session- or persistent-scoped,
 // matching codex's `allow_persistent_approval` model.
 
@@ -103,5 +103,5 @@ func (p *Policy) Summary() string {
 type ApprovalNeeded struct{ App string }
 
 func (e *ApprovalNeeded) Error() string {
-	return fmt.Sprintf("computer-use needs approval to drive %q — approve in the prompt, or add it to computer.allow in ~/.loopy/config.json", e.App)
+	return fmt.Sprintf("computer-use needs approval to drive %q — approve in the prompt, or add it to computer.allow in ~/.whip/config.json", e.App)
 }

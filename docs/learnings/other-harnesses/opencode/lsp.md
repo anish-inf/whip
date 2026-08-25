@@ -1,14 +1,14 @@
 # opencode LSP integration — distillation
 
-> Research for **loopy** LSP support. Distilled from the opencode codebase at
+> Research for **whip** LSP support. Distilled from the opencode codebase at
 > `/home/abe/code/coding-harnesses/opencode`. All citations are `file:line`
 > relative to that repo root. Primary sources: `packages/opencode/src/lsp/{lsp,client,server,language,diagnostic,launch}.ts`,
 > `packages/core/src/config/lsp.ts`, `packages/opencode/src/tool/{read,write,edit,apply_patch,lsp,registry}.ts`,
 > `packages/web/src/content/docs/lsp.mdx`.
 
-## TL;DR for loopy
+## TL;DR for whip
 
-opencode's LSP layer is **diagnostics-first, optional, and gated**: LSP is *disabled by default* (`lsp` config omitted → off), servers are spawned lazily on first file touch by extension, and diagnostics are injected into write/edit tool outputs as a short `<diagnostics>` block containing **errors only** (max 20/file, max 5 other files). A richer `lsp` tool (definition/references/hover/symbols/call-hierarchy) exists but is hidden behind an experimental flag. Their own docs warn LSP is "not always a net positive" and recommend CLI lint/typecheck loops as the default. This validates loopy's instinct: start with post-edit error diagnostics, don't block aggressively, and treat hover/symbols as a stretch goal.
+opencode's LSP layer is **diagnostics-first, optional, and gated**: LSP is *disabled by default* (`lsp` config omitted → off), servers are spawned lazily on first file touch by extension, and diagnostics are injected into write/edit tool outputs as a short `<diagnostics>` block containing **errors only** (max 20/file, max 5 other files). A richer `lsp` tool (definition/references/hover/symbols/call-hierarchy) exists but is hidden behind an experimental flag. Their own docs warn LSP is "not always a net positive" and recommend CLI lint/typecheck loops as the default. This validates whip's instinct: start with post-edit error diagnostics, don't block aggressively, and treat hover/symbols as a stretch goal.
 
 ---
 
@@ -204,7 +204,7 @@ Semantics (docs `lsp.mdx:76-201` + merge code `lsp.ts:151-189`):
 
 ---
 
-## Implications for loopy (suggested takeaways)
+## Implications for whip (suggested takeaways)
 
 - **Copy the touch-then-report pattern**: after edit/write, notify LSP (didOpen/didChange with full text), wait briefly for fresh diagnostics, append errors-only block to tool output. Keep reads as fire-and-forget warmers.
 - **Adopt their caps**: errors-only, ~20/file, `<diagnostics file="...">` wrapper, "please fix" phrasing.

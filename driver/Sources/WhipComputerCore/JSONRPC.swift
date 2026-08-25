@@ -9,8 +9,8 @@ import Foundation
 // mismatches (codex's CodexComputerUseIPC-4 lesson).
 
 public enum Protocol {
-    public static let version = "loopy-computer/1"
-    public static let tokenEnvVar = "LOOPY_COMPUTER_TOKEN"
+    public static let version = "whip-computer/1"
+    public static let tokenEnvVar = "WHIP_COMPUTER_TOKEN"
 }
 
 public enum RPCErrorCode: Int {

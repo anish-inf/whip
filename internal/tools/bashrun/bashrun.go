@@ -6,13 +6,13 @@
 // The default (non-interactive) path runs the command in a new session with no
 // controlling terminal, so a program that wants to read a password from /dev/tty
 // fails fast ("a terminal is required") instead of hanging indefinitely on
-// loopy's terminal — which is what used to lock up the whole agent.
+// whip's terminal — which is what used to lock up the whole agent.
 //
 // The interactive path runs the command in a PTY. Keystrokes the user types are
 // forwarded to the PTY and PTY output streams back to the caller. If the child
 // goes quiet for a while (likely waiting for input), the caller is told to show
 // a countdown; if input is still absent after the inactivity timeout, the
-// command is killed so loopy never hangs forever.
+// command is killed so whip never hangs forever.
 package bashrun
 
 import (
@@ -135,7 +135,7 @@ func Run(ctx context.Context, opts Options) Result {
 // runPiped runs the command with stdout/stderr captured, stdin wired to
 // /dev/null, and a fresh session with no controlling terminal. A program that
 // tries to open /dev/tty for a password fails fast rather than hanging on
-// loopy's terminal.
+// whip's terminal.
 //
 // The subtlety that justifies hand-rolling Start/Wait: a detached grandchild
 // (nohup, `sleep 30 &`, a daemonized server) inherits the stdout/stderr pipes
@@ -160,13 +160,13 @@ func runPiped(ctx context.Context, cmd *exec.Cmd) Result {
 	}
 	// Setsid gives the child a new session with no controlling terminal, so a
 	// program that insists on /dev/tty fails immediately instead of grabbing
-	// loopy's terminal and blocking its input loop.
+	// whip's terminal and blocking its input loop.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 
 	if err := cmd.Start(); err != nil {
 		return Result{Exit: exitString(err)}
 	}
-	track(cmd) // register for KillAll on loopy exit
+	track(cmd) // register for KillAll on whip exit
 	defer untrack(cmd)
 
 	// Drain both pipes concurrently; the readers finish on pipe EOF (process
@@ -247,7 +247,7 @@ func runInteractive(ctx context.Context, cmd *exec.Cmd, opts Options) Result {
 		return runPiped(ctx, cmd)
 	}
 	defer ptmx.Close()
-	track(cmd) // register for KillAll on loopy exit
+	track(cmd) // register for KillAll on whip exit
 	defer untrack(cmd)
 
 	// Kill the whole process group (bash + any children) on timeout/cancel so
@@ -370,7 +370,7 @@ func runInteractive(ctx context.Context, cmd *exec.Cmd, opts Options) Result {
 					Interactive: true,
 				}
 				res.Output += fmt.Sprintf(
-					"\n[loopy: interactive command killed after %s with no input]",
+					"\n[whip: interactive command killed after %s with no input]",
 					opts.InactivityTimeout.Round(time.Second),
 				)
 				return res
@@ -427,7 +427,7 @@ func openDevNull() *os.File {
 }
 
 // Registry of in-flight child processes so KillAll can guarantee none outlive
-// loopy. track is called right after a successful Start; untrack after Wait.
+// whip. track is called right after a successful Start; untrack after Wait.
 var (
 	trackMu sync.Mutex
 	tracked = map[int]*exec.Cmd{}
@@ -452,7 +452,7 @@ func untrack(cmd *exec.Cmd) {
 }
 
 // KillAll SIGKILLs every tracked child process group and waits briefly for
-// them to die. Called on loopy exit so an agent-spawned server or watcher
+// them to die. Called on whip exit so an agent-spawned server or watcher
 // never outlives the harness. Safe to call more than once.
 func KillAll() {
 	trackMu.Lock()

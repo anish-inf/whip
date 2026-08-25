@@ -110,7 +110,7 @@ func replaceMatches(s string, re *regexp.Regexp, fn func(m string, before byte) 
 	return b.String()
 }
 
-// realFileExists stats path relative to the process working directory (loopy
+// realFileExists stats path relative to the process working directory (whip
 // runs at the project root) and reports whether it is a regular file.
 func realFileExists(path string) bool {
 	if !filepath.IsAbs(path) {

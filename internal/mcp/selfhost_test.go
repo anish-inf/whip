@@ -11,16 +11,16 @@ import (
 	"time"
 )
 
-// TestServeSelfHost builds `loopy mcp serve` and connects to it as a real
+// TestServeSelfHost builds `whip mcp serve` and connects to it as a real
 // stdio MCP server — the full loop: config → manager → CommandTransport →
-// subprocess → served tools. Gated on LOOPY_TEST_SELFHOST since it shells
+// subprocess → served tools. Gated on WHIP_TEST_SELFHOST since it shells
 // out to `go build`.
 func TestServeSelfHost(t *testing.T) {
-	if os.Getenv("LOOPY_TEST_SELFHOST") == "" {
-		t.Skip("builds the loopy binary; set LOOPY_TEST_SELFHOST=1 to run")
+	if os.Getenv("WHIP_TEST_SELFHOST") == "" {
+		t.Skip("builds the whip binary; set WHIP_TEST_SELFHOST=1 to run")
 	}
-	bin := filepath.Join(t.TempDir(), "loopy")
-	if out, err := exec.Command("go", "build", "-o", bin, "../../cmd/loopy").CombinedOutput(); err != nil {
+	bin := filepath.Join(t.TempDir(), "whip")
+	if out, err := exec.Command("go", "build", "-o", bin, "../../cmd/whip").CombinedOutput(); err != nil {
 		t.Fatalf("build: %v\n%s", err, out)
 	}
 	m := NewManager(map[string]ServerConfig{"self": {Command: []string{bin, "mcp", "serve"}, StartupTimeout: 15, ToolTimeout: 15}})
@@ -37,7 +37,7 @@ func TestServeSelfHost(t *testing.T) {
 		t.Fatalf("self-serve status: %+v", st)
 	}
 	if st.Tools != 4 {
-		t.Fatalf("expected loopy's 4 tools, got %d", st.Tools)
+		t.Fatalf("expected whip's 4 tools, got %d", st.Tools)
 	}
 	out, err := s.call(context.Background(), "bash", json.RawMessage(`{"command":"echo selfhost-ok"}`))
 	if err != nil {

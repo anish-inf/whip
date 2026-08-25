@@ -12,8 +12,8 @@ import (
 // commented template, not a copy of the defaults that would silently
 // diverge. /me opens the file in $EDITOR.
 
-// MeSeed is what ~/.loopy/me.md starts with.
-const MeSeed = `# Your standing instructions for loopy — appended to every session's
+// MeSeed is what ~/.whip/me.md starts with.
+const MeSeed = `# Your standing instructions for whip — appended to every session's
 # system prompt, after the built-in operating rules. Lines starting with #
 # are comments. Edit freely; /me opens this file.
 
@@ -23,7 +23,7 @@ const MeSeed = `# Your standing instructions for loopy — appended to every ses
 # - Never touch files under deploy/prod/ without asking.
 `
 
-// MePath returns ~/.loopy/me.md (seeding the template on first run); "" when
+// MePath returns ~/.whip/me.md (seeding the template on first run); "" when
 // the home dir is unavailable.
 func MePath() string {
 	dir, err := Dir()
@@ -39,7 +39,7 @@ func MePath() string {
 	return path
 }
 
-// MeInstructions loads the user's standing instructions from ~/.loopy/me.md,
+// MeInstructions loads the user's standing instructions from ~/.whip/me.md,
 // comments and blank lines stripped. "" means nothing to append.
 func MeInstructions() string {
 	path := MePath()

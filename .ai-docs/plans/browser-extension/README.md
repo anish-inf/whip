@@ -6,18 +6,18 @@ Branch: main
 
 A Chrome extension that turns the user's **real, already-running,
 already-logged-in browser** into a browser_exec backend — the one thing CDP
-can't do on Chrome ≥ 136 (default-profile CDP is blocked). loopy runs a
+can't do on Chrome ≥ 136 (default-profile CDP is blocked). whip runs a
 local relay; the extension connects out to it; `browser_exec` commands route
 to the tab the user pinned.
 
 ## Goal
 
-- **Dead-simple install**: `loopy browser install` writes the extension to
-  `~/.loopy/browser/extension/` and opens `chrome://extensions` + the
+- **Dead-simple install**: `whip browser install` writes the extension to
+  `~/.whip/browser/extension/` and opens `chrome://extensions` + the
   unpacked dir. User does the one unavoidable manual step (toggle Developer
   mode, Load unpacked, pick the dir — Chrome forbids programmatic install).
 - **One-click attach**: click the extension's toolbar icon on the tab you
-  want loopy to drive. The icon shows a badge when attached.
+  want whip to drive. The icon shows a badge when attached.
 - **`browser.mode: "extension"`** (config) routes `browser_exec` to the
   attached tab with the user's real cookies/sessions. No other mode changes.
 
@@ -38,9 +38,9 @@ Chrome extensions can't open a CDP socket to their own browser. But an MV3
 **background service worker can hold an outbound WebSocket** to a loopback
 relay, and once attached to a tab it can use **`chrome.debugger`** (raw CDP:
 `sendCommand`/`onEvent`) — so the extension is effectively a CDP *tunnel*:
-loopy's relay speaks the same CDP wire protocol rod already uses, the
+whip's relay speaks the same CDP wire protocol rod already uses, the
 extension forwards it to the attached tab via `chrome.debugger`. This keeps
-loopy's existing rod Backend 100% intact — the relay is just a CDP endpoint
+whip's existing rod Backend 100% intact — the relay is just a CDP endpoint
 that happens to be the user's real Chrome.
 
 Trade-off accepted: `chrome.debugger` shows Chrome's "… is debugging this
@@ -56,7 +56,7 @@ existing Backend, don't write a second driver).
  browser_exec → browser.Manager (mode=extension)
       → extBackend (implements Backend; thin: rod over the relay's CDP ws)
             ↕ CDP WebSocket (127.0.0.1:PORT)
-      relay (internal/browser/extrelay.go, served by the loopy process)
+      relay (internal/browser/extrelay.go, served by the whip process)
             ↕ WebSocket + tiny JSON envelope {id, method, params | result | event}
       extension background SW (chrome.debugger.sendCommand → attached tab)
 ```
@@ -65,14 +65,14 @@ existing Backend, don't write a second driver).
   127.0.0.1 port + `gobwas/ws` upgrade. Two WS endpoints: `/ext` (the
   extension) and `/cdp` (rod). Bridges CDP between them. Bearer token
   (per-process random) required on the extension handshake; written to
-  `~/.loopy/browser/extension/relay.json` (0600) by `loopy browser install`.
+  `~/.whip/browser/extension/relay.json` (0600) by `whip browser install`.
 - **Extension** (`internal/browser/extrelay/extension/`, embedded via
   `//go:embed`): `manifest.json` (MV3, perms: `debugger`, `activeTab`,
   `tabs`), `background.js` (action.onClicked → attach debugger → open WS →
   forward CDP; disconnect → detach + clear badge).
 - **Backend**: `Open(ctx, ModeExtension)` connects rod to the relay's `/cdp`
   endpoint. Existing `Browser` methods work unchanged.
-- **CLI**: `loopy browser install` writes embedded extension files +
+- **CLI**: `whip browser install` writes embedded extension files +
   `relay.json`, prints the exact 3 manual steps, opens the two windows.
 
 ## Test plan
@@ -91,14 +91,14 @@ existing Backend, don't write a second driver).
 - `docs/features.md`: extension relay section under Browser automation.
 - `docs/learnings/browser-use-integration.md`: addendum noting the extension
   route + why chrome.debugger-over-WS (vs OpenClaw content-script).
-- README: `loopy browser install` quickstart (user-facing surface).
+- README: `whip browser install` quickstart (user-facing surface).
 
 ## Tasks
 
 1. extrelay: WS server + token auth + CDP bridge + fake-extension tests. ✅
 2. extension files (manifest + background.js) + go:embed. ✅
 3. `ModeExtension` + extBackend wiring into Open/Manager/session. ✅
-4. `loopy browser install` CLI (write files, relay.json, print steps, open). ✅
+4. `whip browser install` CLI (write files, relay.json, print steps, open). ✅
 5. E2E against real Chrome with the extension. ✅ (rod-through-relay E2E in
    `rod_e2e_test.go`: a real rod.Browser drives attach + Eval through the
    relay against a fake extension — the full CDP tunnel + Target synthesis

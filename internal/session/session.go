@@ -1,4 +1,4 @@
-// Package session persists chat histories in ~/.loopy/sessions.db (SQLite).
+// Package session persists chat histories in ~/.whip/sessions.db (SQLite).
 package session
 
 import (
@@ -13,7 +13,7 @@ import (
 
 	_ "modernc.org/sqlite"
 
-	"github.com/context-labs/loopy/internal/llm"
+	"github.com/context-labs/whip/internal/llm"
 )
 
 const schema = `
@@ -437,7 +437,7 @@ func (s *Store) Recent(n int) ([]Meta, error) {
 // recently typed input comes first. Only messages the human actually typed are
 // recalled: steered background-task
 // results and goal-continuation prompts are stored as role "user" too, but
-// they're injected by loopy, not written by the user. Those carry Authored=false
+// they're injected by whip, not written by the user. Those carry Authored=false
 // and are skipped; only Authored=true messages come back.
 func (s *Store) UserHistory(limit int) ([]string, error) {
 	rows, err := s.db.Query(`SELECT m.content FROM messages m
@@ -460,7 +460,7 @@ func (s *Store) UserHistory(limit int) ([]string, error) {
 			continue // skip malformed rows rather than fail the whole recall
 		}
 		if !msg.Authored {
-			continue // injected by loopy (steered task result / goal prompt), not typed
+			continue // injected by whip (steered task result / goal prompt), not typed
 		}
 		content := strings.TrimSpace(msg.TextContent())
 		if content == "" || seen[content] {

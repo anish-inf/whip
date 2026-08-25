@@ -39,7 +39,7 @@ func TestFuzzyFiles(t *testing.T) {
 	write(t, dir, "docs/roadmap.md")
 	write(t, dir, "internal/tui/roadmap_notes.txt")
 	write(t, dir, "README.md")
-	write(t, dir, "cmd/loopy/main.go")
+	write(t, dir, "cmd/whip/main.go")
 
 	// bare word finds a nested file
 	hits := fuzzyFiles("roadmap", 8)
@@ -48,7 +48,7 @@ func TestFuzzyFiles(t *testing.T) {
 	}
 	// base-name substring beats full-path match
 	hits = fuzzyFiles("main", 8)
-	if len(hits) != 1 || hits[0] != "cmd/loopy/main.go" {
+	if len(hits) != 1 || hits[0] != "cmd/whip/main.go" {
 		t.Fatalf("main: %v", hits)
 	}
 	// subsequence match

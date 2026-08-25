@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/context-labs/loopy/internal/agent"
-	"github.com/context-labs/loopy/internal/llm"
+	"github.com/context-labs/whip/internal/agent"
+	"github.com/context-labs/whip/internal/llm"
 )
 
 func TestFmtTok(t *testing.T) {

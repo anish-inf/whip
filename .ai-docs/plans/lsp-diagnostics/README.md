@@ -6,7 +6,7 @@ Linear: INF-4989 (parent of INF-4991, @-mention symbol expansion — NOT this pl
 
 ## What this does
 
-loopy gains an LSP client. When the model edits or writes a source file that
+whip gains an LSP client. When the model edits or writes a source file that
 an LSP server covers, the tool output now includes compile/lint diagnostics
 (errors from the edited file **and sibling files the edit broke**), so the
 model sees and fixes breakage in the same turn instead of spending a `go
@@ -215,7 +215,7 @@ from LSP never fail the tool (diagnostics absence == no block appended).
 ### Config (`internal/config/config.go`)
 
 ```go
-// LSPServers mirrors the mcp block: loopy-native server definitions that
+// LSPServers mirrors the mcp block: whip-native server definitions that
 // override/extend the built-in gopls entry. Config is a leaf; lsp converts.
 LSPServers map[string]LSPServer `json:"lsp,omitempty"`
 

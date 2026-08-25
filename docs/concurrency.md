@@ -1,6 +1,6 @@
 # Concurrency: where Go channels earn their keep
 
-loopy's agent runs concurrent work — parallel tool calls, background
+whip's agent runs concurrent work — parallel tool calls, background
 subagents, a streaming TUI — and the design leans on channels for the parts
 that are awkward in the reference harnesses (pi and opencode are TypeScript).
 This doc explains the two channel patterns and why they're idiomatic in Go.
@@ -140,7 +140,7 @@ applies twice per server: one channel for readiness, one for in-flight calls.
 
 `internal/tools/bashrun/bashrun.go` tracks every spawned child in a registry
 and `KillAll()` SIGKILLs the whole process group on exit, so an agent-started
-server never outlives loopy. The non-interactive path closes its output pipes
+server never outlives whip. The non-interactive path closes its output pipes
 on process exit so a detached grandchild (`sleep 30 &`, nohup) can't hang the
 agent waiting on pipe EOF.
 

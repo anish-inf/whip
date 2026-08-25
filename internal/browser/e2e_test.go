@@ -82,16 +82,16 @@ func testPage(t *testing.T) string {
 		}
 		switch r.URL.Path {
 		case "/set-cookie":
-			http.SetCookie(w, &http.Cookie{Name: "loopy-e2e", Value: "real-session-42", Path: "/"})
+			http.SetCookie(w, &http.Cookie{Name: "whip-e2e", Value: "real-session-42", Path: "/"})
 			http.Redirect(w, r, "/", http.StatusFound)
 		case "/":
-			c, err := r.Cookie("loopy-e2e")
+			c, err := r.Cookie("whip-e2e")
 			cookie := "none"
 			if err == nil {
 				cookie = c.Value
 			}
 			w.Header().Set("Content-Type", "text/html")
-			fmt.Fprintf(w, `<!doctype html><html><head><title>loopy e2e</title></head><body>
+			fmt.Fprintf(w, `<!doctype html><html><head><title>whip e2e</title></head><body>
 <h1 id="h">hello</h1><div id="q" contenteditable="true"></div><div id="b" onclick="document.title='clicked'" style="padding:8px">go</div>
 <div id="cookie">%s</div></body></html>`, cookie)
 		default:
@@ -184,8 +184,8 @@ func TestE2EDedicated(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	// Dedicated uses the loopy-owned profile dir.
-	home := t.TempDir() // don't touch the real ~/.loopy during tests
+	// Dedicated uses the whip-owned profile dir.
+	home := t.TempDir() // don't touch the real ~/.whip during tests
 	t.Setenv("HOME", home)
 
 	b, err := Open(ctx, ModeDedicated)
@@ -206,15 +206,15 @@ func TestE2EDedicated(t *testing.T) {
 	if err != nil || v != `"q"` {
 		t.Fatalf("fill focus: %s %v", v, err)
 	}
-	// The loopy-owned profile dir must exist (separate from the user's).
-	if _, err := os.Stat(filepath.Join(home, ".loopy", "browser", "dedicated-profile")); err != nil {
+	// The whip-owned profile dir must exist (separate from the user's).
+	if _, err := os.Stat(filepath.Join(home, ".whip", "browser", "dedicated-profile")); err != nil {
 		t.Fatalf("dedicated profile dir missing: %v", err)
 	}
 }
 
 // TestE2ELiveAttach covers the user's-running-Chrome flow: a separately
 // launched Chrome with a debug port (what the profile scan resolves to),
-// attached via LOOPY_CDP_URL. Real cookies, and Close must NOT kill it.
+// attached via WHIP_CDP_URL. Real cookies, and Close must NOT kill it.
 func TestE2ELiveAttach(t *testing.T) {
 	bin := chromiumPath(t)
 	url := testPage(t)
@@ -241,7 +241,7 @@ func TestE2ELiveAttach(t *testing.T) {
 	// Seed a cookie INSIDE that browser (simulating the user's session):
 	// attach, navigate to /set-cookie, detach — then the test browser must
 	// see the cookie.
-	t.Setenv("LOOPY_CDP_URL", fmt.Sprintf("http://127.0.0.1:%d", port))
+	t.Setenv("WHIP_CDP_URL", fmt.Sprintf("http://127.0.0.1:%d", port))
 	deadline := time.Now().Add(30 * time.Second)
 	var b Backend
 	var err error
@@ -315,7 +315,7 @@ func TestEvalImmediatelyAfterAttach(t *testing.T) {
 // endpoint) and Open(ModeLive) transparently lands on a launched dedicated
 // Chrome instead of erroring.
 func TestE2ELiveFallsBackToLaunched(t *testing.T) {
-	if os.Getenv("LOOPY_CDP_WS") != "" || os.Getenv("LOOPY_CDP_URL") != "" {
+	if os.Getenv("WHIP_CDP_WS") != "" || os.Getenv("WHIP_CDP_URL") != "" {
 		t.Skip("explicit CDP endpoint set — fallback bypassed")
 	}
 	// Hermeticity: DiscoverLiveWS's last-resort probe of 9222/9223 could hit
@@ -352,7 +352,7 @@ func TestE2ELiveFallsBackToLaunched(t *testing.T) {
 	}
 }
 
-// TestE2EDedicatedReattach verifies a still-running loopy Chrome is reused:
+// TestE2EDedicatedReattach verifies a still-running whip Chrome is reused:
 // close the backend's CDP connection (simulating a dead/stale backend)
 // while keeping the browser process alive, then Open again — it must
 // reattach to the SAME browser rather than spawn a duplicate, and the

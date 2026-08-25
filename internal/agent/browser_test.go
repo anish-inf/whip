@@ -12,13 +12,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/context-labs/loopy/internal/browser"
-	"github.com/context-labs/loopy/internal/llm"
-	"github.com/context-labs/loopy/internal/tools"
+	"github.com/context-labs/whip/internal/browser"
+	"github.com/context-labs/whip/internal/llm"
+	"github.com/context-labs/whip/internal/tools"
 )
 
 // TestBrowserExecReachesModel pins the full loop: the model calls
-// browser_exec, loopy drives a real headless Chrome, and the page content
+// browser_exec, whip drives a real headless Chrome, and the page content
 // comes back in the tool result the provider receives.
 func TestBrowserExecReachesModel(t *testing.T) {
 	home, _ := os.UserHomeDir()

@@ -1,24 +1,24 @@
 #!/bin/sh
-# loopy installer — downloads the released binary, verifies its checksum
+# whip installer — downloads the released binary, verifies its checksum
 # against the published SHA256SUMS, and installs it to a directory on your PATH.
 #
 # Everything it does is printed as it happens. Read it first if you like:
-#   curl -fsSL https://raw.githubusercontent.com/context-labs/loopy/main/install.sh
+#   curl -fsSL https://raw.githubusercontent.com/context-labs/whip/main/install.sh
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/context-labs/loopy/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/context-labs/whip/main/install.sh | sh
 # Env overrides:
-#   LOOPY_VERSION=v0.1.0   pin a version (default: latest release)
-#   LOOPY_BIN_DIR=~/bin    force the install directory
+#   WHIP_VERSION=v0.1.0   pin a version (default: latest release)
+#   WHIP_BIN_DIR=~/bin    force the install directory
 #   GH_TOKEN=...           GitHub token (needed while the repo is private;
 #                          or just have the `gh` CLI authenticated)
 set -eu
 
-REPO="context-labs/loopy"
+REPO="context-labs/whip"
 API="https://api.github.com/repos/$REPO"
 
 say() { printf '  %s\n' "$*"; }
-die() { printf 'loopy install: %s\n' "$*" >&2; exit 1; }
+die() { printf 'whip install: %s\n' "$*" >&2; exit 1; }
 need() { command -v "$1" >/dev/null 2>&1 || die "required command not found: $1"; }
 
 need uname
@@ -59,10 +59,10 @@ else die "need sha256sum or shasum"; fi
 os=$(uname -s); arch=$(uname -m)
 case "$os" in Linux) os=linux;; Darwin) os=darwin;; *) die "unsupported OS: $os (Linux/macOS only)";; esac
 case "$arch" in x86_64|amd64) arch=x64;; arm64|aarch64) arch=arm64;; *) die "unsupported arch: $arch";; esac
-ASSET="loopy-$os-$arch"
+ASSET="whip-$os-$arch"
 
 # --- version + asset IDs ---
-VERSION="${LOOPY_VERSION:-}"
+VERSION="${WHIP_VERSION:-}"
 say "Resolving ${VERSION:-latest} release..."
 if [ -n "$VERSION" ]; then
   REL=$(api "releases/tags/$VERSION") || die "release $VERSION not found"
@@ -89,11 +89,11 @@ else
   SUMS_ID=$(printf '%s' "$REL" | tr -d '\n' | sed 's/.*"assets": *\[//' | sed 's/},{/}\n{/g' \
     | grep '"name": *"SHA256SUMS"' | head -1 | sed 's/^[^{]*{[^i]*"id": *\([0-9]*\).*/\1/')
 fi
-[ -n "$VERSION" ] || die "could not determine the latest release (set LOOPY_VERSION)"
+[ -n "$VERSION" ] || die "could not determine the latest release (set WHIP_VERSION)"
 [ -n "$BIN_ID" ] || die "no asset $ASSET in release $VERSION"
 [ -n "$SUMS_ID" ] || die "no SHA256SUMS in release $VERSION"
 
-printf '\nloopy %s — %s\n' "$VERSION" "$ASSET"
+printf '\nwhip %s — %s\n' "$VERSION" "$ASSET"
 
 # --- download + verify ---
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
@@ -114,9 +114,9 @@ chmod 755 "$tmp/$ASSET"
 # --- pick an install dir on PATH (first writable wins; create ~/.local/bin if needed) ---
 in_path() { case ":$PATH:" in *":$1:"*) return 0;; *) return 1;; esac; }
 DEST=""
-if [ -n "${LOOPY_BIN_DIR:-}" ]; then
-  mkdir -p "$LOOPY_BIN_DIR" 2>/dev/null || true
-  DEST="$LOOPY_BIN_DIR"
+if [ -n "${WHIP_BIN_DIR:-}" ]; then
+  mkdir -p "$WHIP_BIN_DIR" 2>/dev/null || true
+  DEST="$WHIP_BIN_DIR"
 else
   for d in /usr/local/bin /opt/homebrew/bin "$HOME/.local/bin" "$HOME/bin"; do
     if [ -d "$d" ] && [ -w "$d" ]; then DEST="$d"; break; fi
@@ -126,8 +126,8 @@ else
 fi
 [ -n "$DEST" ] && [ -w "$DEST" ] || die "no writable install directory found"
 
-mv "$tmp/$ASSET" "$DEST/loopy"
-say "OK: installed to $DEST/loopy"
+mv "$tmp/$ASSET" "$DEST/whip"
+say "OK: installed to $DEST/whip"
 
 # --- ensure it's on PATH ---
 if ! in_path "$DEST"; then
@@ -140,23 +140,23 @@ if ! in_path "$DEST"; then
   touch "$HOME/.profile" 2>/dev/null || true
   for rc in "$HOME/.zshrc" "$HOME/.bashrc" "$HOME/.profile"; do
     [ -e "$rc" ] || continue
-    grep -qF "$line" "$rc" 2>/dev/null || printf '\n# loopy\n%s\n' "$line" >> "$rc"
+    grep -qF "$line" "$rc" 2>/dev/null || printf '\n# whip\n%s\n' "$line" >> "$rc"
   done
   say "Added $DEST to your PATH — restart your shell, or run now: $line"
 fi
 
 printf '\n'
-"$DEST/loopy" --version || true
+"$DEST/whip" --version || true
 
 if [ "$os" = "darwin" ] && [ "$arch" = "arm64" ]; then
   cat <<'EOF'
 
 macOS notes:
-  • First run may trigger Gatekeeper — if "loopy" is blocked, allow it in
-    System Settings → Privacy & Security, or run: xattr -d com.apple.quarantine $(which loopy)
+  • First run may trigger Gatekeeper — if "whip" is blocked, allow it in
+    System Settings → Privacy & Security, or run: xattr -d com.apple.quarantine $(which whip)
   • computer_exec's native tier (driving apps) needs Accessibility + Screen
     Recording granted to your terminal app when prompted.
 EOF
 fi
 
-printf '\nDone. Run `loopy` to start.\n'
+printf '\nDone. Run `whip` to start.\n'

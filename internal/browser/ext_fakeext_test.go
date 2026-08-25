@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/context-labs/loopy/internal/browser/extrelay"
+	"github.com/context-labs/whip/internal/browser/extrelay"
 	"github.com/gobwas/ws"
 	"github.com/gobwas/ws/wsutil"
 )
@@ -72,7 +72,7 @@ func (f *fakeExtClient) answerLoop(t *testing.T) {
 }
 
 // fakeCDPResult returns a method-appropriate response for the CDP commands
-// loopy's Backend methods issue (page-level) plus rod's attach machinery.
+// whip's Backend methods issue (page-level) plus rod's attach machinery.
 // Runtime.evaluate dispatches on the expression: WaitLoad polls
 // document.readyState expecting the string "complete", Info() wants the
 // page's URL/title JSON payload.
@@ -84,7 +84,7 @@ func fakeCDPResult(method, expr string) string {
 		}
 		if strings.Contains(expr, "JSON.stringify") {
 			// Info(): JSON.stringify yields a STRING of JSON — the value must
-			// be a string, not an object, or loopy's unmarshal fails.
+			// be a string, not an object, or whip's unmarshal fails.
 			return `{"result":{"type":"string","value":"{\"url\":\"https://example.com/\",\"title\":\"Example\",\"w\":1280,\"h\":800,\"sx\":0,\"sy\":0,\"pw\":1280,\"ph\":800}"}}`
 		}
 		return `{"result":{"type":"string","value":"Example"}}`

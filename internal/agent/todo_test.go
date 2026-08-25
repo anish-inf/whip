@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/context-labs/loopy/internal/llm"
+	"github.com/context-labs/whip/internal/llm"
 )
 
 func callTodowrite(t *testing.T, a *Agent, todosJSON string) string {

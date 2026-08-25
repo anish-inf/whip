@@ -31,7 +31,7 @@ type Message struct {
 	// name") — without it every tool-using turn 400s.
 	Name string `json:"name,omitempty"`
 	// Authored marks a user message the human actually typed and submitted, as
-	// opposed to one loopy injected on their behalf (steered background-task
+	// opposed to one whip injected on their behalf (steered background-task
 	// results, goal-check continuations). Internal only — never sent to the
 	// provider. Used so input-history recall cycles only real submissions.
 	Authored bool `json:"authored,omitempty"`
@@ -172,7 +172,7 @@ func (m *Message) UnmarshalJSON(data []byte) error {
 }
 
 // ToolCall is a model-requested tool invocation. DurationMs and ExitCode are
-// loopy-internal execution bookkeeping (never sent to the provider): how long
+// whip-internal execution bookkeeping (never sent to the provider): how long
 // the tool ran and how it finished, for a future /tools perf view.
 type ToolCall struct {
 	ID       string `json:"id"`
@@ -186,7 +186,7 @@ type ToolCall struct {
 }
 
 // stripAuthored returns a copy of msgs with the internal Authored marker and
-// SentAt timestamp cleared — they're loopy-local bookkeeping (input-history
+// SentAt timestamp cleared — they're whip-local bookkeeping (input-history
 // recall, the rewind picker) and must never reach the provider. It copies
 // because req.Messages typically aliases the caller's conversation slice,
 // which must keep the fields for storage/recall.

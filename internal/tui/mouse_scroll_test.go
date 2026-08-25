@@ -8,7 +8,7 @@ import (
 
 // A wheel-up MouseMsg routed through Update must scroll the transcript viewport
 // up (YOffset increases) and drop follow mode. This is the event tmux forwards
-// to loopy now that mouse_any_flag=1 (the regression was: capture off → tmux
+// to whip now that mouse_any_flag=1 (the regression was: capture off → tmux
 // swallowed the wheel into copy-mode, so YOffset never moved).
 func TestWheelScrollsTranscript(t *testing.T) {
 	m := compactCmdModel()

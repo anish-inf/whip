@@ -4,12 +4,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/context-labs/loopy/internal/mcp"
+	"github.com/context-labs/whip/internal/mcp"
 )
 
 func TestDoctorFreshSession(t *testing.T) {
 	m := tasksModel("http://unused")
-	m.sysPrompt = "You are an expert coding assistant operating inside loopy. "
+	m.sysPrompt = "You are an expert coding assistant operating inside whip. "
 	disabled := false
 	m.mcpMgr = mcp.NewManager(map[string]mcp.ServerConfig{
 		"off":     {Command: []string{"true"}, Enabled: &disabled},

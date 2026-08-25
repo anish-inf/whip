@@ -1,4 +1,4 @@
-# loopy roadmap
+# whip roadmap
 
 UX niceties worth adopting, learned from [pi](file:///home/abe/code/pi) and
 [opencode](file:///home/abe/code/coding-harnesses/opencode). Check things off as they land.
@@ -55,8 +55,8 @@ parallel tool calls and background subagents).
 - [x] `/fork` a session (pi: tree-structured JSONL entries with `parentId` — `docs/session-format.md`; opencode forks from any message via a per-message action menu) — `/fork [name]` copies the conversation to a new session with an auto-suggested `(fork #N)` name; `f` in the rewind picker forks from any message
 - [x] Timeline: jump-to-message picker that live-scrolls the transcript as you browse (opencode `dialog-timeline.tsx`) — the rewind picker (idle esc esc) does this and rewinds/forwards too
 - [x] Undo last message (conversation half): rewind restores the prompt text into the input for editing (opencode `routes/session/index.tsx:615`); file-change revert (opencode `revert.ts` git snapshots) is NOT done — conversation-only by design
-- [x] Compaction: summarize old turns when context fills (pi settings: `compaction: {reserveTokens, keepRecentTokens}`; opencode `/compact`) — `/compact` manually; auto-compacts proactively at a configurable % of the provider-advertised context_length (GET /models, cached in ~/.loopy/models.json; default 50%, `compactPct`, slidable ←/→ in the ctrl+p palette) plus retries once when the provider errors with context_length_exceeded; `/compact <model> [provider]` picks the summarizer (default `deepseek-v4-flash-0731`, else the current model when the default isn't configured); kept tail never orphans a tool_call from its result
-- [x] Token/cost tracking per session (pi models.json carries `cost: {input, output, cacheRead, cacheWrite}`) — session usage totals in the status line; cost computed from provider-advertised `pricing` in GET /models (cached in ~/.loopy/models.json), cached input billed at the cache-read rate; hidden when the provider doesn't advertise prices
+- [x] Compaction: summarize old turns when context fills (pi settings: `compaction: {reserveTokens, keepRecentTokens}`; opencode `/compact`) — `/compact` manually; auto-compacts proactively at a configurable % of the provider-advertised context_length (GET /models, cached in ~/.whip/models.json; default 50%, `compactPct`, slidable ←/→ in the ctrl+p palette) plus retries once when the provider errors with context_length_exceeded; `/compact <model> [provider]` picks the summarizer (default `deepseek-v4-flash-0731`, else the current model when the default isn't configured); kept tail never orphans a tool_call from its result
+- [x] Token/cost tracking per session (pi models.json carries `cost: {input, output, cacheRead, cacheWrite}`) — session usage totals in the status line; cost computed from provider-advertised `pricing` in GET /models (cached in ~/.whip/models.json), cached input billed at the cache-read rate; hidden when the provider doesn't advertise prices
 - [ ] Export transcript to markdown with include-options dialog (opencode `/export`, `ui/dialog-export-options.tsx`)
 
 ## Agent loop
@@ -67,11 +67,11 @@ parallel tool calls and background subagents).
 - [ ] Retry with backoff on provider errors (pi settings: `retry: {maxRetries, baseDelayMs}`)
 - [ ] Streamed partial tool output (bash `onUpdate` throttled at 100ms in pi)
 - [ ] Spill truncated bash output to a temp file and mention the path (pi bash tool)
-- [ ] Inject `LOOPY_SESSION_ID` / `LOOPY_MODEL` env into bash children (pi injects `PI_*`)
+- [ ] Inject `WHIP_SESSION_ID` / `WHIP_MODEL` env into bash children (pi injects `PI_*`)
 
 ## Skills & subagents
 
-- [x] Skills: scan `.agents/skills/*/SKILL.md` (project) and `~/.loopy/skills/` (user), inject name+description into the system prompt as an `<available_skills>` block; the model reads a SKILL.md with its own read tool when relevant (pi's approach — no skill tool needed, `packages/coding-agent/src/core/skills.ts`)
+- [x] Skills: scan `.agents/skills/*/SKILL.md` (project) and `~/.whip/skills/` (user), inject name+description into the system prompt as an `<available_skills>` block; the model reads a SKILL.md with its own read tool when relevant (pi's approach — no skill tool needed, `packages/coding-agent/src/core/skills.ts`)
 - [x] Subagents: a `task` tool that runs a self-contained prompt in a fresh agent with the same tools (minus `task` — no recursion) and returns its final report
 - [x] `$skill-name` invocation (codex-style) with live completion dropdown; skills re-indexed every turn and every `$` keystroke, so new skills load without restarting the harness
 - [ ] Custom agent definitions (`.agents/*.md` with model/tools/prompt frontmatter; opencode agents config `packages/core/src/config/agent.ts`)
@@ -90,16 +90,16 @@ parallel tool calls and background subagents).
 
 Improvement plan with per-item checkboxes: [`.ai-docs/plans/mcp-polish/`](../.ai-docs/plans/mcp-polish/README.md).
 
-- [x] MCP client: stdio + streamable HTTP servers; config merges claude-style `.mcp.json` and codex-style `~/.codex/config.toml [mcp_servers]` under loopy's own `"mcp"` block (opencode's status model `mcp/index.ts:83-106`, name sanitization + tool bridging `mcp/catalog.ts:47-90,117-119` — with the sanitize-collision fixed via hashed server keys; claude-code's `mcp__server__tool` naming kept). Lazy-with-kickoff connects (close-to-broadcast `ready` chan), per-server call serialization, 30s startup / 60s call timeouts, errors as tool output, `/mcp` status + reconnect/enable/disable, `loopy mcp add|list|remove|serve`
+- [x] MCP client: stdio + streamable HTTP servers; config merges claude-style `.mcp.json` and codex-style `~/.codex/config.toml [mcp_servers]` under whip's own `"mcp"` block (opencode's status model `mcp/index.ts:83-106`, name sanitization + tool bridging `mcp/catalog.ts:47-90,117-119` — with the sanitize-collision fixed via hashed server keys; claude-code's `mcp__server__tool` naming kept). Lazy-with-kickoff connects (close-to-broadcast `ready` chan), per-server call serialization, 30s startup / 60s call timeouts, errors as tool output, `/mcp` status + reconnect/enable/disable, `whip mcp add|list|remove|serve`
 - [ ] MCP resources/prompts (opencode: synthetic `read_mcp_resource` tools + prompts-as-slash-commands)
 - [ ] MCP OAuth for remote servers (opencode `oauth-provider.ts` — buffer creds in memory, commit on success; ~800 lines, a `needs_auth` status covers most of the value first)
 - [ ] `ToolListChanged` notification → live re-list (opencode `mcp/index.ts:462-471`; needs the standalone SSE stream on remote transports)
 - [x] Fail-fast MCP calls (connecting server can't park a turn) + did-you-mean on unknown mcp__ tools + first-settle transcript note — the "never stuck, always know why" pass
 - [x] Auto-reconnect with backoff on dropped sessions (gen-guard makes it safe; manual `/mcp reconnect` stays as override)
 - [x] MCP server instructions injected into the system prompt (opencode `session/system.ts:119-135`)
-- [x] `loopy mcp test <name>` (the doctor: connect + list + timing + stderr tail, non-zero exit on failure — CI-checkable `.mcp.json`)
-- [x] `loopy mcp import [--dry-run]` (materialize claude/codex imports into loopy's config)
-- [x] MCP import source gating: `"mcpImport"` block (`enabled`/`only`/`exclude` per claude/codex source); blocked imports stay visible in `/mcp` and `loopy mcp list` instead of vanishing — stops third-party codex-config entries (e.g. ChatGPT app's `node_repl`) from being picked up wholesale
+- [x] `whip mcp test <name>` (the doctor: connect + list + timing + stderr tail, non-zero exit on failure — CI-checkable `.mcp.json`)
+- [x] `whip mcp import [--dry-run]` (materialize claude/codex imports into whip's config)
+- [x] MCP import source gating: `"mcpImport"` block (`enabled`/`only`/`exclude` per claude/codex source); blocked imports stay visible in `/mcp` and `whip mcp list` instead of vanishing — stops third-party codex-config entries (e.g. ChatGPT app's `node_repl`) from being picked up wholesale
 - [ ] Overlay config entries (`"overlay": true` patches `enabled` over imports instead of copying definitions)
 
 ## LSP
@@ -114,7 +114,7 @@ Improvement plan with per-item checkboxes: [`.ai-docs/plans/mcp-polish/`](../.ai
 
 - [ ] Permission prompt: Allow once / Allow always / Reject, where "always" previews the exact rule it installs and "reject" takes a free-text redirect message back to the model (opencode `routes/session/permission.tsx`)
 - [ ] Command-prefix arity for useful "allow always" rules: `git checkout branch` → rule for `git checkout`, not the whole string (opencode `permission/arity.ts`)
-- [x] Project trust prompt on first run in a directory (pi: `trust.json`, `defaultProjectTrust: "ask"`) — `internal/tui/trust.go` + `~/.loopy/trusted.json`, plain-terminal prompt before the TUI starts, piped stdin declines safely
+- [x] Project trust prompt on first run in a directory (pi: `trust.json`, `defaultProjectTrust: "ask"`) — `internal/tui/trust.go` + `~/.whip/trusted.json`, plain-terminal prompt before the TUI starts, piped stdin declines safely
 - [ ] Secrets as references, never values: `"$VAR"`/`"!cmd"` (or `${ENV_VAR}`-style) indirection in config and MCP/tool init, resolved host-side at point of use so raw keys never enter the event log or model context (exo `crates/exoharness/src/secrets.rs` — AES-GCM at rest with keychain/file master key is the full version; the indirection alone is most of the safety)
 
 ## Theming & config
@@ -128,13 +128,13 @@ Improvement plan with per-item checkboxes: [`.ai-docs/plans/mcp-polish/`](../.ai
 
 ## CLI surface
 
-- [ ] Non-interactive one-shot mode: `loopy run "prompt"` — reads piped stdin too, `--format json` emits the raw event stream for scripting (opencode `cli/cmd/run.ts`)
-- [ ] `loopy sessions` list subcommand
-- [ ] Env markers in child processes (`LOOPY=1`, `LOOPY_SESSION_ID`) so scripts can detect they run under the agent (opencode sets `AGENT=1`, `OPENCODE_PID`)
+- [ ] Non-interactive one-shot mode: `whip run "prompt"` — reads piped stdin too, `--format json` emits the raw event stream for scripting (opencode `cli/cmd/run.ts`)
+- [ ] `whip sessions` list subcommand
+- [ ] Env markers in child processes (`WHIP=1`, `WHIP_SESSION_ID`) so scripts can detect they run under the agent (opencode sets `AGENT=1`, `OPENCODE_PID`)
 
 ## Autonomy & durability
 
-From [exo](learnings/other-harnesses/exo.md). Triaged against loopy's actual code:
+From [exo](learnings/other-harnesses/exo.md). Triaged against whip's actual code:
 compaction today is destructive (`session.go` `DELETE FROM messages`), resume of a
 crashed turn can orphan a tool_call, and there is no plan-tracking tool at all.
 Ordered by value-per-line for a single-binary TUI — the first four are the ones
@@ -145,12 +145,12 @@ worth doing now.
 - [x] `todowrite` planning tool (the biggest gap): conversation-scoped store, full-list rewrite each call, exactly one item in_progress, injected back each round so the plan survives long tool loops and compactions; caps ~50 items × 300 chars (exo `exo/tools/todo-tools.ts` is ~100 lines; the claude/opencode pattern) — `internal/agent/todo.go`, persisted on the sessions row, restored on resume
 - [x] Synthesize error tool-results for dangling tool calls when materializing a crashed/interrupted turn on resume — correctness fix, not a feature: one interrupted turn can otherwise produce an API-rejected history (exo `flushDanglingToolResults`, `exoharness/typescript/harness/index.ts:786-804`) — `answerDanglingToolCalls` at the `session.Load` boundary, synthetic result appended right after its assistant message
 - [x] Compaction as a recorded event, not `DELETE FROM messages`: store summary + cutoff seq and derive the prompt view; the raw log stays queryable so a bad compaction is inspectable and retryable. The thin end of the event-sourcing wedge without a store rewrite (exo spec.md: "the durable conversation does not have to equal the prompt") — `compactions` table (append-only summary+cutoff), `Load` derives the view, `/compact log` inspects, `/compact retry` undoes the latest and recompacts from the raw log
-- [x] Workspace rewind: git-snapshot the working tree per turn (or on demand) so file changes can be rolled back, and record the rollback in the session — "rewind does not erase history": rolling back the world must not delete the memory of what was tried (exo `rewind_sandbox` appends `SandboxStarted{snapshot_id}`; opencode `revert.ts` is the same idea) — pre-turn snapshot pinned under `refs/loopy/snapshots/`, keyed by turn index in a `snapshots` table that `DeleteFrom` trims with the messages; `applyRewind` restores via `checkout <ref> -- .` and notes "⟲ workspace rewound — N file(s) restored"; untracked files never touched
+- [x] Workspace rewind: git-snapshot the working tree per turn (or on demand) so file changes can be rolled back, and record the rollback in the session — "rewind does not erase history": rolling back the world must not delete the memory of what was tried (exo `rewind_sandbox` appends `SandboxStarted{snapshot_id}`; opencode `revert.ts` is the same idea) — pre-turn snapshot pinned under `refs/whip/snapshots/`, keyed by turn index in a `snapshots` table that `DeleteFrom` trims with the messages; `applyRewind` restores via `checkout <ref> -- .` and notes "⟲ workspace rewound — N file(s) restored"; untracked files never touched
 
 **High value, cheap:**
 
-- [x] `remember`/`forget` memory tools: plain markdown files (`~/.loopy/memory.md` installation scope + `~/.loopy/sessions/<id>.memory.md` session scope), checkbox bullets the user can edit by hand; `forget` strikes rather than deletes; always-inject with a hard cap (50 × 300 chars — the cap is the retrieval strategy, no embeddings); `/memory` lists both scopes numbered and marks entries done from the TUI (exo `exo/tools/memory-tools.ts`, redesigned to markdown after the opencode finding: opencode has no memory tool, its answer is AGENTS.md — files you own and diff)
-- [x] Stealable `me.md` operating rules for the system prompt: "the tool set changes turn to turn — never assume a tool exists because it did earlier"; "after ~3 failed attempts on the same blocker, escalate plainly instead of looping"; git hygiene ("never `git add .`, review staged diff for secrets, never force-push") (exo `exo/prompts/me.md`) — shipped in `cmd/loopy/main.go`'s system prompt, plus a remember/forget pointer
+- [x] `remember`/`forget` memory tools: plain markdown files (`~/.whip/memory.md` installation scope + `~/.whip/sessions/<id>.memory.md` session scope), checkbox bullets the user can edit by hand; `forget` strikes rather than deletes; always-inject with a hard cap (50 × 300 chars — the cap is the retrieval strategy, no embeddings); `/memory` lists both scopes numbered and marks entries done from the TUI (exo `exo/tools/memory-tools.ts`, redesigned to markdown after the opencode finding: opencode has no memory tool, its answer is AGENTS.md — files you own and diff)
+- [x] Stealable `me.md` operating rules for the system prompt: "the tool set changes turn to turn — never assume a tool exists because it did earlier"; "after ~3 failed attempts on the same blocker, escalate plainly instead of looping"; git hygiene ("never `git add .`, review staged diff for secrets, never force-push") (exo `exo/prompts/me.md`) — shipped in `cmd/whip/main.go`'s system prompt, plus a remember/forget pointer
 
 **Later (needs `/goal` usage to justify the always-on turn):**
 
@@ -159,5 +159,5 @@ worth doing now.
 **Deliberately cut** (exo needs them because it's long-running and edits itself in production; a coding TUI doesn't):
 
 - ~~Full event-sourced store rewrite~~ — too big once compaction-as-event lands; keep custom-kind discipline inside the messages-table world instead
-- ~~`/events` introspection tool~~ — pays off with adapters/restarts loopy doesn't have; cost already lives in the status line
-- ~~`rebuild_and_restart_loopy` + SELF.md self-map~~ — a harness rebuilt by hand between sessions doesn't need to restart itself mid-conversation
+- ~~`/events` introspection tool~~ — pays off with adapters/restarts whip doesn't have; cost already lives in the status line
+- ~~`rebuild_and_restart_whip` + SELF.md self-map~~ — a harness rebuilt by hand between sessions doesn't need to restart itself mid-conversation

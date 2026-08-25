@@ -4,7 +4,7 @@ Branch: current working branch (browser work lands here)
 
 ## What this does
 
-When the default `live` mode finds no debuggable browser, loopy currently
+When the default `live` mode finds no debuggable browser, whip currently
 returns `ErrNoLiveBrowser` and the model asks the user to set up debugging.
 Port hermes-agent's `/browser connect` UX: **auto-fallback** — probe live,
 and if nothing debuggable is running, silently launch (or reuse) a
@@ -18,7 +18,7 @@ dedicated-profile Chrome and use it for that session. Zero user setup.
 - Port-squatter resilience: a launched dedicated browser survives something
   else holding 9222 (we bind port 0 / random free port — already the case)
   and discovery probes **both** loopbacks (127.0.0.1 + [::1]).
-- Reuse: a previously-launched loopy dedicated Chrome that is still alive
+- Reuse: a previously-launched whip dedicated Chrome that is still alive
   is reattached (profile DevToolsActivePort scan) instead of spawning a
   second instance.
 
@@ -48,7 +48,7 @@ dedicated-profile Chrome and use it for that session. Zero user setup.
   covers most of this; we keep the rod path.
 - `hermes-agent/hermes_cli/cli_commands_mixin.py:2470-2500` — auto-launch
   on connect when nothing is listening, then poll until the endpoint is up.
-- loopy `internal/browser/browser.go:150-186` — existing dedicated launch
+- whip `internal/browser/browser.go:150-186` — existing dedicated launch
   incl. profile-quarantine retry. `attach.go:178-228` — live discovery.
 
 ## Design
@@ -94,7 +94,7 @@ func Open(ctx context.Context, mode Mode) (*Browser, error)
 `mode == ModeLive` but `b.obtained != live`. `Do` prepends the notice to
 the first successful tool output:
 
-> [Note: no debuggable live browser found — using loopy's dedicated Chrome
+> [Note: no debuggable live browser found — using whip's dedicated Chrome
 > (logins live in its own profile). To use your everyday browser instead:
 > chrome://inspect/#remote-debugging, or set browser.mode in config.]
 

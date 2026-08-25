@@ -11,20 +11,20 @@ tasks:
     silent: true
 
   run:
-    desc: "Run loopy locally from source (pass flags via CLI_ARGS: task run -- -m glm-5.2-fast)"
+    desc: "Run whip locally from source (pass flags via CLI_ARGS: task run -- -m glm-5.2-fast)"
     interactive: true
     cmds:
-      - go run -ldflags "{{.LDFLAGS}}" ./cmd/loopy {{.CLI_ARGS}}
+      - go run -ldflags "{{.LDFLAGS}}" ./cmd/whip {{.CLI_ARGS}}
 
   build:
-    desc: Build the loopy binary into ./loopy
+    desc: Build the whip binary into ./whip
     cmds:
-      - go build -ldflags "{{.LDFLAGS}}" -o loopy ./cmd/loopy
+      - go build -ldflags "{{.LDFLAGS}}" -o whip ./cmd/whip
 
   install:
-    desc: Install loopy to $GOPATH/bin (~/go/bin)
+    desc: Install whip to $GOPATH/bin (~/go/bin)
     cmds:
-      - go install -ldflags "{{.LDFLAGS}}" ./cmd/loopy
+      - go install -ldflags "{{.LDFLAGS}}" ./cmd/whip
 
   benchmark:
     desc: "Benchmark startup: binary boot (--version) and full init (-bench: config, routing, key, agent)"
@@ -32,9 +32,9 @@ tasks:
     cmds:
       - |
         if command -v hyperfine >/dev/null 2>&1; then
-          hyperfine -N --warmup 5 './loopy --version' './loopy -bench'
+          hyperfine -N --warmup 5 './whip --version' './whip -bench'
         else
-          for cmd in "./loopy --version" "./loopy -bench"; do
+          for cmd in "./whip --version" "./whip -bench"; do
             start=$(date +%s%N)
             for i in $(seq 1 50); do $cmd >/dev/null; done
             end=$(date +%s%N)
@@ -86,12 +86,12 @@ tasks:
       - go mod tidy
 
   driver:
-    desc: "Build the loopy-computer Swift driver (macOS; Xcode CLT) and copy it into internal/computer/bin for go:embed"
+    desc: "Build the whip-computer Swift driver (macOS; Xcode CLT) and copy it into internal/computer/bin for go:embed"
     cmds:
       - swift build -c release --package-path driver
-      - cp driver/.build/release/loopy-computer internal/computer/bin/loopy-computer
-      - codesign --sign - --force internal/computer/bin/loopy-computer 2>/dev/null || true
-      - echo "driver built → internal/computer/bin/loopy-computer (rebuild loopy to re-embed)"
+      - cp driver/.build/release/whip-computer internal/computer/bin/whip-computer
+      - codesign --sign - --force internal/computer/bin/whip-computer 2>/dev/null || true
+      - echo "driver built → internal/computer/bin/whip-computer (rebuild whip to re-embed)"
 
   driver-test:
     desc: "Run the Swift driver XCTest suite (needs full Xcode — XCTest isn't in CLT)"

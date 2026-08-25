@@ -1,5 +1,5 @@
 // stress_test.go — the rigorous tier: concurrency, churn, and crash
-// recovery, driver-parameterized (LOOPY_BROWSER_DRIVER selects; the default
+// recovery, driver-parameterized (WHIP_BROWSER_DRIVER selects; the default
 // run exercises rod, CI/env flips to chromedp). These tests exist to fail
 // under interleaving, not to pass politely.
 
@@ -132,7 +132,7 @@ func TestRecoverFromClosedBrowser(t *testing.T) {
 	if err != nil {
 		t.Fatalf("after crash: %v", err)
 	}
-	if !strings.Contains(out, "loopy e2e") {
+	if !strings.Contains(out, "whip e2e") {
 		t.Fatalf("post-crash eval: %s", out)
 	}
 }

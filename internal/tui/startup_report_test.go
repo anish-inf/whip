@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/context-labs/loopy/internal/mcp"
+	"github.com/context-labs/whip/internal/mcp"
 )
 
 // TestStartupReportSkillsAndWarnings: the report names loaded skills, flags a
@@ -69,7 +69,7 @@ func TestStartupReportSilent(t *testing.T) {
 	wd, _ := os.Getwd()
 	os.Chdir(dir)
 	defer os.Chdir(wd)
-	t.Setenv("HOME", t.TempDir()) // no ~/.loopy/skills either
+	t.Setenv("HOME", t.TempDir()) // no ~/.whip/skills either
 
 	m := tasksModel("http://unused")
 	m.startupReport()

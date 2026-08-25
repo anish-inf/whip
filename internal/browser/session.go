@@ -45,10 +45,10 @@ type Session struct {
 }
 
 // fallbackNotice is the one-line heads-up prepended to the first tool
-// output when a live-mode session fell back to a launched loopy Chrome
+// output when a live-mode session fell back to a launched whip Chrome
 // (hermes /browser connect's "launched and listening" line, in-band so the
 // model relays it in context). Emitted once per session.
-const fallbackNotice = "[Note: no debuggable live browser found — using loopy's dedicated Chrome (logins live in its own profile). To drive your everyday browser instead: chrome://inspect/#remote-debugging, or set browser.mode/cdpUrl in config.]\n\n"
+const fallbackNotice = "[Note: no debuggable live browser found — using whip's dedicated Chrome (logins live in its own profile). To drive your everyday browser instead: chrome://inspect/#remote-debugging, or set browser.mode/cdpUrl in config.]\n\n"
 
 // Session returns the named session (default name "default"), validating
 // the name. The mode is the manager's default; per-session mode override
@@ -109,7 +109,7 @@ func (s *Session) Do(ctx context.Context, fn func(b Backend) (string, error)) (s
 }
 
 // takeNotice returns the fallback notice exactly once per session, and only
-// when a live-mode session is actually driving a launched/reattached loopy
+// when a live-mode session is actually driving a launched/reattached whip
 // Chrome (the user asked for live; they should hear they didn't get it).
 func (s *Session) takeNotice(b Backend) string {
 	s.mu.Lock()

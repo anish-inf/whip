@@ -3,8 +3,8 @@ package tui
 import (
 	"strings"
 
-	"github.com/context-labs/loopy/internal/computer"
-	"github.com/context-labs/loopy/internal/tools"
+	"github.com/context-labs/whip/internal/computer"
+	"github.com/context-labs/whip/internal/tools"
 )
 
 // computerUseCommand implements /computer-use (alias /computer):

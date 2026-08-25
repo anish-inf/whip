@@ -9,11 +9,11 @@ import (
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/context-labs/loopy/internal/agent"
-	"github.com/context-labs/loopy/internal/config"
-	"github.com/context-labs/loopy/internal/llm"
-	"github.com/context-labs/loopy/internal/mcp"
-	"github.com/context-labs/loopy/internal/tools"
+	"github.com/context-labs/whip/internal/agent"
+	"github.com/context-labs/whip/internal/config"
+	"github.com/context-labs/whip/internal/llm"
+	"github.com/context-labs/whip/internal/mcp"
+	"github.com/context-labs/whip/internal/tools"
 )
 
 // mcpModel builds a headless model with an MCP manager over cfgs.
@@ -73,7 +73,7 @@ func TestMCPLiveServerEndToEnd(t *testing.T) {
 }
 
 func TestMCPTogglePersists(t *testing.T) {
-	t.Setenv("LOOPY_HOME", t.TempDir())
+	t.Setenv("WHIP_HOME", t.TempDir())
 	m := mcpModel(t, map[string]mcp.ServerConfig{"docs": {Command: []string{"docs"}}})
 	m.command("/mcp docs disable")
 	entry, ok := m.cfg.MCPServers["docs"]

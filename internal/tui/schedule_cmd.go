@@ -8,7 +8,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/context-labs/loopy/internal/schedule"
+	"github.com/context-labs/whip/internal/schedule"
 )
 
 // The wakeup channel: a 5s ticker checks the session's scheduled tasks and

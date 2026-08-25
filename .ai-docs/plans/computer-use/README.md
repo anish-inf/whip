@@ -1,10 +1,10 @@
-# computer-use for loopy — opinionated, semantic-first
+# computer-use for whip — opinionated, semantic-first
 
 **Branch:** `computer-use` (off `main` @ `b01ea52`)
 
 ## What this does
 
-Gives loopy a `computer_exec` tool: drive the user's actual computer —
+Gives whip a `computer_exec` tool: drive the user's actual computer —
 mouse, keyboard, screenshots, app control — with browsers as the flagship
 use case (the whole-computer driver subsumes browser automation, including
 the user's already-open Chrome that CDP can't attach to because remote
@@ -14,7 +14,7 @@ debugging is off).
 
 Codex/computer-use standard: screenshot → model guesses pixel coordinates →
 click → screenshot again to verify. That's a 2-RTT-per-action,
-no-grounding, no-semantic-model loop. Loopy's version is **semantic-first,
+no-grounding, no-semantic-model loop. Whip's version is **semantic-first,
 pixels as fallback**:
 
 1. **Accessibility tree is the primary interface**, not the screenshot.
@@ -193,7 +193,7 @@ pieces (policy, language, Chrome-AS script construction) test anywhere.
    is the follow-up).
 4. AX tree reads (System Events UI scripting via osascript for v1 — no CGO).
 5. CGEvent/cliclick input + screencapture screenshots → ScreenshotSink.
-6. Guardian-style review: defer — loopy's trust model + step-label
+6. Guardian-style review: defer — whip's trust model + step-label
    visibility covers v1; the effect-not-intent reviewer is the v2 bet
-   (loopy already has compaction-model plumbing for a cheap reviewer model).
+   (whip already has compaction-model plumbing for a cheap reviewer model).
 EOF

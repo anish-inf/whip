@@ -14,7 +14,7 @@ public enum Capture {
     /// resolution (Retina 2x backing is downscaled to points).
     public static func screenshot(pid: pid_t, quality: Double = 0.7) async throws -> Data {
         guard TCC.screenRecordingGranted else {
-            throw RPCError(.noScreenPermission, "Screen Recording permission not granted to loopy-computer")
+            throw RPCError(.noScreenPermission, "Screen Recording permission not granted to whip-computer")
         }
         guard CGPreflightScreenCaptureAccess() else {
             throw RPCError(.noScreenPermission, "Screen Recording permission not granted")

@@ -12,15 +12,15 @@ import (
 )
 
 // TestStdioServerEndToEnd runs the full production path against a REAL stdio
-// subprocess (the self-served loopy), exercising CommandTransport, the
+// subprocess (the self-served whip), exercising CommandTransport, the
 // process spawn, env inheritance, and the stderr ring buffer on failure.
-// Gated on LOOPY_TEST_SELFHOST since it builds the binary.
+// Gated on WHIP_TEST_SELFHOST since it builds the binary.
 func TestStdioServerEndToEnd(t *testing.T) {
-	if os.Getenv("LOOPY_TEST_SELFHOST") == "" {
-		t.Skip("set LOOPY_TEST_SELFHOST=1 to run")
+	if os.Getenv("WHIP_TEST_SELFHOST") == "" {
+		t.Skip("set WHIP_TEST_SELFHOST=1 to run")
 	}
-	bin := filepath.Join(t.TempDir(), "loopy")
-	if out, err := exec.Command("go", "build", "-o", bin, "../../cmd/loopy").CombinedOutput(); err != nil {
+	bin := filepath.Join(t.TempDir(), "whip")
+	if out, err := exec.Command("go", "build", "-o", bin, "../../cmd/whip").CombinedOutput(); err != nil {
 		t.Fatalf("build: %v\n%s", err, out)
 	}
 

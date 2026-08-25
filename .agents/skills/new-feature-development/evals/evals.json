@@ -1,11 +1,11 @@
 {
   "skill_name": "new-feature-development",
-  "notes": "Workflow/planning skill — output is a clarify-then-plan artifact, not shipped code. Dry-run prompts ask the agent to plan (not implement) a net-new loopy feature; graded on whether it clarifies ambiguity, checks docs/roadmap.md + docs/features.md + docs/learnings/ for prior art before designing, names concrete files across the five surfaces (tools / agent loop / TUI / config / session store), plans channel-idiomatic concurrency with -race tests, plans the docs/features.md section + roadmap checkbox, and ends at task check + adversarial review rather than jumping into code.",
+  "notes": "Workflow/planning skill — output is a clarify-then-plan artifact, not shipped code. Dry-run prompts ask the agent to plan (not implement) a net-new whip feature; graded on whether it clarifies ambiguity, checks docs/roadmap.md + docs/features.md + docs/learnings/ for prior art before designing, names concrete files across the five surfaces (tools / agent loop / TUI / config / session store), plans channel-idiomatic concurrency with -race tests, plans the docs/features.md section + roadmap checkbox, and ends at task check + adversarial review rather than jumping into code.",
   "evals": [
     {
       "id": 0,
       "name": "mcp-server-support",
-      "prompt": "I want loopy to support MCP servers so the agent can call tools from configured MCP servers (stdio and HTTP), backwards compatible with claude-style .mcp.json config.",
+      "prompt": "I want whip to support MCP servers so the agent can call tools from configured MCP servers (stdio and HTTP), backwards compatible with claude-style .mcp.json config.",
       "expected_output": "Clarifies the ambiguity (which transports in v1, config precedence vs claude/codex formats, tool name prefixing, what happens when a server is down at startup, whether subagents inherit MCP tools). Checks docs/roadmap.md and docs/learnings/ for existing MCP research before designing. Plans a new internal/mcp package (config normalization, client manager, tools.Tool adapter) that plugs into agent.New via the existing Tool{Def,Run} contract — not a parallel tool registry. Names concrete files, plans tool output truncation via the existing maxOutput convention, per-call timeouts, lazy/background connect so a dead server can't block startup. Addresses concurrency: MCP calls in parallel tool batches, goroutine ownership on server shutdown, -race tests with an in-process fake MCP server. Plans a /mcp slash command in the existing command() switch, docs/features.md section, and task check + adversarial review. Does NOT start coding before plan sign-off and does NOT hand-wave the config-compat question.",
       "files": []
     },

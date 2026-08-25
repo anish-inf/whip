@@ -27,7 +27,7 @@ func TestNoGapBetweenLastReplyAndInput(t *testing.T) {
 	// locate the input box and the last assistant line
 	inputRow, lastReplyRow := -1, -1
 	for i, l := range lines {
-		if strings.Contains(l, "Ask loopy anything") {
+		if strings.Contains(l, "Ask whip anything") {
 			inputRow = i
 		}
 		if strings.Contains(l, "What are you working on?") {

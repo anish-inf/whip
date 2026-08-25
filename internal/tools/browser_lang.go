@@ -3,7 +3,7 @@
 // (`name(arg, ...)`), arguments are JSON values, and `print(expr)` where
 // expr is a helper call or a quoted string. js(...) payloads pass through
 // to the page verbatim. Simple semantics keep the model reliable and the
-// parser ~100 lines with no eval surface in loopy itself.
+// parser ~100 lines with no eval surface in whip itself.
 
 package tools
 
@@ -13,7 +13,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/context-labs/loopy/internal/browser"
+	"github.com/context-labs/whip/internal/browser"
 )
 
 // helperStmt is one parsed helper call (shared by browser_exec and

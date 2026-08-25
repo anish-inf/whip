@@ -1,6 +1,6 @@
 # Features
 
-loopy is a minimal coding-agent harness: an interactive bubbletea TUI driving an
+whip is a minimal coding-agent harness: an interactive bubbletea TUI driving an
 LLM tool-use loop (bash / read / write / edit / task) with provider-routable
 models. This document is the map of what's shipped and where it lives. Each
 section links the behavior to the code and its tests.
@@ -103,7 +103,7 @@ as a **steered message**, so the model sees it on the next loop boundary.
   every start/settle; `resume()` seeds the registry via `RestoreTask`
   (settled, `Done` pre-closed, marked `Restored`). A row still `running` on
   disk means the subagent died with the last process exit, so it comes back
-  as `error` — "interrupted — loopy exited". Restored tasks are history:
+  as `error` — "interrupted — whip exited". Restored tasks are history:
   `/tasks` lists them with a `(restored)` marker; the dock never shows them.
   The dock itself shows running tasks plus ones settled within a one-minute
   grace window (`dockSettledGrace`) — long enough to notice the ✓, then the
@@ -131,7 +131,7 @@ capabilities. Two distinct limits, both honored:
 - **Output cap** — `Model.MaxOut`, else the provider's `max_completion_tokens`,
   else the context window. Sent as the request's `max_tokens`.
 
-The catalog (`~/.loopy/models.json`) caches each provider's model list with a
+The catalog (`~/.whip/models.json`) caches each provider's model list with a
 24h TTL and refreshes in the background. When the provider advertises
 per-token `pricing` (inference.net / OpenRouter shape — `prompt`,
 `completion`, `input_cache_read` decimal strings), the catalog caches the
@@ -167,7 +167,7 @@ errors for the compaction retry, `Stream` returns the message + usage, and
   text stays plain and renders on flush. `markdown.go`.
 - **Clickable links (OSC 8).** URLs and existing local file paths in the
   transcript are terminal hyperlinks — cmd/ctrl-click opens them, no mouse
-  plumbing in loopy (the terminal owns the click). `links.go` runs two passes
+  plumbing in whip (the terminal owns the click). `links.go` runs two passes
   over glamour's output: `hyperlinkGlamourLinks` rewires rendered
   `[label](url)` links so the href atom becomes the OSC 8 target on the
   label instead of a second visible copy (bare autolinks become clickable in
@@ -207,7 +207,7 @@ errors for the compaction retry, `Stream` returns the message + usage, and
   `Agent.Steer` (mutex-guarded, injected at the next loop boundary with the
   usual `(steered)` echo) — the turn goroutine owns `Agent.Messages` while
   busy. Esc stays bound to the turn; a running escape isn't cancellable (the
-  120s cap bounds it). `/cd [dir]` changes loopy's process cwd (an in-flight
+  120s cap bounds it). `/cd [dir]` changes whip's process cwd (an in-flight
   command keeps its already-resolved cwd, POSIX; the next spawns, relative
   tool paths, and the `@` index follow); bare prints it, `~` expands. `/pwd`
   prints it. Port of opencode's `session.shell` minus the shell-mode chrome —
@@ -269,14 +269,14 @@ fork while rewound into the redo stack, rename both paths.
 
 ## MCP
 
-`internal/mcp/` — loopy is an MCP client (stdio + streamable HTTP) and, via
-`loopy mcp serve`, an MCP server. Three sources of server config merge with
-loopy's own on top (per-name, whole entry): a project `.mcp.json`
+`internal/mcp/` — whip is an MCP client (stdio + streamable HTTP) and, via
+`whip mcp serve`, an MCP server. Three sources of server config merge with
+whip's own on top (per-name, whole entry): a project `.mcp.json`
 (claude-style: `{"mcpServers": {name: {type, command, args, env, url,
 headers}}}`), `~/.codex/config.toml` `[mcp_servers.*]` (codex-style), and the
-`"mcp"` block in `~/.loopy/config.json`. Claude `type: sse` imports as
+`"mcp"` block in `~/.whip/config.json`. Claude `type: sse` imports as
 disabled-with-note (legacy transport); `${VAR}` references in env/headers
-expand from loopy's environment.
+expand from whip's environment.
 
 - **Manager** (`manager.go`) — one lifecycle goroutine per server; a
   `ready chan struct{}` closes once on first settle (the BackgroundTask
@@ -303,24 +303,24 @@ expand from loopy's environment.
 - **TUI** — `/mcp` shows the status table (`● N tools` / `✗ err` /
   `○ disabled` / `◌ connecting…`); `/mcp <name> reconnect|enable|disable`
   reconnects live or persists a toggle through the guarded `Config.Save`.
-- **CLI** — `loopy mcp list` (merged view with per-name source labels —
-  `loopy config` / `.mcp.json` / `codex config` — and a `blocked` state),
-  `loopy mcp add <name> -- <cmd...>` / `--url`, `loopy mcp remove`,
-  `loopy mcp import [--dry-run]` (materializes imported servers into loopy's
+- **CLI** — `whip mcp list` (merged view with per-name source labels —
+  `whip config` / `.mcp.json` / `codex config` — and a `blocked` state),
+  `whip mcp add <name> -- <cmd...>` / `--url`, `whip mcp remove`,
+  `whip mcp import [--dry-run]` (materializes imported servers into whip's
   config; `--dry-run` prints the JSONC fragment without writing; blocked
-  servers are never imported). `loopy mcp serve` (`serve.go`) exposes loopy's
+  servers are never imported). `whip mcp serve` (`serve.go`) exposes whip's
   read/bash/edit/write as an MCP stdio server for other harnesses.
-- **Import gating** — the `"mcpImport"` block in `~/.loopy/config.json`
+- **Import gating** — the `"mcpImport"` block in `~/.whip/config.json`
   (`{"claude": …, "codex": …}` per source: `enabled`, `only` allowlist,
   `exclude` denylist — exclude wins over only; absent block imports both
   sources, the pre-gating behavior). Filtered-out imports land in the
   discovery result's `Blocked` map as disabled+noted copies
-  (`LoadMergedFiltered`), stay visible in `/mcp` and `loopy mcp list`
+  (`LoadMergedFiltered`), stay visible in `/mcp` and `whip mcp list`
   (`○ disabled — blocked by mcpImport config`), and `/mcp <name> enable` on a
   blocked name refuses with a pointer at the config instead of silently
   shadowing. This is the fix for third-party apps writing MCP entries into
   `~/.codex/config.toml` (e.g. the ChatGPT desktop app's `node_repl`) that
-  loopy would otherwise pick up wholesale.
+  whip would otherwise pick up wholesale.
 - **Shutdown** — `Manager.Close()` runs before `bashrun.KillAll()`; stdio
   children spawn in their own process group, and the SDK terminates them
   (stdin close → SIGTERM → SIGKILL after 3s).
@@ -343,22 +343,22 @@ Polish (the "never stuck, always know why" pass):
 - **Server instructions** — initialize-result instructions render into an
   `<mcp_instructions>` block appended to the system prompt every turn
   (alongside skills), tracking live sessions.
-- **`loopy mcp test <name>`** — the doctor: connect + list + timing + tool
+- **`whip mcp test <name>`** — the doctor: connect + list + timing + tool
   names, stderr tail on failure, non-zero exit — CI-checkable `.mcp.json`.
 
 Tests: `config_test.go` (claude/codex parsing incl. a real-world codex
 config, merge precedence, discovery errors, tool-name round-trips, import
-policy filtering — blocked-in-`Blocked`, exclude-beats-only, loopy-name
+policy filtering — blocked-in-`Blocked`, exclude-beats-only, whip-name
 shadow protection — and the blocked node_repl scenario at the manager
 level), `manager_test.go` (connect/call, error-as-output, structured+media
 flattening, dead-server degradation, reconnect, parallel calls under `-race`,
 ctx cancel mid-connect), `loop_test.go` (model→MCP→model round trip against
 a fake provider; stale def on a dead server returns `"Error: …"` and the turn
-completes), `selfhost_test.go` (`loopy mcp serve` end-to-end, gated on
-`LOOPY_TEST_SELFHOST=1`), `tui/mcp_test.go` (status view incl. blocked rows,
+completes), `selfhost_test.go` (`whip mcp serve` end-to-end, gated on
+`WHIP_TEST_SELFHOST=1`), `tui/mcp_test.go` (status view incl. blocked rows,
 toggle persistence round-trip, enable-on-blocked refusal),
 `config/config_test.go` (mcpImport JSONC round-trip, clobber recovery
-preserving the block), `cmd/loopy/mcp_import_test.go` (import dry-run vs
+preserving the block), `cmd/whip/mcp_import_test.go` (import dry-run vs
 apply, idempotence, blocked servers never imported).
 
 ## Process safety
@@ -367,7 +367,7 @@ apply, idempotence, blocked servers never imported).
 in a process registry (`track`/`untrack`). On exit (`tui.Run` returning — quit,
 `/quit`, or a signal), `KillAll()` SIGKILLs every tracked **process group** and
 waits briefly for reaping, so an agent-started server or watcher never outlives
-loopy.
+whip.
 
 The non-interactive path captures via explicit `StdoutPipe`/`StderrPipe` and
 closes the read ends the moment the process exits, so a detached grandchild
@@ -399,7 +399,7 @@ wakeup (a per-file channel close instead of polling timeouts).
   `tools.InteractiveBash`); nil hook = unchanged output.
 - **Manager** (`manager.go`) — the registry is data: `gopls` built-in (root =
   nearest `go.work`/`go.mod`/`go.sum`, found by walking up from the file);
-  the `"lsp"` block in `~/.loopy/config.json` (same shape as the `mcp`
+  the `"lsp"` block in `~/.whip/config.json` (same shape as the `mcp`
   block: `command`, `extensions`, `rootMarkers`, `env`, `enabled`) adds
   servers or disables the built-in. Servers spawn lazily on first covered
   file touch; concurrent touches dedup through a close-to-broadcast channel,
@@ -441,7 +441,7 @@ auto-installing servers.
 ## Skills
 
 `internal/skills/skills.go` — scans `.agents/skills/*/SKILL.md` (project) and
-`~/.loopy/skills/` (user) for a name+description frontmatter block, injected
+`~/.whip/skills/` (user) for a name+description frontmatter block, injected
 into the system prompt as an `<available_skills>` catalog in the Agent Skills
 spec format (`<skill><name>/<description>/<location>`, XML-escaped). The model
 reads a SKILL.md with its own read tool when relevant. Skills re-index every
@@ -462,7 +462,7 @@ spend once requests have run), a TOTAL line, and trim pointers. Built for
 users arriving from heavier harnesses whose first call silently carries tens
 of thousands of tokens of skill/MCP bloat. Tests: `tui/context_doctor_test.go`.
 
-**Startup resource report** — first paint names what loopy loaded: `skills: N
+**Startup resource report** — first paint names what whip loaded: `skills: N
 loaded`, one `⚠` line per degraded skill (description over maxDesc → truncated
 in the prompt) or unparseable SKILL.md (pi's [Skill conflicts] lesson — a
 broken skill is never silent), and one `mcp:` line with per-server status
@@ -484,9 +484,9 @@ code-shaped tool, `browser_exec`. Design: docs/learnings/browser-use-integration
   → WS resolution (Chrome 147+ 404 falls back to the file's WS path after
   the path proves it answers a WebSocket upgrade; Chrome 144+ 403 surfaces
   as `ErrPermissionBlocked` with user-actionable text). `dedicated`
-  launches a separate Chrome with a loopy-owned
-  `~/.loopy/browser/dedicated-profile` (no popups); `headless` is the same
-  without a window. Explicit endpoints win: `LOOPY_CDP_WS`/`LOOPY_CDP_URL`
+  launches a separate Chrome with a whip-owned
+  `~/.whip/browser/dedicated-profile` (no popups); `headless` is the same
+  without a window. Explicit endpoints win: `WHIP_CDP_WS`/`WHIP_CDP_URL`
   env or `browser.cdpUrl` config.
 - **Auto-launch fallback** (hermes `/browser connect` model, ported in
   `.ai-docs/plans/browser-auto-launch`): when live discovery finds no
@@ -495,7 +495,7 @@ code-shaped tool, `browser_exec`. Design: docs/learnings/browser-use-integration
   Chrome for that session instead of dead-ending the tool call. Discovery
   probes both loopbacks (127.0.0.1 + [::1]) and verifies `/json/version`'s
   `Browser` field, so a squatter on 9222 no longer resolves to a bogus WS
-  URL — it triggers the fallback. A still-running loopy Chrome is reattached
+  URL — it triggers the fallback. A still-running whip Chrome is reattached
   via `DiscoverWSForProfile` (its profile's DevToolsActivePort) rather than
   re-launched; `Browser.Obtained()` reports live/launched/reattached, and
   `Session.Do` prepends a one-line notice to the first tool output when a
@@ -514,10 +514,10 @@ code-shaped tool, `browser_exec`. Design: docs/learnings/browser-use-integration
   (one attached page target) and tunnels everything else verbatim, so the
   existing rod Backend is reused unchanged (navigate/click/type/screenshot/
   AX tree). Security: loopback only, per-process bearer token in
-  `~/.loopy/browser/extension/relay.json` (0600), and only a tab the user
+  `~/.whip/browser/extension/relay.json` (0600), and only a tab the user
   pinned by clicking the extension icon is drivable. Accepted trade-off:
-  Chrome shows a "loopy is debugging this browser" infobar while pinned.
-  Setup: `loopy browser install` writes the extension + relay.json, mints
+  Chrome shows a "whip is debugging this browser" infobar while pinned.
+  Setup: `whip browser install` writes the extension + relay.json, mints
   the token, and opens `chrome://extensions` + the folder (the 3 manual
   clicks — Developer mode → Load unpacked → select folder — are on the user;
   Chrome forbids programmatic install).
@@ -527,7 +527,7 @@ code-shaped tool, `browser_exec`. Design: docs/learnings/browser-use-integration
   `press`, `fill`, `scroll`, `waitLoad`, `waitFor`, `ax`+`box` for
   AX-tree→coordinate workflows, `tabs`/`useTab`, `upload`, `dialog`,
   `screenshot`, `info`, `print`) — parsed by a ~200-line quote-aware
-  mini-interpreter (`browser_lang.go`), no eval surface in loopy.
+  mini-interpreter (`browser_lang.go`), no eval surface in whip.
 - **Named sessions** (`session: "<name>"`, prefix `<mode>:` to override the
   default mode per session): one lazily-opened browser per (mode, name),
   calls serialized through a 1-capacity channel semaphore (the filelocks
@@ -576,7 +576,7 @@ Environment note (this dev box): Playwright's Chromium + unpacked Ubuntu
 debs under `/tmp/chromelibs` (LD_LIBRARY_PATH) drive the E2E tests; tests
 skip cleanly without a Chromium binary. Form-control text input
 (`<input>`/textarea) wedges the renderer in that sandboxed build — an
-environment quirk, not a rod/loopy bug; verified on real Chrome.
+environment quirk, not a rod/whip bug; verified on real Chrome.
 
 The browser-use CLI-over-MCP escape hatch remains available via config for
 anyone wanting the Python ecosystem (§4 option B).

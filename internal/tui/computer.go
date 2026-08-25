@@ -3,7 +3,7 @@ package tui
 import (
 	"strings"
 
-	"github.com/context-labs/loopy/internal/computer"
+	"github.com/context-labs/whip/internal/computer"
 )
 
 // computerConsent is the computer-use per-app consent hook. The tool calls

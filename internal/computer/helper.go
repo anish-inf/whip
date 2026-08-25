@@ -1,6 +1,6 @@
-// helper.go — the Go client for the embedded loopy-computer Swift helper:
+// helper.go — the Go client for the embedded whip-computer Swift helper:
 // spawn, handshake-token, version check, JSON-RPC over stdio, crash restart.
-// The wire contract lives in driver/Sources/LoopyComputerCore (both sides pin
+// The wire contract lives in driver/Sources/WhipComputerCore (both sides pin
 // protocolVersion; a mismatch hard-fails — codex's CodexComputerUseIPC-4
 // lesson). Design: .ai-docs/plans/computer-use-native/README.md.
 
@@ -23,10 +23,10 @@ import (
 )
 
 // ProtocolVersion must match Protocol.version in the Swift driver.
-const ProtocolVersion = "loopy-computer/1"
+const ProtocolVersion = "whip-computer/1"
 
 // tokenEnvVar must match Protocol.tokenEnvVar in the Swift driver.
-const tokenEnvVar = "LOOPY_COMPUTER_TOKEN"
+const tokenEnvVar = "WHIP_COMPUTER_TOKEN"
 
 // Application-level JSON-RPC error codes (mirror RPCErrorCode in the driver).
 const (
@@ -116,7 +116,7 @@ type TCCStatus struct {
 	Hint            string `json:"hint,omitempty"`
 }
 
-// Helper manages one loopy-computer subprocess. The zero value is unusable;
+// Helper manages one whip-computer subprocess. The zero value is unusable;
 // get it via Shared(). Thread-safe; restarts the helper on crash.
 type Helper struct {
 	mu     sync.Mutex
@@ -164,10 +164,10 @@ func ResetShared() {
 	shared.h, shared.err = nil, nil
 }
 
-// helperPath resolves the binary: embedded copy extracted to ~/.loopy/bin,
-// or LOOPY_COMPUTER_BIN / the driver build tree for dev.
+// helperPath resolves the binary: embedded copy extracted to ~/.whip/bin,
+// or WHIP_COMPUTER_BIN / the driver build tree for dev.
 func helperPath() (string, error) {
-	if p := os.Getenv("LOOPY_COMPUTER_BIN"); p != "" {
+	if p := os.Getenv("WHIP_COMPUTER_BIN"); p != "" {
 		return p, nil
 	}
 	return ensureHelperBinary()
@@ -198,18 +198,18 @@ func (h *Helper) spawn() error {
 	h.stdin = stdin
 	h.reader = bufio.NewReaderSize(stdout, 4<<20)
 	if err := h.cmd.Start(); err != nil {
-		return fmt.Errorf("spawn loopy-computer: %w", err)
+		return fmt.Errorf("spawn whip-computer: %w", err)
 	}
 
 	// First line is the version announcement (plain text, not JSON).
 	announce, err := h.readLineTimeout(10 * time.Second)
 	if err != nil {
 		h.kill()
-		return fmt.Errorf("loopy-computer did not announce: %w", err)
+		return fmt.Errorf("whip-computer did not announce: %w", err)
 	}
 	if announce != ProtocolVersion {
 		h.kill()
-		return fmt.Errorf("loopy-computer protocol mismatch: got %q, want %q (rebuild the driver: task driver)", announce, ProtocolVersion)
+		return fmt.Errorf("whip-computer protocol mismatch: got %q, want %q (rebuild the driver: task driver)", announce, ProtocolVersion)
 	}
 
 	// Handshake RPC validates the token both ways.
@@ -218,11 +218,11 @@ func (h *Helper) spawn() error {
 	}
 	if err := h.callLocked(context.Background(), "handshake", map[string]any{"token": h.token}, &hs); err != nil {
 		h.kill()
-		return fmt.Errorf("loopy-computer handshake: %w", err)
+		return fmt.Errorf("whip-computer handshake: %w", err)
 	}
 	if hs.Version != ProtocolVersion {
 		h.kill()
-		return fmt.Errorf("loopy-computer handshake version mismatch: %q", hs.Version)
+		return fmt.Errorf("whip-computer handshake version mismatch: %q", hs.Version)
 	}
 	return nil
 }
@@ -250,7 +250,7 @@ func (h *Helper) readLineTimeout(d time.Duration) (string, error) {
 		}
 		return r.s, nil
 	case <-time.After(d):
-		return "", fmt.Errorf("timeout waiting for loopy-computer")
+		return "", fmt.Errorf("timeout waiting for whip-computer")
 	}
 }
 
@@ -290,7 +290,7 @@ func (h *Helper) Call(ctx context.Context, method string, params map[string]any,
 	}
 	// Transport failure: restart once and retry.
 	if rerr := h.restartLocked(); rerr != nil {
-		return fmt.Errorf("loopy-computer crashed and restart failed: %v (restart: %v)", err, rerr)
+		return fmt.Errorf("whip-computer crashed and restart failed: %v (restart: %v)", err, rerr)
 	}
 	params["token"] = h.token // token changed on respawn
 	err = h.callLocked(ctx, method, params, out)
@@ -304,7 +304,7 @@ func (h *Helper) Call(ctx context.Context, method string, params map[string]any,
 // callLocked performs one round-trip. Caller holds h.mu and set the token.
 func (h *Helper) callLocked(ctx context.Context, method string, params map[string]any, out any) error {
 	if h.cmd == nil {
-		return fmt.Errorf("loopy-computer not running")
+		return fmt.Errorf("whip-computer not running")
 	}
 	h.nextID++
 	req := rpcRequest{JSONRPC: "2.0", ID: h.nextID, Method: method, Params: params}
@@ -313,7 +313,7 @@ func (h *Helper) callLocked(ctx context.Context, method string, params map[strin
 		return err
 	}
 	if _, err := h.stdin.Write(append(data, '\n')); err != nil {
-		return fmt.Errorf("write to loopy-computer: %w", err)
+		return fmt.Errorf("write to whip-computer: %w", err)
 	}
 
 	timeout := 30 * time.Second
@@ -325,11 +325,11 @@ func (h *Helper) callLocked(ctx context.Context, method string, params map[strin
 	}
 	line, err := h.readLineTimeout(timeout)
 	if err != nil {
-		return fmt.Errorf("read from loopy-computer: %w", err)
+		return fmt.Errorf("read from whip-computer: %w", err)
 	}
 	var resp rpcResponse
 	if err := json.Unmarshal([]byte(line), &resp); err != nil {
-		return fmt.Errorf("bad frame from loopy-computer: %q", line[:min(len(line), 120)])
+		return fmt.Errorf("bad frame from whip-computer: %q", line[:min(len(line), 120)])
 	}
 	if resp.Error != nil {
 		return resp.Error

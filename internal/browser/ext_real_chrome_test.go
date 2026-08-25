@@ -11,14 +11,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/context-labs/loopy/internal/browser/extrelay"
+	"github.com/context-labs/whip/internal/browser/extrelay"
 	"github.com/go-rod/rod"
 )
 
 // TestExtensionRealChrome is the goal's acceptance path: a real Chrome with
-// the loopy extension loaded (autoAttach pins the active tab — no human
+// the whip extension loaded (autoAttach pins the active tab — no human
 // click), driven through the chrome.debugger tunnel via the relay, using
-// loopy's real *Browser (the Backend browser_exec calls) against a live page.
+// whip's real *Browser (the Backend browser_exec calls) against a live page.
 //
 // Branded Google Chrome ignores --load-extension ("not allowed in Google
 // Chrome" in its logs), so this uses Chrome for Testing (Playwright's full
@@ -83,7 +83,7 @@ func TestExtensionRealChrome(t *testing.T) {
 	}
 	t.Log("extension attached to relay")
 
-	// Drive loopy's real Backend through the relay (same wiring openExtension
+	// Drive whip's real Backend through the relay (same wiring openExtension
 	// uses, against this test relay).
 	b := &Browser{mode: ModeExtension, obtained: ObtainedLive}
 	b.browser = rod.New().ControlURL(rel.CDPURL())

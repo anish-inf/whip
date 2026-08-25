@@ -136,7 +136,7 @@ func ParseCodex(data []byte) (map[string]ServerConfig, error) {
 				}
 				c.ToolTimeout = n
 			}
-			// Unknown keys are ignored: codex's config has many fields loopy
+			// Unknown keys are ignored: codex's config has many fields whip
 			// doesn't model (bearer_token_env_var, http_headers, ...).
 		}
 		c.Command = append(c.Command, args...)

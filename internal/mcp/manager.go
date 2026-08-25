@@ -16,9 +16,9 @@ import (
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/context-labs/loopy/internal/config"
-	"github.com/context-labs/loopy/internal/llm"
-	"github.com/context-labs/loopy/internal/tools"
+	"github.com/context-labs/whip/internal/config"
+	"github.com/context-labs/whip/internal/llm"
+	"github.com/context-labs/whip/internal/tools"
 )
 
 // Status is a server's lifecycle state, mirroring opencode's discriminated
@@ -95,9 +95,9 @@ const autoReconnectMax = 3
 
 // autoReconnectDelay is the backoff between auto-reconnect attempts. Kept
 // small for tests via a fast-path env read; tests use
-// LOOPY_TEST_MCP_BACKOFF_MS instead of racing a package var.
+// WHIP_TEST_MCP_BACKOFF_MS instead of racing a package var.
 func autoReconnectDelay(try int) time.Duration {
-	if ms, err := strconv.Atoi(os.Getenv("LOOPY_TEST_MCP_BACKOFF_MS")); err == nil && ms >= 0 {
+	if ms, err := strconv.Atoi(os.Getenv("WHIP_TEST_MCP_BACKOFF_MS")); err == nil && ms >= 0 {
 		return time.Duration(ms) * time.Millisecond
 	}
 	return time.Duration(1<<try) * time.Second // 1s, 2s, 4s
@@ -227,7 +227,7 @@ func (m *Manager) Start(ctx context.Context) {
 // run is the per-server lifecycle goroutine: one connect attempt, then it
 // services reconnect requests until the process exits (Close kills sessions;
 // the goroutine parks on reconnect thereafter — it has no work but also no
-// cost, and loopy exits rather than idles servers). A reconnect queued while
+// cost, and whip exits rather than idles servers). A reconnect queued while
 // a connect was in flight is dropped when that connect just succeeded — the
 // user asked for a fresh connection and already has one.
 func (s *server) run(ctx context.Context, m *Manager) {
@@ -260,7 +260,7 @@ func (s *server) connect(ctx context.Context, m *Manager) {
 
 	transport, err := m.connectTransport(s.cfg, s.stderr)
 	if err == nil {
-		client := sdkmcp.NewClient(&sdkmcp.Implementation{Name: "loopy", Title: "loopy"}, nil)
+		client := sdkmcp.NewClient(&sdkmcp.Implementation{Name: "whip", Title: "whip"}, nil)
 		var sess *sdkmcp.ClientSession
 		sess, err = client.Connect(ctx, transport, nil)
 		if err == nil {
@@ -384,7 +384,7 @@ func (s *server) bridge(d *sdkmcp.Tool) tools.Tool {
 // call runs one tool call against the session, serialized per server and
 // bounded by the configured tool timeout. Errors become error strings for
 // the model via tools.Execute — never loop-aborting (opencode throws and
-// converts to an output-error tool part; loopy's "Error: …" convention is
+// converts to an output-error tool part; whip's "Error: …" convention is
 // the same shape).
 // connectGrace caps how long a tool call waits for a still-connecting server
 // before reporting back. A call should never park the turn for the full
@@ -517,7 +517,7 @@ func normalizeSchema(schema any) string {
 
 // Config returns a server's normalized config (the live definition, including
 // imported claude/codex entries) — the TUI persists this when toggling
-// enabled so loopy's own config stays self-contained. ok is false for
+// enabled so whip's own config stays self-contained. ok is false for
 // unknown names.
 func (m *Manager) Config(name string) (ServerConfig, bool) {
 	s, ok := m.servers[name]
@@ -589,7 +589,7 @@ func (m *Manager) InstructionsBlock() string {
 	return b.String()
 }
 
-// Probe connects a single server for `loopy mcp test`: builds a throwaway
+// Probe connects a single server for `whip mcp test`: builds a throwaway
 // manager with just that entry, starts it, waits for the first settle, and
 // returns the outcome with tool names. A doctor visit, not a residency.
 type ProbeResult struct {
@@ -688,7 +688,7 @@ func (m *Manager) Reconnect(name string) bool {
 
 // Close shuts every session down. Stdio transports terminate their child
 // process on Close (the SDK sends SIGTERM after stdin closes, then SIGKILL);
-// children get their own process group at spawn (defaultTransport) so loopy's
+// children get their own process group at spawn (defaultTransport) so whip's
 // exit path can also group-kill strays via the bashrun registry pattern.
 func (m *Manager) Close() {
 	for _, s := range m.servers {
@@ -716,7 +716,7 @@ func defaultTransport(cfg ServerConfig, stderr *ringBuffer) (sdkmcp.Transport, e
 		}, nil
 	}
 	cmd := exec.Command(cfg.Command[0], cfg.Command[1:]...)
-	// Inherit loopy's environment and layer the server's vars on top (opencode
+	// Inherit whip's environment and layer the server's vars on top (opencode
 	// does the same — users expect $PATH etc. to work).
 	cmd.Env = append(os.Environ(), envPairs(cfg.Env)...)
 	if cfg.Cwd != "" {
@@ -751,7 +751,7 @@ func (h headerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 
 // logf mirrors config.LogEvent for MCP lifecycle events (connect failures,
 // status transitions) so "why didn't my server come up?" is answerable from
-// ~/.loopy/loopy.log.
+// ~/.whip/whip.log.
 func logf(format string, args ...any) {
 	config.LogEvent("mcp", fmt.Sprintf(format, args...))
 }

@@ -9,32 +9,32 @@ import (
 	"strings"
 	"time"
 
-	"github.com/context-labs/loopy/internal/config"
-	"github.com/context-labs/loopy/internal/mcp"
+	"github.com/context-labs/whip/internal/config"
+	"github.com/context-labs/whip/internal/mcp"
 )
 
-// mcpCLI implements `loopy mcp <list|add|remove|serve|test|import>`.
+// mcpCLI implements `whip mcp <list|add|remove|serve|test|import>`.
 //
 //	list                        merged view of every configured server, its source, and blocked state
 //	add <name> -- <cmd...>      register a stdio server
 //	add <name> --url <url>      register a remote (streamable HTTP) server
-//	remove <name>               drop a server from loopy's own config
-//	import [--dry-run]          materialize imported (claude/codex) servers into loopy's config
-//	serve                       run loopy's tools as an MCP server over stdio
+//	remove <name>               drop a server from whip's own config
+//	import [--dry-run]          materialize imported (claude/codex) servers into whip's config
+//	serve                       run whip's tools as an MCP server over stdio
 //
 // add/remove/import write through config.Save (atomic, clobber-guarded).
 // Servers imported from .mcp.json or codex can't be removed here (edit the
 // source file); remove on an imported name explains that.
 func mcpCLI(args []string, version string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: loopy mcp <list|add|remove|import|serve|test>")
+		return fmt.Errorf("usage: whip mcp <list|add|remove|import|serve|test>")
 	}
 	if args[0] == "serve" {
 		return mcp.Serve(context.Background(), version)
 	}
 	if args[0] == "test" {
 		if len(args) < 2 {
-			return fmt.Errorf("usage: loopy mcp test <name>")
+			return fmt.Errorf("usage: whip mcp test <name>")
 		}
 		return mcpTestCLI(args[1])
 	}
@@ -82,7 +82,7 @@ func mcpCLI(args []string, version string) error {
 
 	case "add":
 		if len(args) < 2 {
-			return fmt.Errorf("usage: loopy mcp add <name> -- <cmd...> | loopy mcp add <name> --url <url>")
+			return fmt.Errorf("usage: whip mcp add <name> -- <cmd...> | whip mcp add <name> --url <url>")
 		}
 		name := args[1]
 		entry := config.MCPServer{}
@@ -93,7 +93,7 @@ func mcpCLI(args []string, version string) error {
 		case len(rest) >= 2 && rest[0] == "--":
 			entry.Command = rest[1:]
 		default:
-			return fmt.Errorf("usage: loopy mcp add <name> -- <cmd...> | loopy mcp add <name> --url <url>")
+			return fmt.Errorf("usage: whip mcp add <name> -- <cmd...> | whip mcp add <name> --url <url>")
 		}
 		sc := mcp.FromConfigMap(map[string]config.MCPServer{name: entry})[name]
 		if msg := sc.Valid(); msg != "" {
@@ -106,12 +106,12 @@ func mcpCLI(args []string, version string) error {
 		if err := cfg.Save(); err != nil {
 			return err
 		}
-		fmt.Printf("added mcp server %q — starts on next loopy launch\n", name)
+		fmt.Printf("added mcp server %q — starts on next whip launch\n", name)
 		return nil
 
 	case "remove":
 		if len(args) < 2 {
-			return fmt.Errorf("usage: loopy mcp remove <name>")
+			return fmt.Errorf("usage: whip mcp remove <name>")
 		}
 		name := args[1]
 		if _, ok := cfg.MCPServers[name]; !ok {
@@ -122,7 +122,7 @@ func mcpCLI(args []string, version string) error {
 				return fmt.Errorf("%q comes from .mcp.json or ~/.codex/config.toml — edit that file to remove it", name)
 			}
 			if _, blocked := disc.Blocked[name]; blocked {
-				return fmt.Errorf("%q is blocked by the mcpImport config — edit ~/.loopy/config.json", name)
+				return fmt.Errorf("%q is blocked by the mcpImport config — edit ~/.whip/config.json", name)
 			}
 			return fmt.Errorf("no mcp server named %q", name)
 		}
@@ -149,9 +149,9 @@ func mcpTestCLI(name string) error {
 	sc, ok := disc.Merged[name]
 	if !ok {
 		if _, blocked := disc.Blocked[name]; blocked {
-			return fmt.Errorf("server %q is blocked by the mcpImport config — edit ~/.loopy/config.json", name)
+			return fmt.Errorf("server %q is blocked by the mcpImport config — edit ~/.whip/config.json", name)
 		}
-		return fmt.Errorf("no mcp server named %q (try: loopy mcp list)", name)
+		return fmt.Errorf("no mcp server named %q (try: whip mcp list)", name)
 	}
 	fmt.Printf("testing mcp server %q (%s)…\n", name, mcpTarget(sc))
 	res := mcp.Probe(context.Background(), name, sc)
@@ -163,7 +163,7 @@ func mcpTestCLI(name string) error {
 		}
 		return nil
 	case mcp.StatusDisabled:
-		fmt.Println("○ disabled — enable it in ~/.loopy/config.json")
+		fmt.Println("○ disabled — enable it in ~/.whip/config.json")
 		return fmt.Errorf("server %q is disabled", name)
 	default:
 		fmt.Printf("✗ failed after %s: %s\n", res.Elapsed.Round(time.Millisecond), res.Err)
@@ -181,9 +181,9 @@ func mcpTarget(c mcp.ServerConfig) string {
 	return strings.Join(c.Command, " ")
 }
 
-// mcpImportCLI materializes imported (claude/codex) servers into loopy's own
+// mcpImportCLI materializes imported (claude/codex) servers into whip's own
 // config — mcp-polish item 6. Imported means: admitted by the mcpImport
-// policy and not already in loopy's config (idempotent; existing loopy
+// policy and not already in whip's config (idempotent; existing whip
 // entries are never touched). --dry-run prints the JSONC fragment instead of
 // writing.
 func mcpImportCLI(args []string) error {
@@ -192,7 +192,7 @@ func mcpImportCLI(args []string) error {
 		if a == "--dry-run" {
 			dryRun = true
 		} else {
-			return fmt.Errorf("usage: loopy mcp import [--dry-run]")
+			return fmt.Errorf("usage: whip mcp import [--dry-run]")
 		}
 	}
 	cfg, err := config.Load()
@@ -204,7 +204,7 @@ func mcpImportCLI(args []string) error {
 	add := map[string]config.MCPServer{}
 	for name, sc := range disc.Merged {
 		if _, owned := cfg.MCPServers[name]; owned {
-			continue // already loopy's own — importing is a no-op
+			continue // already whip's own — importing is a no-op
 		}
 		add[name] = config.MCPServer{
 			Command: sc.Command, Env: sc.Env, Cwd: sc.Cwd,
@@ -213,7 +213,7 @@ func mcpImportCLI(args []string) error {
 		}
 	}
 	if len(add) == 0 {
-		fmt.Println("nothing to import — all servers are already in loopy's config (or blocked by mcpImport)")
+		fmt.Println("nothing to import — all servers are already in whip's config (or blocked by mcpImport)")
 		return nil
 	}
 	if dryRun {
@@ -221,7 +221,7 @@ func mcpImportCLI(args []string) error {
 		if err != nil {
 			return err
 		}
-		fmt.Printf("would add %d server(s) to ~/.loopy/config.json under \"mcp\":\n%s\n", len(add), body)
+		fmt.Printf("would add %d server(s) to ~/.whip/config.json under \"mcp\":\n%s\n", len(add), body)
 		return nil
 	}
 	if cfg.MCPServers == nil {
@@ -236,6 +236,6 @@ func mcpImportCLI(args []string) error {
 		return err
 	}
 	sort.Strings(names)
-	fmt.Printf("imported %d mcp server(s) into ~/.loopy/config.json: %s\n", len(names), strings.Join(names, ", "))
+	fmt.Printf("imported %d mcp server(s) into ~/.whip/config.json: %s\n", len(names), strings.Join(names, ", "))
 	return nil
 }

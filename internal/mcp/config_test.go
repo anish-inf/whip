@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/context-labs/loopy/internal/config"
+	"github.com/context-labs/whip/internal/config"
 )
 
 func TestParseClaudeStdio(t *testing.T) {
@@ -66,10 +66,10 @@ func TestParseClaudeRemoteAndSSE(t *testing.T) {
 }
 
 func TestParseClaudeInfersTypeAndMissingVar(t *testing.T) {
-	os.Unsetenv("NO_SUCH_VAR_LOOPY_TEST")
+	os.Unsetenv("NO_SUCH_VAR_WHIP_TEST")
 	cfgs, err := ParseClaude([]byte(`{
 		"mcpServers": {
-			"a": {"command": "srv", "env": {"X": "$NO_SUCH_VAR_LOOPY_TEST"}},
+			"a": {"command": "srv", "env": {"X": "$NO_SUCH_VAR_WHIP_TEST"}},
 			"b": {"url": "http://localhost:9000/mcp"}
 		}
 	}`))
@@ -158,18 +158,18 @@ func TestParseCodexErrors(t *testing.T) {
 
 func TestMergePrecedence(t *testing.T) {
 	disabled := false
-	loopy := map[string]ServerConfig{"a": {Command: []string{"loopy-a"}}, "b": {Enabled: &disabled, Command: []string{"loopy-b"}}}
+	whip := map[string]ServerConfig{"a": {Command: []string{"whip-a"}}, "b": {Enabled: &disabled, Command: []string{"whip-b"}}}
 	codex := map[string]ServerConfig{"a": {Command: []string{"codex-a"}}, "c": {Command: []string{"codex-c"}}}
 	claude := map[string]ServerConfig{"a": {Command: []string{"claude-a"}}, "c": {Command: []string{"claude-c"}}}
-	m := Merge(loopy, codex, claude)
-	if m["a"].Command[0] != "loopy-a" {
-		t.Error("loopy config must win over codex and claude")
+	m := Merge(whip, codex, claude)
+	if m["a"].Command[0] != "whip-a" {
+		t.Error("whip config must win over codex and claude")
 	}
 	if m["c"].Command[0] != "codex-c" {
 		t.Error("codex must win over claude")
 	}
 	if !m["b"].Disabled() {
-		t.Error("loopy-only entry should survive with enabled=false")
+		t.Error("whip-only entry should survive with enabled=false")
 	}
 }
 
@@ -212,7 +212,7 @@ func TestLoadMergedDiscovery(t *testing.T) {
 // TestLoadMergedFilteredPolicy pins the mcpImport gating: a policy-filtered
 // import (the ChatGPT desktop app's node_repl from ~/.codex/config.toml)
 // lands in Blocked as disabled+noted — never connected, never silently
-// dropped — while admitted imports and loopy's own entries merge normally.
+// dropped — while admitted imports and whip's own entries merge normally.
 func TestLoadMergedFilteredPolicy(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte(
@@ -276,13 +276,13 @@ func TestLoadMergedFilteredPolicy(t *testing.T) {
 		t.Error("exclude must win over only")
 	}
 
-	// A loopy entry of the same name is never shadowed by a ghost row.
+	// A whip entry of the same name is never shadowed by a ghost row.
 	f = LoadMergedFiltered(dir, map[string]ServerConfig{"node_repl": {Command: []string{"mine"}}}, policy)
 	if f.Merged["node_repl"].Command[0] != "mine" {
-		t.Error("loopy config must still win over a blocked import")
+		t.Error("whip config must still win over a blocked import")
 	}
 	if _, ok := f.Blocked["node_repl"]; ok {
-		t.Error("no ghost row when loopy owns the name")
+		t.Error("no ghost row when whip owns the name")
 	}
 
 	// Zero policy == LoadMerged (import everything).

@@ -1,4 +1,4 @@
-/loopy
+/whip
 /vendor/
 
 # Swift driver build artifacts (task driver rebuilds; go:embed uses the

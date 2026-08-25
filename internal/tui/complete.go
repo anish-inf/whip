@@ -30,7 +30,7 @@ var commands = []cand{
 	{"/pwd", "Print working directory"},
 	{"/rename", "[title] — retitle this session"},
 	{"/theme", "[light|dark|auto] — color scheme (bare opens switcher)"},
-	{"/quit", "Exit loopy"},
+	{"/quit", "Exit whip"},
 	{"/resume", "[id] — browse and resume previous sessions"},
 	{"/tasks", "[id] — background subagents: focus the dock, or open one subagent's live view"},
 }

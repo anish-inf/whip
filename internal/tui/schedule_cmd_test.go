@@ -8,14 +8,14 @@ import (
 
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/context-labs/loopy/internal/llm"
-	"github.com/context-labs/loopy/internal/session"
+	"github.com/context-labs/whip/internal/llm"
+	"github.com/context-labs/whip/internal/session"
 )
 
 // Scheduled tasks persist in the session store and survive a reload — the
 // durability half of the wakeup channel.
 func TestSchedulePersistence(t *testing.T) {
-	t.Setenv("LOOPY_HOME", t.TempDir())
+	t.Setenv("WHIP_HOME", t.TempDir())
 	st, err := session.Open(filepath.Join(t.TempDir(), "s.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -56,7 +56,7 @@ func TestSchedulePersistence(t *testing.T) {
 // A due task fires a machine-authored turn into the agent loop (the wakeup),
 // and a fired one-shot never fires again.
 func TestScheduleFiresWakeup(t *testing.T) {
-	t.Setenv("LOOPY_HOME", t.TempDir())
+	t.Setenv("WHIP_HOME", t.TempDir())
 	m := compactCmdModel() // agent client points at the canned test server
 	st, err := session.Open(filepath.Join(t.TempDir(), "s.db"))
 	if err != nil {
@@ -121,7 +121,7 @@ func TestScheduleFiresWakeup(t *testing.T) {
 // A fired one-shot completes: it stays listed (audit trail) but never fires
 // again.
 func TestScheduleOneShotCompletes(t *testing.T) {
-	t.Setenv("LOOPY_HOME", t.TempDir())
+	t.Setenv("WHIP_HOME", t.TempDir())
 	m := compactCmdModel()
 	st, _ := session.Open(filepath.Join(t.TempDir(), "s.db"))
 	defer st.Close()
@@ -156,7 +156,7 @@ func TestScheduleOneShotCompletes(t *testing.T) {
 // A busy agent defers the fire — the grid slot is stamped when it lands, so
 // a slow turn doesn't drift the schedule.
 func TestScheduleDefersWhileBusy(t *testing.T) {
-	t.Setenv("LOOPY_HOME", t.TempDir())
+	t.Setenv("WHIP_HOME", t.TempDir())
 	m := compactCmdModel()
 	st, _ := session.Open(filepath.Join(t.TempDir(), "s.db"))
 	defer st.Close()
