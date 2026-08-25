@@ -17,6 +17,7 @@ var commands = []cand{
 	{"/cd", "[dir] — change working directory (bare prints it)"},
 	{"/clear", "Reset the conversation"},
 	{"/compact", "[model] [provider]|off — compact now, or pick the compaction model"},
+	{"/computer-use", "[task] — drive this Mac (apps, open Chrome, screen); also: allow|deny <app>"},
 	{"/context-doctor", "Audit what a fresh session injects (skills, MCP, tool schemas) and its token cost"},
 	{"/effort", "[level] — reasoning effort: off·low·medium·high (bare opens selector)"},
 	{"/fork", "[name] — copy the conversation into a new named session"},
@@ -37,7 +38,7 @@ var commands = []cand{
 // execNow lists commands the menu runs immediately on enter (they act
 // sensibly with no arguments); others insert themselves for arguments.
 var execNow = map[string]bool{
-	"/clear": true, "/compact": true, "/context-doctor": true, "/effort": true, "/goal": true, "/goal-from-context": true, "/help": true,
+	"/clear": true, "/compact": true, "/computer-use": true, "/computer": true, "/context-doctor": true, "/effort": true, "/goal": true, "/goal-from-context": true, "/help": true,
 	"/mcp": true, "/model": true, "/mouse": true, "/pwd": true, "/quit": true, "/resume": true, "/tasks": true,
 }
 

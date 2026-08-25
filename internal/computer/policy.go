@@ -16,8 +16,9 @@ import (
 // computer-use is off until configured or the user approves in-session.
 type Policy struct {
 	mu sync.Mutex
-	// session holds in-memory approvals (bundle id or app name, lowered).
-	session map[string]bool
+	// session holds in-memory session-scoped allow/deny overrides.
+	sessionAllow map[string]bool
+	sessionDeny  map[string]bool
 	// allow/deny come from config (computer.allow / computer.deny) and
 	// persist across sessions.
 	allow map[string]bool
@@ -30,7 +31,7 @@ type Policy struct {
 // NewPolicy builds a Policy from config lists (e.g. ["Google Chrome",
 // "com.google.Chrome", "Safari"]).
 func NewPolicy(allow, deny []string, defaultDeny bool) *Policy {
-	p := &Policy{session: map[string]bool{}, allow: map[string]bool{}, deny: map[string]bool{}, DefaultDeny: defaultDeny}
+	p := &Policy{sessionAllow: map[string]bool{}, sessionDeny: map[string]bool{}, allow: map[string]bool{}, deny: map[string]bool{}, DefaultDeny: defaultDeny}
 	for _, a := range allow {
 		p.allow[normalize(a)] = true
 	}
@@ -48,10 +49,10 @@ func (p *Policy) Check(app string) error {
 	n := normalize(app)
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.deny[n] {
+	if p.deny[n] || p.sessionDeny[n] {
 		return fmt.Errorf("computer-use is blocked from using %q by policy (computer.deny)", app)
 	}
-	if p.allow[n] || p.session[n] {
+	if p.allow[n] || p.sessionAllow[n] {
 		return nil
 	}
 	if p.DefaultDeny {
@@ -60,11 +61,40 @@ func (p *Policy) Check(app string) error {
 	return nil
 }
 
-// Approve records a session-scoped approval (from the TUI consent prompt).
+// Approve records a session-scoped approval (from the TUI consent prompt or
+// /computer-use allow). Clears any session deny for the app.
 func (p *Policy) Approve(app string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.session[normalize(app)] = true
+	n := normalize(app)
+	p.sessionAllow[n] = true
+	delete(p.sessionDeny, n) // session allow clears a session deny, not a config one
+}
+
+// Deny blocks an app for the session (the /computer-use deny command).
+func (p *Policy) Deny(app string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	n := normalize(app)
+	p.sessionDeny[n] = true
+	delete(p.sessionAllow, n)
+}
+
+// Summary lists the currently-approved apps for /computer-use status.
+func (p *Policy) Summary() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	var out []string
+	for a := range p.allow {
+		out = append(out, a)
+	}
+	for a := range p.sessionAllow {
+		out = append(out, a+" (session)")
+	}
+	if len(out) == 0 {
+		return "none"
+	}
+	return strings.Join(out, ", ")
 }
 
 // ApprovalNeeded signals that the app needs user consent this session.

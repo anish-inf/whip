@@ -3033,6 +3033,9 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 			p.Send(goalFromContextMsg{goal: goal, err: err})
 		}()
 		return m, m.spin.Tick
+	case "/computer-use", "/computer":
+		m.computerUseCommand(fields[1:], text)
+		return m, nil
 	case "/goal":
 		switch {
 		case len(fields) == 1:
