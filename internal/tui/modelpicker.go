@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -27,8 +28,37 @@ type modelItem struct {
 // modelPicker is the /model browser: models grouped, providers indented under them.
 type modelPicker struct {
 	items      []modelItem
+	filtered   []modelItem // items matching query (nil == all)
+	query      string      // type-to-filter text
 	idx        int
 	staleHints []string // providers whose cached catalog is past its TTL
+}
+
+// view returns the items the picker is currently showing.
+func (p *modelPicker) view() []modelItem {
+	if p.filtered != nil {
+		return p.filtered
+	}
+	return p.items
+}
+
+// applyQuery refilters items; empty query restores the full list. Matches are
+// case-insensitive substrings of the model or provider name. A query with no
+// matches yields an empty (non-nil) filtered slice — nil means "no query".
+func (p *modelPicker) applyQuery() {
+	q := strings.ToLower(strings.TrimSpace(p.query))
+	if q == "" {
+		p.filtered = nil
+		return
+	}
+	out := make([]modelItem, 0, len(p.items))
+	for _, it := range p.items {
+		if strings.Contains(strings.ToLower(it.model), q) ||
+			strings.Contains(strings.ToLower(it.provider), q) {
+			out = append(out, it)
+		}
+	}
+	p.filtered = out
 }
 
 // buildModelItems flattens the config into selectable routes, models sorted
@@ -125,22 +155,40 @@ func (m *model) modelPickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			p.idx--
 		}
 	case tea.KeyDown, tea.KeyCtrlN, tea.KeyTab:
-		if p.idx < len(p.items)-1 {
+		if p.idx < len(p.view())-1 {
 			p.idx++
 		}
+	case tea.KeyBackspace:
+		if p.query != "" {
+			p.query = p.query[:len(p.query)-1]
+			p.applyQuery()
+			p.idx = 0
+		}
 	case tea.KeyEnter:
-		it := p.items[p.idx]
+		v := p.view()
+		if len(v) == 0 {
+			return m, nil
+		}
+		it := v[p.idx]
 		m.mpicker = nil
 		m.switchModel(it.model, it.provider)
+	case tea.KeyRunes, tea.KeySpace:
+		p.query += string(msg.Runes)
+		p.applyQuery()
+		if p.idx >= len(p.view()) {
+			p.idx = max(len(p.view())-1, 0)
+		}
 	}
 	return m, nil
 }
 
 func (m *model) modelPickerView() string {
 	p := m.mpicker
+	view := p.view()
 	var rows []string
+	rows = append(rows, "  "+botStyle.Render("/")+p.query+dimStyle.Render("▏"))
 	lastModel := ""
-	for i, it := range p.items {
+	for i, it := range view {
 		heading := " " + it.model
 		if it.fromCatalog {
 			heading = dimStyle.Render(heading + dimNew)
@@ -163,7 +211,10 @@ func (m *model) modelPickerView() string {
 			rows = append(rows, "     "+line+cur)
 		}
 	}
-	rows = append(rows, dimStyle.Render(fmt.Sprintf("  (%d/%d) ↑/↓ select · enter switch · esc cancel", p.idx+1, len(p.items))))
+	if len(view) == 0 {
+		rows = append(rows, dimStyle.Render("  no models match "+strconv.Quote(p.query)))
+	}
+	rows = append(rows, dimStyle.Render(fmt.Sprintf("  (%d/%d) type to filter · ↑/↓ select · enter switch · esc cancel", p.idx+1, len(view))))
 	if len(p.staleHints) > 0 {
 		rows = append(rows, dimStyle.Render("  catalog stale for "+strings.Join(p.staleHints, ", ")+" — /model refresh to pull newly announced models"))
 	}
@@ -175,7 +226,9 @@ func (m *model) modelPickerView() string {
 		rows = append(rows, "")
 	}
 	if len(rows) > avail { // small terminals: keep the selection visible
-		start := max(min(p.idx-2, len(rows)-avail), 0)
+		// selection row = query line (1) + headings so far; approximate with idx+1
+		sel := p.idx + 1
+		start := max(min(sel-2, len(rows)-avail), 0)
 		rows = rows[start : start+avail]
 	}
 	return strings.Join(rows, "\n")

@@ -39,3 +39,45 @@ func TestBuildModelItems(t *testing.T) {
 		t.Fatalf("empty config: %+v", got)
 	}
 }
+
+func TestModelPickerFilter(t *testing.T) {
+	p := &modelPicker{items: []modelItem{
+		{model: "alpha", provider: "a"},
+		{model: "beta", provider: "a"},
+		{model: "beta", provider: "b"},
+		{model: "gamma", provider: "c"},
+	}}
+
+	// no query: full list
+	if got := len(p.view()); got != 4 {
+		t.Fatalf("unfiltered view: %d", got)
+	}
+
+	// substring on model name, case-insensitive
+	p.query = "BET"
+	p.applyQuery()
+	if got := p.view(); len(got) != 2 || got[0].model != "beta" {
+		t.Fatalf("filter by model: %+v", got)
+	}
+
+	// substring on provider name
+	p.query = "c"
+	p.applyQuery()
+	if got := p.view(); len(got) != 1 || got[0].provider != "c" {
+		t.Fatalf("filter by provider: %+v", got)
+	}
+
+	// no match: empty view, not a crash
+	p.query = "zzz"
+	p.applyQuery()
+	if got := p.view(); len(got) != 0 {
+		t.Fatalf("no-match view: %+v", got)
+	}
+
+	// clearing the query restores everything
+	p.query = ""
+	p.applyQuery()
+	if got := len(p.view()); got != 4 {
+		t.Fatalf("cleared query view: %d", got)
+	}
+}
