@@ -59,7 +59,7 @@ func (m *model) fireDueSchedules() tea.Cmd {
 		if !due {
 			continue
 		}
-		m.store.MarkFired(m.sessionID, sc.ID, slot) // stamp the grid slot, not now
+		_ = m.store.MarkFired(m.sessionID, sc.ID, slot) // stamp the grid slot, not now
 		prompt := fmt.Sprintf("⏰ Scheduled task #%d fired (%s). Work on it now:\n\n%s", sc.ID, sc.Schedule, sc.Prompt)
 		m.append(dimStyle.Render(fmt.Sprintf("⏰ scheduled task #%d fired — %s", sc.ID, sc.Prompt)))
 		_, cmd := m.submitTurn(prompt, false)
@@ -113,7 +113,7 @@ func (m *model) scheduleCommand(args []string) {
 		}
 		prompt := strings.Join(args[2:], " ")
 		anchor := time.Now()
-		if s.At.IsZero() == false {
+		if !s.At.IsZero() {
 			anchor = s.At
 		}
 		id, err := m.store.AddSchedule(m.sessionID, s.String(), prompt, anchor)

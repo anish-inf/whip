@@ -572,7 +572,7 @@ func (s *Store) Schedules(sessionID string) []Schedule {
 	if err != nil {
 		return nil
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []Schedule
 	for rows.Next() {
 		var sc Schedule
