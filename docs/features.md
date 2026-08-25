@@ -148,6 +148,17 @@ without pricing hide the segment entirely. Tests: `llm/openai_test.go`
 errors for the compaction retry, `Stream` returns the message + usage, and
 `Complete` is the non-streaming round-trip used by compaction.
 
+Transient request failures — 429, any 5xx (e.g. a gateway's 524), and
+transport errors — retry with exponential backoff (1s→2s→4s… capped 20s,
++25% jitter, ctx-cancellable). Budget: `maxRetries` in config (default
+`llm.DefaultMaxAttempts` = 8, `1` disables). A streaming attempt is only
+retried before the first visible delta reaches the UI — after that a retry
+would replay rendered text, so the error surfaces instead. Mid-stream
+provider `error` chunks and 4xxs (including context-limit, which the
+compaction path must see immediately) are never retried. Each retry posts a
+`⚠ request failed (…) — retrying in Ns (attempt N/M)` line via the
+`Client.OnRetry` hook. Tests: `llm/retry_test.go`.
+
 ## The TUI
 
 `internal/tui/tui.go` — bubbletea fullscreen alt-screen. Highlights:

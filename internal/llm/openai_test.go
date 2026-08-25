@@ -199,6 +199,7 @@ func TestNewTool(t *testing.T) {
 }
 
 func TestStreamTransportErrors(t *testing.T) {
+	noSleep(t) // connection-refused is retryable; don't burn real backoff
 	if _, _, err := New("http://\x7f", "k").Stream(context.Background(), Request{}, nil, nil); err == nil {
 		t.Fatal("expected bad-url error")
 	}

@@ -851,7 +851,9 @@ func buildAgent(cfg *config.Config, modelName, provName, sysPrompt string) (*age
 	if maxOut <= 0 {
 		maxOut = ctxLimit // generous default; provider clamps if it's too high
 	}
-	ag := agent.New(llm.New(prov.BaseURL, key), apiID, maxOut, sysPrompt)
+	client := llm.New(prov.BaseURL, key)
+	client.MaxRetries = cfg.MaxRetries
+	ag := agent.New(client, apiID, maxOut, sysPrompt)
 	ag.ModelName, ag.Provider = modelName, provName
 	ag.ContextLimit = ctxLimit
 	// Native browser subsystem: install the shared manager once; screenshots
@@ -2257,6 +2259,7 @@ func (m *model) applyCompactModel() {
 	}
 	if key := prov.Key(); key != "" {
 		m.agent.CompactClient = llm.New(prov.BaseURL, key)
+		m.agent.CompactClient.MaxRetries = m.cfg.MaxRetries
 		m.agent.CompactModel = apiID
 	} else if m.compactModel != "" {
 		m.append(errStyle.Render("compaction model: no API key — using current model"))
@@ -2825,6 +2828,11 @@ func (m *model) submitTurn(text string, authored bool) (tea.Model, tea.Cmd) {
 			},
 			OnCompacted: func(sum string, cutoff int) { send(compactMsg{summary: sum, cutoff: cutoff}) },
 			OnUsage:     func(u llm.Usage) { send(usageMsg(u)) },
+			OnRetry: func(ev llm.RetryEvent) {
+				flush()
+				send(noticeMsg(fmt.Sprintf("⚠ request failed (%s) — retrying in %s (attempt %d/%d)",
+					ev.Err, ev.Delay.Round(time.Millisecond), ev.Attempt+1, ev.Max)))
+			},
 		}
 		var final string
 		var err error

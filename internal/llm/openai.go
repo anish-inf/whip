@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"net/http"
 	"strconv"
 	"strings"
@@ -318,6 +319,20 @@ type Client struct {
 	BaseURL string
 	APIKey  string
 	HTTP    *http.Client
+	// MaxRetries caps retries of transient request failures. 0 uses
+	// DefaultMaxAttempts; 1 disables retries (a single attempt).
+	MaxRetries int
+	// OnRetry, when set, is invoked before each retry of a transient request
+	// failure. Optional — nil means silent retries.
+	OnRetry func(RetryEvent)
+}
+
+// attempts returns the total try count (initial + retries) for this client.
+func (c *Client) attempts() int {
+	if c.MaxRetries > 0 {
+		return c.MaxRetries
+	}
+	return DefaultMaxAttempts
 }
 
 func New(baseURL, apiKey string) *Client {
@@ -402,6 +417,82 @@ type HTTPError struct {
 }
 
 func (e *HTTPError) Error() string { return e.Status + ": " + e.Body }
+
+// DefaultMaxAttempts is the built-in retry budget for transient request
+// failures (one initial try plus retries). Client.MaxRetries overrides it;
+// exported so the UI can show "attempt N/M".
+const DefaultMaxAttempts = 8
+
+// RetryEvent describes one failed attempt that is about to be retried. It is
+// passed to the Client.OnRetry hook so the UI can show "retrying in Ns"
+// instead of looking hung.
+type RetryEvent struct {
+	Attempt int           // the attempt that just failed (1-based)
+	Max     int           // total attempts the client will make (initial + retries)
+	Delay   time.Duration // how long the client will sleep before retrying
+	Err     error         // the transient error that caused the retry
+}
+
+// retryableStatus reports whether an HTTP status is worth retrying: rate
+// limits and server/gateway errors are transient; 4xx client errors are not.
+func retryableStatus(code int) bool {
+	return code == http.StatusTooManyRequests || code >= 500
+}
+
+// nonRetryable wraps an error the retry loop must not repeat (mid-stream
+// provider error chunks). errors.Is/As unwrap through it, so callers see the
+// underlying error unchanged.
+type nonRetryable struct{ err error }
+
+func (n nonRetryable) Error() string { return n.err.Error() }
+func (n nonRetryable) Unwrap() error { return n.err }
+
+// retryable reports whether err is a transient request failure: a transport
+// error (connection reset, DNS, timeout — but not caller cancellation) or a
+// retryable HTTP status. Context-limit 4xxs are deliberately excluded so the
+// agent's compaction retry path still sees them immediately.
+func retryable(err error) bool {
+	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	var nr nonRetryable
+	if errors.As(err, &nr) {
+		return false
+	}
+	var he *HTTPError
+	if errors.As(err, &he) {
+		code, _ := strconv.Atoi(strings.Fields(he.Status)[0])
+		return retryableStatus(code)
+	}
+	// Non-HTTPError here means the transport failed (c.HTTP.Do error or a
+	// dropped stream). Context-limit plain-text errors are strings matched by
+	// IsContextLimit, not transport errors, so no misclassification risk.
+	return true
+}
+
+// backoff returns the sleep before the next attempt: 1s, 2s, 4s… capped at
+// 20s, plus up to 25% jitter so concurrent sessions don't retry in lockstep.
+func backoff(attempt int) time.Duration {
+	d := time.Second << (attempt - 1)
+	if d > 20*time.Second {
+		d = 20 * time.Second
+	}
+	return d + time.Duration(rand.Int64N(int64(d/4)+1))
+}
+
+// sleep blocks for d or returns ctx's error if the caller cancels first.
+// It is a package-level var so tests can swap in a no-op — the retry tests
+// would otherwise burn real seconds in backoff.
+var sleep = func(ctx context.Context, d time.Duration) error {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
+}
 
 // contextLimitMarkers are substrings providers put in the error body when the
 // conversation has grown past the model's context window. Anthropic and the
@@ -525,6 +616,13 @@ func (c *Client) Models(ctx context.Context) ([]ModelInfo, error) {
 // onThink for each reasoning_content delta (both may be nil). It returns the
 // final assistant message (with any accumulated tool calls) plus the usage
 // the provider reports on the terminal chunk (stream_options:include_usage).
+//
+// Transient failures (transport errors, 429, 5xx) are retried with backoff —
+// but only until the first visible delta has been handed to onText/onThink.
+// After that point a retry would replay text the caller already rendered, so
+// the error is surfaced instead. A retry regenerates the whole assistant
+// message server-side; nothing in the request messages is mutated by a failed
+// attempt, so retrying is idempotent.
 func (c *Client) Stream(ctx context.Context, req Request, onText, onThink func(string)) (Message, Usage, error) {
 	req.Stream = true
 	req.StreamOptions = &struct {
@@ -535,6 +633,40 @@ func (c *Client) Stream(ctx context.Context, req Request, onText, onThink func(s
 	if err != nil {
 		return Message{}, Usage{}, err
 	}
+	var last error
+	for attempt := 1; attempt <= c.attempts(); attempt++ {
+		emitted := false // true once any visible delta reached the caller
+		wrapText, wrapThink := onText, onThink
+		if onText != nil {
+			wrapText = func(s string) { emitted = true; onText(s) }
+		}
+		if onThink != nil {
+			wrapThink = func(s string) { emitted = true; onThink(s) }
+		}
+		msg, usage, err := c.streamOnce(ctx, body, wrapText, wrapThink)
+		if err == nil {
+			return msg, usage, nil
+		}
+		last = err
+		// Retry only transient failures the caller hasn't seen output from.
+		if emitted || !retryable(err) || attempt == c.attempts() {
+			break
+		}
+		delay := backoff(attempt)
+		if c.OnRetry != nil {
+			c.OnRetry(RetryEvent{Attempt: attempt, Max: c.attempts(), Delay: delay, Err: err})
+		}
+		if serr := sleep(ctx, delay); serr != nil {
+			return Message{}, Usage{}, serr
+		}
+	}
+	return Message{}, Usage{}, last
+}
+
+// streamOnce performs a single streaming request attempt; the Stream retry
+// wrapper calls it per attempt and reads its own `emitted` flag (set by the
+// wrapped callbacks) to decide whether a retry would replay visible output.
+func (c *Client) streamOnce(ctx context.Context, body []byte, onText, onThink func(string)) (Message, Usage, error) {
 	hr, err := http.NewRequestWithContext(ctx, "POST", c.BaseURL+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
 		return Message{}, Usage{}, err
@@ -571,7 +703,10 @@ func (c *Client) Stream(ctx context.Context, req Request, onText, onThink func(s
 			continue
 		}
 		if ch.Error != nil {
-			return Message{}, usage, fmt.Errorf("api error: %s", ch.Error.Message)
+			// The provider accepted the request (200) then failed mid-stream.
+			// These are provider-logic errors (content filter, model faults),
+			// not transport blips — surface them, don't retry.
+			return Message{}, usage, nonRetryable{fmt.Errorf("api error: %s", ch.Error.Message)}
 		}
 		if ch.Usage != nil {
 			usage = *ch.Usage // the terminal usage chunk carries empty choices
@@ -632,6 +767,31 @@ func (c *Client) Complete(ctx context.Context, req Request) (string, Usage, erro
 	if err != nil {
 		return "", Usage{}, err
 	}
+	var last error
+	for attempt := 1; attempt <= c.attempts(); attempt++ {
+		var text string
+		var usage Usage
+		text, usage, err = c.completeOnce(ctx, body)
+		if err == nil {
+			return text, usage, nil
+		}
+		last = err
+		if !retryable(err) || attempt == c.attempts() {
+			break
+		}
+		delay := backoff(attempt)
+		if c.OnRetry != nil {
+			c.OnRetry(RetryEvent{Attempt: attempt, Max: c.attempts(), Delay: delay, Err: err})
+		}
+		if serr := sleep(ctx, delay); serr != nil {
+			return "", Usage{}, serr
+		}
+	}
+	return "", Usage{}, last
+}
+
+// completeOnce performs one non-streaming request attempt.
+func (c *Client) completeOnce(ctx context.Context, body []byte) (string, Usage, error) {
 	hr, err := http.NewRequestWithContext(ctx, "POST", c.BaseURL+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
 		return "", Usage{}, err

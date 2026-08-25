@@ -64,7 +64,7 @@ parallel tool calls and background subagents).
 - [x] `/goal <text>` (codex-style): keep driving turns until the model verifies and explicitly declares `GOAL_MET` — continuing is the default, so it can't terminate early like claude's; `/goal resume` re-engages (also after `/resume` of a session — goals persist), `/goal clear` drops, 20-round cap pauses with a resume hint
 
 - [x] Parallel tool-call execution with per-path file mutation lock (pi: `withFileMutationQueue`, `executeToolCallsParallel`) — `agent.runTools` fans a tool-call batch out to goroutines; write/edit serialize through a per-canonical-path channel semaphore, bash takes a global lock; results land in call order, OnToolStart/End fire per call
-- [ ] Retry with backoff on provider errors (pi settings: `retry: {maxRetries, baseDelayMs}`)
+- [x] Retry with backoff on provider errors (pi settings: `retry: {maxRetries, baseDelayMs}`) — transient failures (429/5xx/transport) retry with exponential backoff (1s→2s→4s… capped 20s, jittered), configurable via `maxRetries` (default 8, 1 disables); streaming retries stop once visible text has been emitted so the transcript never double-prints, and context-limit errors pass straight through to the compaction retry
 - [ ] Streamed partial tool output (bash `onUpdate` throttled at 100ms in pi)
 - [ ] Spill truncated bash output to a temp file and mention the path (pi bash tool)
 - [ ] Inject `WHIP_SESSION_ID` / `WHIP_MODEL` env into bash children (pi injects `PI_*`)

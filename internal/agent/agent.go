@@ -24,6 +24,7 @@ type Events struct {
 	OnCompact   func(took, kept int)             // context was auto-compacted (messages removed/kept)
 	OnCompacted func(summary string, cutoff int) // a compaction ran; record it (raw log survives)
 	OnUsage     func(u llm.Usage)                // a request reported its token usage
+	OnRetry     func(ev llm.RetryEvent)          // a transient request failure is being retried
 }
 
 // Agent holds one conversation.
@@ -290,12 +291,17 @@ func (a *Agent) turn(ctx context.Context, input string, parts []llm.ContentPart,
 			msgs = append(append([]llm.Message(nil), a.Messages...),
 				llm.Message{Role: "system", Content: block})
 		}
+		// Surface transient-request retries through the event hook so the UI
+		// shows "retrying" instead of looking hung. Set/restored per call: the
+		// client may outlive this turn's Events.
+		a.Client.OnRetry = ev.OnRetry
 		msg, usage, err := a.Client.Stream(ctx, llm.Request{
 			Model:           a.Model,
 			Messages:        msgs,
 			Tools:           tools.Defs(a.AllTools()),
 			ReasoningEffort: a.Effort,
 		}, ev.OnText, ev.OnThink)
+		a.Client.OnRetry = nil
 		a.AddUsage(usage)
 		if ev.OnUsage != nil {
 			ev.OnUsage(usage)
