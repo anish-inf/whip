@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/context-labs/loopy/internal/llm"
-	"github.com/context-labs/loopy/internal/tools"
+	"github.com/context-labs/whip/internal/llm"
+	"github.com/context-labs/whip/internal/tools"
 )
 
 // TestLSPDiagnosticsReachModel pins the end-to-end flow: the model calls

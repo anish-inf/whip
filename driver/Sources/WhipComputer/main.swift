@@ -1,9 +1,9 @@
 import Foundation
 import AppKit
-import LoopyComputerCore
+import WhipComputerCore
 
-// main.swift — loopy-computer: the embedded desktop driver. JSON-RPC over
-// stdio, spawned by loopy with LOOPY_COMPUTER_TOKEN set; refuses requests
+// main.swift — whip-computer: the embedded desktop driver. JSON-RPC over
+// stdio, spawned by whip with WHIP_COMPUTER_TOKEN set; refuses requests
 // without the token (the plan's stdio+token boundary in place of codex's XPC
 // ceremony).
 //

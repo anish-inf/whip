@@ -1,7 +1,7 @@
 //go:build darwin
 
-// embed_darwin.go — extract the embedded loopy-computer helper to a stable
-// path (~/.loopy/bin/loopy-computer) on first use (plan §"Why embed": stable
+// embed_darwin.go — extract the embedded whip-computer helper to a stable
+// path (~/.whip/bin/whip-computer) on first use (plan §"Why embed": stable
 // path + stable signature = sticky TCC). If no helper is embedded (fresh
 // clone before `task driver`), fall back to the driver build tree for dev;
 // otherwise computer-use's native tier is unavailable and callers keep the
@@ -20,7 +20,7 @@ import (
 // copies it into internal/computer/bin/ (go:embed needs the file at build
 // time; a zero-byte placeholder keeps the build green before then).
 //
-//go:embed bin/loopy-computer
+//go:embed bin/whip-computer
 var helperBinary []byte
 
 // helperDest is the stable extraction path TCC binds to.
@@ -29,10 +29,10 @@ func helperDest() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".loopy", "bin", "loopy-computer"), nil
+	return filepath.Join(home, ".whip", "bin", "whip-computer"), nil
 }
 
-// ensureHelperBinary extracts the embedded helper to ~/.loopy/bin (once —
+// ensureHelperBinary extracts the embedded helper to ~/.whip/bin (once —
 // skipped when the on-disk file already matches the embedded bytes). With an
 // empty embed (placeholder), prefer the dev build tree.
 func ensureHelperBinary() (string, error) {
@@ -43,15 +43,15 @@ func ensureHelperBinary() (string, error) {
 	if len(helperBinary) == 0 {
 		// Dev fallback: the Swift build products in the repo.
 		for _, p := range []string{
-			"driver/.build/release/loopy-computer",
-			"driver/.build/debug/loopy-computer",
+			"driver/.build/release/whip-computer",
+			"driver/.build/debug/whip-computer",
 		} {
 			if st, err := os.Stat(p); err == nil && !st.IsDir() {
 				abs, _ := filepath.Abs(p)
 				return abs, nil
 			}
 		}
-		return "", fmt.Errorf("no loopy-computer helper embedded and none built — run `task driver` (macOS, needs Xcode CLT)")
+		return "", fmt.Errorf("no whip-computer helper embedded and none built — run `task driver` (macOS, needs Xcode CLT)")
 	}
 	if existing, err := os.ReadFile(dest); err == nil && bytesEqual(existing, helperBinary) {
 		return dest, nil

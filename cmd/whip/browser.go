@@ -7,24 +7,24 @@ import (
 	"path/filepath"
 	"runtime"
 
-	"github.com/context-labs/loopy/internal/browser/extrelay"
+	"github.com/context-labs/whip/internal/browser/extrelay"
 )
 
-// browserCLI implements `loopy browser <install>`.
+// browserCLI implements `whip browser <install>`.
 //
-//	install    write the unpacked extension to ~/.loopy/browser/extension,
+//	install    write the unpacked extension to ~/.whip/browser/extension,
 //	           generate a relay token, and open chrome://extensions + the
 //	           folder so the user can load it (Chrome forbids programmatic
 //	           install — the three clicks are on the user).
 func browserCLI(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: loopy browser <install>")
+		return fmt.Errorf("usage: whip browser <install>")
 	}
 	switch args[0] {
 	case "install":
 		return browserInstall()
 	default:
-		return fmt.Errorf("unknown loopy browser subcommand %q (want: install)", args[0])
+		return fmt.Errorf("unknown whip browser subcommand %q (want: install)", args[0])
 	}
 }
 
@@ -53,7 +53,7 @@ func browserInstall() error {
 		return fmt.Errorf("write relay state: %w", err)
 	}
 
-	fmt.Println("loopy browser extension written:")
+	fmt.Println("whip browser extension written:")
 	for _, f := range written {
 		fmt.Println("  ", f)
 	}
@@ -64,13 +64,13 @@ func browserInstall() error {
 	fmt.Println("  2. Click \"Load unpacked\".")
 	fmt.Printf("  3. Select this folder:\n       %s\n\n", dir)
 
-	fmt.Println("Then, to let loopy drive a tab:")
-	fmt.Println("  - Set \"browser\": { \"mode\": \"extension\" } in ~/.loopy/config.json.")
-	fmt.Println("  - Open the tab you want, click the loopy extension icon (a green ● appears).")
+	fmt.Println("Then, to let whip drive a tab:")
+	fmt.Println("  - Set \"browser\": { \"mode\": \"extension\" } in ~/.whip/config.json.")
+	fmt.Println("  - Open the tab you want, click the whip extension icon (a green ● appears).")
 	fmt.Println("  - Click the icon again to detach.")
 	fmt.Println()
-	fmt.Println("Note: while pinned, Chrome shows a \"loopy is debugging this browser\" bar —")
-	fmt.Println("that's chrome.debugger, the mechanism that lets loopy drive your real session.")
+	fmt.Println("Note: while pinned, Chrome shows a \"whip is debugging this browser\" bar —")
+	fmt.Println("that's chrome.debugger, the mechanism that lets whip drive your real session.")
 
 	openInstallTargets(dir)
 	return nil

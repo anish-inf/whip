@@ -166,7 +166,7 @@ public final class Dispatcher {
             "accessibility": .bool(st.accessibility),
             "screenRecording": .bool(st.screenRecording),
             "pending": .bool(true),
-            "hint": .string("permissions still pending — the user hasn't finished granting them in the loopy-computer window; call permissions.request again, do not give up yet"),
+            "hint": .string("permissions still pending — the user hasn't finished granting them in the whip-computer window; call permissions.request again, do not give up yet"),
         ])
     }
 

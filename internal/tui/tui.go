@@ -1,4 +1,4 @@
-// Package tui is loopy's interactive bubbletea session (fullscreen alt-screen).
+// Package tui is whip's interactive bubbletea session (fullscreen alt-screen).
 package tui
 
 import (
@@ -21,18 +21,18 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/context-labs/loopy/internal/agent"
-	"github.com/context-labs/loopy/internal/browser"
-	"github.com/context-labs/loopy/internal/computer"
-	"github.com/context-labs/loopy/internal/config"
-	"github.com/context-labs/loopy/internal/llm"
-	"github.com/context-labs/loopy/internal/lsp"
-	"github.com/context-labs/loopy/internal/mcp"
-	"github.com/context-labs/loopy/internal/memory"
-	"github.com/context-labs/loopy/internal/session"
-	"github.com/context-labs/loopy/internal/skills"
-	"github.com/context-labs/loopy/internal/tools"
-	"github.com/context-labs/loopy/internal/tools/bashrun"
+	"github.com/context-labs/whip/internal/agent"
+	"github.com/context-labs/whip/internal/browser"
+	"github.com/context-labs/whip/internal/computer"
+	"github.com/context-labs/whip/internal/config"
+	"github.com/context-labs/whip/internal/llm"
+	"github.com/context-labs/whip/internal/lsp"
+	"github.com/context-labs/whip/internal/mcp"
+	"github.com/context-labs/whip/internal/memory"
+	"github.com/context-labs/whip/internal/session"
+	"github.com/context-labs/whip/internal/skills"
+	"github.com/context-labs/whip/internal/tools"
+	"github.com/context-labs/whip/internal/tools/bashrun"
 
 	"github.com/charmbracelet/x/ansi"
 	"github.com/muesli/termenv"
@@ -191,11 +191,11 @@ type picker struct {
 	previews map[string][2]string // id -> last user, last assistant
 }
 
-// newInput builds the prompt textarea with loopy's keybindings and styling.
+// newInput builds the prompt textarea with whip's keybindings and styling.
 // Newlines come from ctrl+j / shift+enter / alt+enter; plain enter submits.
 func newInput() textarea.Model {
 	ti := textarea.New()
-	ti.Placeholder = "Ask loopy anything… (/ for commands, tab completes)"
+	ti.Placeholder = "Ask whip anything… (/ for commands, tab completes)"
 	ti.Prompt = "┃ "
 	ti.SetHeight(1)
 	ti.MaxHeight = 24 // input grows with content up to this many lines
@@ -218,9 +218,9 @@ func newInput() textarea.Model {
 // Run starts the interactive session. It returns the id of the session that
 // was active on exit ("" if nothing was said).
 func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string) (string, error) {
-	// Trust gate first: before loopy reads a single file, ask whether this
+	// Trust gate first: before whip reads a single file, ask whether this
 	// folder's contents may steer the model. Persisted per absolute path in
-	// ~/.loopy/trusted.json (claude-code's per-project trust dialog).
+	// ~/.whip/trusted.json (claude-code's per-project trust dialog).
 	if ok, err := checkTrust(); err != nil {
 		return "", err
 	} else if !ok {
@@ -245,7 +245,7 @@ func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string) (s
 	// cell-motion (?1002). With capture off, tmux's WheelUpPane binding sees
 	// mouse_any_flag=0 and runs 'copy-mode -e', scrolling tmux's own scrollback
 	// instead of the transcript. We don't report motion, so drags aren't sent
-	// to loopy; the tmux drag override (applyTmuxMouseFix) routes MouseDrag1Pane
+	// to whip; the tmux drag override (applyTmuxMouseFix) routes MouseDrag1Pane
 	// to copy-mode so plain drag-to-copy keeps working. Explicit config wins.
 	mouseOn := true
 	if cfg.Mouse != nil {
@@ -265,7 +265,7 @@ func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string) (s
 	m.agent.CompactThreshold = compactThresholdFor(cfg)
 	m.wireTasks() // redraw the UI when background subagents start/settle
 
-	// MCP: merge loopy's own config with imported claude (.mcp.json) and codex
+	// MCP: merge whip's own config with imported claude (.mcp.json) and codex
 	// (~/.codex/config.toml) servers — gated by the mcpImport policy, whose
 	// blocked entries stay visible in /mcp — then kick concurrent connects in
 	// the background. Tool calls block on that server's first settle only, so a
@@ -386,13 +386,13 @@ func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string) (s
 		tools.LSP = nil
 	}
 	// Make sure no agent-spawned child process (a server the model started, a
-	// watcher, a daemon) outlives loopy. KillAll SIGKILLs every tracked process
+	// watcher, a daemon) outlives whip. KillAll SIGKILLs every tracked process
 	// group and waits for them.
 	bashrun.KillAll()
 	return m.sessionID, err
 }
 
-// startupReport prints one block naming what loopy loaded — skills (with
+// startupReport prints one block naming what whip loaded — skills (with
 // validation warnings, pi's [Skill conflicts] lesson: a silently truncated or
 // unparseable SKILL.md is a broken skill the user never learns about) and MCP
 // servers — plus degraded-mode notices. Skipped on resume (the transcript
@@ -453,7 +453,7 @@ func (m *model) startupReport() {
 // coordinates (?1006), WITHOUT motion reporting (?1002/?1003). Writing directly
 // to the real TTY keeps bubbletea's output a terminal so terminal-size detection
 // still works (unlike piping output through an os.Pipe). With ?1000 the wheel
-// and clicks reach loopy, but drags are not reported, so the terminal/tmux keeps
+// and clicks reach whip, but drags are not reported, so the terminal/tmux keeps
 // native drag-selection for copy.
 func enableClickWheelMouse(w *os.File) {
 	fmt.Fprint(w, "\x1b[?1006h\x1b[?1000h")
@@ -464,13 +464,13 @@ func disableClickWheelMouse(w *os.File) {
 	fmt.Fprint(w, "\x1b[?1000l\x1b[?1006l")
 }
 
-// applyTmuxMouseFix makes plain drag-to-copy work inside tmux while loopy
+// applyTmuxMouseFix makes plain drag-to-copy work inside tmux while whip
 // captures the mouse for wheel/clicks. tmux's default MouseDrag1Pane binding
 // checks mouse_any_flag (set by our ?1000) and forwards the drag to the app,
 // which ignores it — so no highlight ever starts. Rebinding it to copy-mode -M
 // (only when the pane isn't already in a mode and isn't full mouse-tracking)
 // makes the drag open tmux copy-mode selection instead, restoring drag-to-copy.
-// Wheel still reaches loopy: WheelUpPane stays bound to send -M. No-op outside
+// Wheel still reaches whip: WheelUpPane stays bound to send -M. No-op outside
 // tmux or if tmux isn't available.
 func applyTmuxMouseFix() {
 	if os.Getenv("TMUX") == "" {
@@ -565,7 +565,7 @@ func (m *model) resume(id string) error {
 		for _, st := range tasks {
 			status := agent.TaskStatus(st.Status)
 			if status == agent.TaskRunning {
-				status, st.Report = agent.TaskError, "interrupted — loopy exited before this subagent finished"
+				status, st.Report = agent.TaskError, "interrupted — whip exited before this subagent finished"
 			}
 			m.agent.RestoreTask(agent.BackgroundTask{
 				ID: st.ID, Description: st.Description, Prompt: st.Prompt,
@@ -728,7 +728,7 @@ func (m *model) persist() {
 // setTheme switches the color scheme ("light"/"dark"/"auto") live and
 // persists the pick to the global config: markdown re-renders under the new
 // glamour style and every AdaptiveColor UI style follows lipgloss. A theme
-// file change in ANOTHER running loopy session is picked up live via
+// file change in ANOTHER running whip session is picked up live via
 // syncThemeMsg.
 func (m *model) setTheme(theme string) {
 	if theme != "light" && theme != "dark" {
@@ -830,7 +830,7 @@ func buildAgent(cfg *config.Config, modelName, provName, sysPrompt string) (*age
 	}
 	key := prov.Key()
 	if key == "" {
-		return nil, "", "", fmt.Errorf("no API key for provider %q (set apiKey/apiKeyEnv in ~/.loopy/config.json)", provName)
+		return nil, "", "", fmt.Errorf("no API key for provider %q (set apiKey/apiKeyEnv in ~/.whip/config.json)", provName)
 	}
 	// Two distinct limits:
 	//   - ContextLimit: the input window (provider's context_length, else the
@@ -876,7 +876,7 @@ func buildAgent(cfg *config.Config, modelName, provName, sysPrompt string) (*age
 		}
 		tools.Browser = browser.NewManager(mode)
 		if cfg.Browser.CDPURL != "" {
-			_ = os.Setenv("LOOPY_CDP_URL", cfg.Browser.CDPURL)
+			_ = os.Setenv("WHIP_CDP_URL", cfg.Browser.CDPURL)
 		}
 		browser.AllowPrivateURLs = cfg.Browser.AllowPrivateURLs
 	}
@@ -1124,7 +1124,7 @@ func cwd() string {
 // detectColorScheme figures out whether the terminal background is light and
 // calls SetLightTheme so markdown renders with a matching (high-contrast)
 // glamour style. Priority:
-//  1. LOOPY_THEME=light|dark (explicit env override)
+//  1. WHIP_THEME=light|dark (explicit env override)
 //  2. COLORFGBG (set by many terminals; last field is the bg color index)
 //  3. an OSC 11 background query on /dev/tty with a short timeout
 //  4. default: dark (the safe assumption for coding terminals)
@@ -1138,13 +1138,13 @@ func detectColorScheme() string {
 		SetLightTheme(light)                  // glamour markdown style
 		lipgloss.SetHasDarkBackground(!light) // AdaptiveColor picks
 	}
-	switch strings.ToLower(os.Getenv("LOOPY_THEME")) {
+	switch strings.ToLower(os.Getenv("WHIP_THEME")) {
 	case "light":
 		setScheme(true)
-		return "LOOPY_THEME"
+		return "WHIP_THEME"
 	case "dark":
 		setScheme(false)
-		return "LOOPY_THEME"
+		return "WHIP_THEME"
 	}
 	if v := os.Getenv("COLORFGBG"); v != "" {
 		if i := strings.LastIndex(v, ";"); i >= 0 {
@@ -1593,7 +1593,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil && !canceled {
 			m.append(errStyle.Render("error: " + msg.err.Error()))
 		} else if canceled {
-			m.append(dimStyle.Render("(interrupted — any running tool calls will be recorded as interrupted; loopy can retry them next turn)"))
+			m.append(dimStyle.Render("(interrupted — any running tool calls will be recorded as interrupted; whip can retry them next turn)"))
 		}
 		m.persist()
 		switch {
@@ -2726,7 +2726,7 @@ func (m *model) submit(text string) (tea.Model, tea.Cmd) {
 	return m.submitTurn(text, true)
 }
 
-// submitGoal sends a loopy-injected goal-continuation; not a typed submission,
+// submitGoal sends a whip-injected goal-continuation; not a typed submission,
 // so it must not appear in up-arrow input history.
 func (m *model) submitGoal(text string) (tea.Model, tea.Cmd) {
 	return m.submitTurn(text, false)
@@ -3136,7 +3136,7 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 		m.append(m.doctorReport())
 	case "/help":
 		m.append(dimStyle.Render(
-			"/model <name> [provider] — switch model (any provider-catalog model works; refresh pulls new announcements)\n/context-doctor — audit what a fresh session injects (skills, MCP, tool schemas) and its token cost\n/mcp [name] [reconnect|enable|disable] — MCP servers: status, reconnect, toggle\n/compact [model] [provider]|off — compact now, or pick the compaction model (off restores the default); retry undoes the last compaction, log lists them; compaction level: ctrl+p › Compaction level\n/mouse — toggle mouse capture (on = wheel scroll + clicks, drag to copy)\n/theme [light|dark|auto] — color scheme (bare opens the switcher)\n/tasks [id] — background subagents: focus the dock, or open one subagent's live view (ctrl+t toggles dock focus)\n/resume [id] — resume a previous session\n/fork [name] — copy this conversation into a new session (pick a point in the rewind picker with f)\n/rename [title] — retitle this session\n/goal <text> — keep working until the goal is met (resume | clear | rounds <n>|default [--global])\n/goal-from-context [n] — formulate a goal from the last n messages (default 8) and work until it's met\n/clear — reset conversation\n/memory [n] [session] — saved memories: list what's injected each turn, mark entry n done\n/me — edit your standing instructions (~/.loopy/me.md) in $EDITOR\n/schedule @every 10m|<@at time> <prompt> — schedule a wakeup turn; list | cancel <n>\n/cd [dir] — change working directory (bare prints it)\n/pwd — print working directory\n!<cmd> — run a shell command locally; output lands in the transcript and the conversation\n/quit — exit\ntab — complete · ctrl+t — focus the subagents dock (↑/↓ select, enter opens, esc backs out) · ctrl+o — toggle thinking tokens · ctrl+e — expand the last tool result · ctrl+j / shift+enter — newline · ctrl+v — paste image · esc — interrupt the agent · esc esc (idle) — rewind the conversation (↑/↓ browse, enter rewinds, f forks) · while busy with queued messages: ↑/↓ select, del removes · PgUp/PgDn — scroll · wheel — scroll · drag — select/copy text · ctrl+c ctrl+c — quit"))
+			"/model <name> [provider] — switch model (any provider-catalog model works; refresh pulls new announcements)\n/context-doctor — audit what a fresh session injects (skills, MCP, tool schemas) and its token cost\n/mcp [name] [reconnect|enable|disable] — MCP servers: status, reconnect, toggle\n/compact [model] [provider]|off — compact now, or pick the compaction model (off restores the default); retry undoes the last compaction, log lists them; compaction level: ctrl+p › Compaction level\n/mouse — toggle mouse capture (on = wheel scroll + clicks, drag to copy)\n/theme [light|dark|auto] — color scheme (bare opens the switcher)\n/tasks [id] — background subagents: focus the dock, or open one subagent's live view (ctrl+t toggles dock focus)\n/resume [id] — resume a previous session\n/fork [name] — copy this conversation into a new session (pick a point in the rewind picker with f)\n/rename [title] — retitle this session\n/goal <text> — keep working until the goal is met (resume | clear | rounds <n>|default [--global])\n/goal-from-context [n] — formulate a goal from the last n messages (default 8) and work until it's met\n/clear — reset conversation\n/memory [n] [session] — saved memories: list what's injected each turn, mark entry n done\n/me — edit your standing instructions (~/.whip/me.md) in $EDITOR\n/schedule @every 10m|<@at time> <prompt> — schedule a wakeup turn; list | cancel <n>\n/cd [dir] — change working directory (bare prints it)\n/pwd — print working directory\n!<cmd> — run a shell command locally; output lands in the transcript and the conversation\n/quit — exit\ntab — complete · ctrl+t — focus the subagents dock (↑/↓ select, enter opens, esc backs out) · ctrl+o — toggle thinking tokens · ctrl+e — expand the last tool result · ctrl+j / shift+enter — newline · ctrl+v — paste image · esc — interrupt the agent · esc esc (idle) — rewind the conversation (↑/↓ browse, enter rewinds, f forks) · while busy with queued messages: ↑/↓ select, del removes · PgUp/PgDn — scroll · wheel — scroll · drag — select/copy text · ctrl+c ctrl+c — quit"))
 	case "/model":
 		if len(fields) < 2 {
 			m.openModelPicker()
@@ -3238,7 +3238,7 @@ func (m *model) currentView() string {
 
 func (m *model) View() string {
 	var b strings.Builder
-	left := fmt.Sprintf(" loopy · %s @ %s · %s", m.modelName, m.provName, cwd())
+	left := fmt.Sprintf(" whip · %s @ %s · %s", m.modelName, m.provName, cwd())
 	if m.goal != "" {
 		left += " · ◎ " + truncLine(m.goal, 40)
 	}

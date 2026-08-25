@@ -8,12 +8,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/context-labs/loopy/internal/config"
+	"github.com/context-labs/whip/internal/config"
 )
 
 // Workspace rewind: each turn snapshots the working tree BEFORE it runs —
 // `git stash create` on a dirty tree, a bare `commit-tree` of HEAD on a clean
-// one — and pins the commit under refs/loopy/snapshots/ so it isn't GC'd.
+// one — and pins the commit under refs/whip/snapshots/ so it isn't GC'd.
 // The ref is recorded in the session store keyed by the conversation index
 // the turn started at. A conversation rewind to before that index then also
 // restores the files: checkout the snapshot's tree + delete the pin ref.
@@ -34,12 +34,12 @@ func snapshotWorkspace() string {
 		return ""
 	}
 	if commit == "" { // clean tree: pin HEAD's tree directly
-		commit, err = gitOut(ctx, "commit-tree", "HEAD^{tree}", "-m", "loopy turn snapshot")
+		commit, err = gitOut(ctx, "commit-tree", "HEAD^{tree}", "-m", "whip turn snapshot")
 		if err != nil {
 			return ""
 		}
 	}
-	if _, err := gitOut(ctx, "update-ref", "refs/loopy/snapshots/"+commit, commit); err != nil {
+	if _, err := gitOut(ctx, "update-ref", "refs/whip/snapshots/"+commit, commit); err != nil {
 		return ""
 	}
 	return commit
@@ -58,7 +58,7 @@ func workspaceClean() bool {
 func dropSnapshot(ref string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	_, _ = gitOut(ctx, "update-ref", "-d", "refs/loopy/snapshots/"+ref)
+	_, _ = gitOut(ctx, "update-ref", "-d", "refs/whip/snapshots/"+ref)
 }
 
 // restoreWorkspace puts the working tree back to the snapshot's tracked-file

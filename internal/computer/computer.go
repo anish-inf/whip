@@ -1,4 +1,4 @@
-// Package computer is loopy's computer-use subsystem: drive the user's
+// Package computer is whip's computer-use subsystem: drive the user's
 // actual desktop (apps, windows, mouse, keyboard, screen) — with browsers
 // as the flagship case. macOS-first; the design and borrow rationale live
 // in .ai-docs/plans/computer-use/README.md and

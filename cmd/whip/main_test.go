@@ -8,10 +8,10 @@ import (
 )
 
 // The system prompt always carries the built-in operating rules (the safety
-// rails); ~/.loopy/me.md appends the user's standing instructions after them.
+// rails); ~/.whip/me.md appends the user's standing instructions after them.
 func TestSystemPromptAppendsUserMe(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("LOOPY_HOME", home)
+	t.Setenv("WHIP_HOME", home)
 
 	p := systemPrompt()
 	if !strings.Contains(p, "never force-push") {

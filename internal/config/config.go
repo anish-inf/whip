@@ -1,4 +1,4 @@
-// Package config loads and saves loopy's JSONC configuration from ~/.loopy.
+// Package config loads and saves whip's JSONC configuration from ~/.whip.
 package config
 
 import (
@@ -100,7 +100,7 @@ const DefaultCompactModel = "deepseek-v4-flash-0731"
 // 50% keeps compaction deterministic instead of letting the context bloat.
 const DefaultCompactPct = 50
 
-// Config is the root of ~/.loopy/config.json (JSONC: comments allowed).
+// Config is the root of ~/.whip/config.json (JSONC: comments allowed).
 type Config struct {
 	DefaultModel    string              `json:"defaultModel"`
 	DefaultProvider string              `json:"defaultProvider,omitempty"` // override the model's first provider
@@ -114,15 +114,15 @@ type Config struct {
 	GoalMaxRounds   int                 `json:"goalMaxRounds,omitempty"`   // global goal-loop round cap; 0 = DefaultGoalMaxRounds; projects.json may override per folder
 	Providers       map[string]Provider `json:"providers"`
 	Models          map[string]Model    `json:"models"`
-	// MCPServers is loopy's own MCP server block (loopy-native shape; see
+	// MCPServers is whip's own MCP server block (whip-native shape; see
 	// internal/mcp.ServerConfig for the normalized semantics). On load it is
-	// merged over imported claude/codex configs: loopy always wins per name.
+	// merged over imported claude/codex configs: whip always wins per name.
 	MCPServers map[string]MCPServer `json:"mcp,omitempty"`
-	// MCPImport gates which imported MCP server definitions loopy picks up
+	// MCPImport gates which imported MCP server definitions whip picks up
 	// (claude-style .mcp.json, codex-style ~/.codex/config.toml). nil imports
 	// both sources, preserving the pre-gating behavior.
 	MCPImport *MCPImport `json:"mcpImport,omitempty"`
-	// LSPServers is loopy's own LSP server block (loopy-native shape; see
+	// LSPServers is whip's own LSP server block (whip-native shape; see
 	// internal/lsp.FromConfigMap for the merge semantics). Entries extend or
 	// disable the built-in registry (gopls).
 	LSPServers map[string]LSPServer `json:"lsp,omitempty"`
@@ -150,8 +150,8 @@ type ComputerConfig struct {
 // private-address policy for non-live backends.
 type BrowserConfig struct {
 	// Mode: "live" (attach to the user's running Chrome, default),
-	// "dedicated" (loopy-owned profile), "headless", or "extension" (drive
-	// the user's real logged-in tab through the loopy extension — the only
+	// "dedicated" (whip-owned profile), "headless", or "extension" (drive
+	// the user's real logged-in tab through the whip extension — the only
 	// way onto the default profile on Chrome ≥ 136).
 	Mode string `json:"mode,omitempty"`
 	// CDPURL attaches live mode to an explicit DevTools endpoint instead of
@@ -175,7 +175,7 @@ type LSPServer struct {
 	Enabled     *bool             `json:"enabled,omitempty"`
 }
 
-// MCPImport selects which claude/codex MCP server definitions loopy imports.
+// MCPImport selects which claude/codex MCP server definitions whip imports.
 // A nil source entry (or nil Enabled) leaves that source on. Example:
 //
 //	"mcpImport": {
@@ -209,18 +209,18 @@ type MCPServer struct {
 	ToolTimeout    int               `json:"toolTimeout,omitempty"`
 }
 
-// Dir returns the loopy home directory (~/.loopy), creating it if needed.
-// LOOPY_HOME overrides the location — used by tests to keep fixture writes
+// Dir returns the whip home directory (~/.whip), creating it if needed.
+// WHIP_HOME overrides the location — used by tests to keep fixture writes
 // far away from the real config.
 func Dir() (string, error) {
-	if d := os.Getenv("LOOPY_HOME"); d != "" {
+	if d := os.Getenv("WHIP_HOME"); d != "" {
 		return d, os.MkdirAll(d, 0o700)
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
 	}
-	dir := filepath.Join(home, ".loopy")
+	dir := filepath.Join(home, ".whip")
 	return dir, os.MkdirAll(dir, 0o700)
 }
 
@@ -240,7 +240,7 @@ func (c *Config) fingerprint() string {
 		len(c.Providers), len(c.Models), c.DefaultModel, c.CompactModel)
 }
 
-// Load reads ~/.loopy/config.json, writing a default config on first run. The
+// Load reads ~/.whip/config.json, writing a default config on first run. The
 // file is JSONC: comments and trailing commas are allowed.
 func Load() (*Config, error) {
 	p, err := path()
@@ -291,7 +291,7 @@ func Load() (*Config, error) {
 	return &cfg, nil
 }
 
-// Save writes the config back to ~/.loopy/config.json. The write is atomic
+// Save writes the config back to ~/.whip/config.json. The write is atomic
 // (temp file + rename) and the previous contents are kept in config.json.bak.
 // As a safety net, Save refuses to overwrite an existing healthy config (one
 // with providers/models) with a structurally empty one — that path has only
@@ -346,10 +346,10 @@ func marshalConfig(c *Config) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	header := "// loopy configuration — JSONC: comments and trailing commas are allowed.\n" +
+	header := "// whip configuration — JSONC: comments and trailing commas are allowed.\n" +
 		"// providers: declare each API endpoint once. models: route each model to one or\n" +
 		"// more providers (first is the default). defaultModel/defaultProvider pick the route.\n" +
-		"// mcp: loopy's own MCP servers; mcpImport: gate claude/codex imports, e.g.\n" +
+		"// mcp: whip's own MCP servers; mcpImport: gate claude/codex imports, e.g.\n" +
 		"//   \"mcpImport\": { \"codex\": { \"enabled\": true, \"exclude\": [\"node_repl\"] } }\n"
 	out := append([]byte(header), body...)
 	return append(out, '\n'), nil

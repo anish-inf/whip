@@ -26,7 +26,7 @@ func TestRodThroughRelay(t *testing.T) {
 	ext := dialWS(t, fmt.Sprintf("ws://%s/ext?token=%s", r.Addr(), r.Token()))
 	defer ext.Close()
 	// Extension reports the pinned tab (a real page URL so attachPage picks it).
-	writeCli(t, ext, `{"method":"loopy.attached","params":{"tabId":7,"title":"Example","url":"https://example.com/"}}`)
+	writeCli(t, ext, `{"method":"whip.attached","params":{"tabId":7,"title":"Example","url":"https://example.com/"}}`)
 	time.Sleep(100 * time.Millisecond)
 
 	// Answer CDP requests the way chrome.debugger would: a tiny fake page.

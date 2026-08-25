@@ -49,9 +49,9 @@ This may or may not be relevant…"), with only the selected text inlined.
 The distinction worth copying: **explicit mention → eager read framed as a tool call;
 ambient/implicit signal → mention-only reminder.**
 
-## loopy's decision
+## whip's decision
 
-Abe's design for loopy is the **pointer** shape: a note in the user message that a file
+Abe's design for whip is the **pointer** shape: a note in the user message that a file
 was tagged (any path, relative or absolute), letting the model probe it with its own
 read/bash/grep instead of receiving the content eagerly. Rationale: catting is wasteful —
 the model usually wants to interrogate the file, not ingest it whole.
@@ -62,7 +62,7 @@ avoids one round-trip. Revisit if pointer-style mentions measurably waste turns.
 mechanics below (parts on the message, path normalization, `#range` parsing, reference
 storage) apply to either shape.
 
-## Concrete shape for loopy (if the synthetic-read alternative is ever adopted)
+## Concrete shape for whip (if the synthetic-read alternative is ever adopted)
 
 Keep `[]Part` on the user message, not just a string. Parse `@…` at submit into
 `{Path, Start, End}`; before the API call expand each into two synthetic messages:

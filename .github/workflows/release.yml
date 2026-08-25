@@ -24,9 +24,9 @@ jobs:
       - run: go test $(go list ./... | grep -v -e /internal/browser -e /internal/tui)
 
   # Each binary is built on a runner of its OWN platform. darwin-arm64 needs
-  # macOS anyway: the embedded loopy-computer Swift helper (computer-use
+  # macOS anyway: the embedded whip-computer Swift helper (computer-use
   # native tier) is built with `task driver` on the runner and go:embed'd into
-  # the loopy binary — never committed. Each job smoke-tests `--version` so a
+  # the whip binary — never committed. Each job smoke-tests `--version` so a
   # broken binary fails here instead of shipping.
   build:
     needs: test
@@ -37,17 +37,17 @@ jobs:
           - os: ubuntu-latest
             goos: linux
             goarch: amd64
-            asset: loopy-linux-x64
+            asset: whip-linux-x64
             driver: false
           - os: ubuntu-24.04-arm
             goos: linux
             goarch: arm64
-            asset: loopy-linux-arm64
+            asset: whip-linux-arm64
             driver: false
           - os: macos-14
             goos: darwin
             goarch: arm64
-            asset: loopy-darwin-arm64
+            asset: whip-darwin-arm64
             driver: true
           # darwin-x64 is cross-built on ubuntu (macOS Intel hosted runners
           # are scarce and stall releases — clocked-in hit this too). Pure-Go
@@ -57,7 +57,7 @@ jobs:
           - os: ubuntu-latest
             goos: darwin
             goarch: amd64
-            asset: loopy-darwin-x64
+            asset: whip-darwin-x64
             driver: false
             smoke: false
     runs-on: ${{ matrix.os }}
@@ -72,23 +72,23 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Build the loopy-computer Swift driver (macOS arm64)
+      - name: Build the whip-computer Swift driver (macOS arm64)
         if: ${{ matrix.driver }}
         run: |
           xcodebuild -version >/dev/null 2>&1 || true # CLT is enough for swift build
           swift build -c release --package-path driver
-          cp driver/.build/release/loopy-computer internal/computer/bin/loopy-computer
-          codesign --sign - --force internal/computer/bin/loopy-computer 2>/dev/null || true
-          test -s internal/computer/bin/loopy-computer
+          cp driver/.build/release/whip-computer internal/computer/bin/whip-computer
+          codesign --sign - --force internal/computer/bin/whip-computer 2>/dev/null || true
+          test -s internal/computer/bin/whip-computer
 
       - name: Build ${{ matrix.asset }}
         run: |
           # The zero-byte placeholder keeps non-driver builds green: go:embed
-          # reads whatever is at internal/computer/bin/loopy-computer.
+          # reads whatever is at internal/computer/bin/whip-computer.
           mkdir -p dist/release
           go build -trimpath \
             -ldflags "-s -w -X main.version=${{ github.ref_name }}" \
-            -o "dist/release/${{ matrix.asset }}" ./cmd/loopy
+            -o "dist/release/${{ matrix.asset }}" ./cmd/whip
 
       - name: Smoke test on a clean directory
         if: ${{ matrix.smoke != false }}
@@ -118,14 +118,14 @@ jobs:
       - name: Checksums
         run: |
           cd artifacts
-          sha256sum loopy-* > SHA256SUMS
+          sha256sum whip-* > SHA256SUMS
           cat SHA256SUMS
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "${{ github.ref_name }}" \
-            artifacts/loopy-* \
+            artifacts/whip-* \
             artifacts/SHA256SUMS \
             install.sh \
             --title "${{ github.ref_name }}" \

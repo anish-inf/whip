@@ -18,8 +18,8 @@ func pressKey(m *model, kt tea.KeyType) *model {
 func TestTabCompletesSkillName(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	os.MkdirAll(filepath.Join(home, ".loopy/skills/go-style"), 0o755)
-	os.WriteFile(filepath.Join(home, ".loopy/skills/go-style/SKILL.md"),
+	os.MkdirAll(filepath.Join(home, ".whip/skills/go-style"), 0o755)
+	os.WriteFile(filepath.Join(home, ".whip/skills/go-style/SKILL.md"),
 		[]byte("---\nname: go-style\ndescription: d\n---\n"), 0o644)
 	m := modelCmdModel()
 	m = typeStr(t, m, "$go-sty")

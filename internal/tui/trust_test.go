@@ -4,13 +4,13 @@ import (
 	"os"
 	"testing"
 
-	"github.com/context-labs/loopy/internal/config"
+	"github.com/context-labs/whip/internal/config"
 )
 
 // The startup gate: a trusted cwd passes without a prompt; an untrusted one
 // declines when there's no terminal to ask on.
 func TestTrustGate(t *testing.T) {
-	t.Setenv("LOOPY_HOME", t.TempDir())
+	t.Setenv("WHIP_HOME", t.TempDir())
 	wd, _ := os.Getwd()
 	if err := config.Trust(wd); err != nil {
 		t.Fatal(err)

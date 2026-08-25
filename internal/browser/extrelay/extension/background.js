@@ -1,9 +1,9 @@
-// loopy browser extension service worker.
+// whip browser extension service worker.
 //
 // Clicking the toolbar icon on a tab pins it: the worker attaches
-// chrome.debugger to that tab, opens a WebSocket to the loopy relay
-// (address + token from relay.json, which `loopy browser install` writes
-// next to this file), and pipes raw CDP both ways. loopy's rod backend talks
+// chrome.debugger to that tab, opens a WebSocket to the whip relay
+// (address + token from relay.json, which `whip browser install` writes
+// next to this file), and pipes raw CDP both ways. whip's rod backend talks
 // CDP to the relay; this worker forwards it to the tab and streams events
 // back. Clicking the icon again (or a debugger detach) unpins.
 //
@@ -11,16 +11,16 @@
 
 let ws = null;
 let pinnedTabId = null;
-// rod addresses the synthesized single session "loopy-ext"; chrome.debugger
+// rod addresses the synthesized single session "whip-ext"; chrome.debugger
 // is inherently single-session, so we strip that field both ways.
-const SESSION_ID = "loopy-ext";
+const SESSION_ID = "whip-ext";
 
 async function relayEndpoint() {
   const url = chrome.runtime.getURL("relay.json");
   const res = await fetch(url);
-  if (!res.ok) throw new Error("relay.json missing — run `loopy browser install`");
+  if (!res.ok) throw new Error("relay.json missing — run `whip browser install`");
   const { addr, token, autoAttach } = await res.json();
-  if (!addr || !token) throw new Error("relay.json is incomplete — re-run `loopy browser install`");
+  if (!addr || !token) throw new Error("relay.json is incomplete — re-run `whip browser install`");
   return {
     ws: `ws://${addr}/ext?token=${encodeURIComponent(token)}`,
     log: `http://${addr}/swlog?token=${encodeURIComponent(token)}`,
@@ -104,12 +104,12 @@ async function pin(tabId) {
       const t = await chrome.tabs.get(tabId);
       title = t.title || ""; url = t.url || "";
     } catch (_) {}
-    ws.send(JSON.stringify({ method: "loopy.attached", params: { tabId, title, url } }));
+    ws.send(JSON.stringify({ method: "whip.attached", params: { tabId, title, url } }));
     setBadge(true);
   };
   ws.onerror = () => { swlog("ws-error", `tabId=${tabId}`); };
   ws.onmessage = (ev) => {
-    // CDP request from loopy → the pinned tab.
+    // CDP request from whip → the pinned tab.
     try {
       const msg = JSON.parse(ev.data);
       if (msg.sessionId === SESSION_ID) delete msg.sessionId;
@@ -145,7 +145,7 @@ async function unpin() {
   }
 }
 
-// Tab events → loopy (as CDP events). chrome.debugger.onEvent fires for the
+// Tab events → whip (as CDP events). chrome.debugger.onEvent fires for the
 // pinned tab while attached.
 chrome.debugger.onEvent.addListener((source, method, params) => {
   if (source.tabId === pinnedTabId) send({ method, params: params || {} });
@@ -166,7 +166,7 @@ chrome.action.onClicked.addListener(async (tab) => {
   try {
     await pin(tab.id);
   } catch (err) {
-    console.error("loopy: pin failed:", err);
+    console.error("whip: pin failed:", err);
     pinnedTabId = null;
   }
 });
@@ -174,7 +174,7 @@ chrome.action.onClicked.addListener(async (tab) => {
 // Keep the service worker alive while pinned (MV3 suspends idle workers).
 setInterval(() => {
   if (pinnedTabId != null && ws && ws.readyState === WebSocket.OPEN) {
-    send({ method: "loopy.ping", params: {} });
+    send({ method: "whip.ping", params: {} });
   }
 }, 20000);
 

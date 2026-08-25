@@ -34,7 +34,7 @@ identically on both drivers Y/N, latency, LOC cost, quirks hit.
   `chromedp.NewContext` against a CDP endpoint from the existing
   `DiscoverLiveWS` / launcher URL. Reuse `attach.go`, `safety.go`,
   `session.go` untouched.
-- An env knob `LOOPY_BROWSER_DRIVER=rod|chromedp` selects the driver in
+- An env knob `WHIP_BROWSER_DRIVER=rod|chromedp` selects the driver in
   `Open` for A/B runs.
 - Test harness: `DRIVER=chromedp go test ./internal/browser/ -run TestE2E`
   — the same three mode tests run twice.
@@ -55,7 +55,7 @@ identically on both drivers Y/N, latency, LOC cost, quirks hit.
 ## Test plan
 
 - Existing: `internal/browser` unit + E2E ×3 modes, run with
-  `LOOPY_BROWSER_DRIVER=chromedp`.
+  `WHIP_BROWSER_DRIVER=chromedp`.
 - New: `driver_parity_test.go` — table-driven, runs each Backend op
   against both drivers on one page, asserts equivalent outcomes.
 - Gate: `task check` + `-race` on both drivers.

@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/context-labs/loopy/internal/llm"
-	"github.com/context-labs/loopy/internal/tools"
+	"github.com/context-labs/whip/internal/llm"
+	"github.com/context-labs/whip/internal/tools"
 )
 
 // Events receives streaming callbacks during a turn. All fields are optional.
@@ -255,7 +255,7 @@ func (a *Agent) Turn(ctx context.Context, input string, ev Events) (string, erro
 }
 
 // TurnAuthored is Turn for a message the human actually typed and submitted
-// (vs. a steered background-task result or goal-continuation loopy injects).
+// (vs. a steered background-task result or goal-continuation whip injects).
 // The message is marked Authored so input-history recall cycles only real
 // submissions.
 func (a *Agent) TurnAuthored(ctx context.Context, input string, ev Events) (string, error) {

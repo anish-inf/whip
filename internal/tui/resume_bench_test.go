@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/context-labs/loopy/internal/llm"
+	"github.com/context-labs/whip/internal/llm"
 )
 
 // benchTranscript builds a realistic resumed conversation: n exchanges, each

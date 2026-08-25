@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/context-labs/loopy/internal/computer"
+	"github.com/context-labs/whip/internal/computer"
 )
 
 // computer_exec refuses cleanly when no policy is installed (never drives

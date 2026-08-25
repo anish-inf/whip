@@ -1,4 +1,4 @@
-// loopy is a minimal coding agent harness.
+// whip is a minimal coding agent harness.
 package main
 
 import (
@@ -6,17 +6,17 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/context-labs/loopy/internal/agent"
-	"github.com/context-labs/loopy/internal/config"
-	"github.com/context-labs/loopy/internal/llm"
-	"github.com/context-labs/loopy/internal/tui"
+	"github.com/context-labs/whip/internal/agent"
+	"github.com/context-labs/whip/internal/config"
+	"github.com/context-labs/whip/internal/llm"
+	"github.com/context-labs/whip/internal/tui"
 )
 
 var version = "dev" // set via -ldflags "-X main.version=..."
 
 func systemPrompt() string {
 	wd, _ := os.Getwd()
-	prompt := fmt.Sprintf(`You are an expert coding assistant operating inside loopy, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files.
+	prompt := fmt.Sprintf(`You are an expert coding assistant operating inside whip, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files.
 
 Available tools:
 - read: Read file contents
@@ -42,7 +42,7 @@ Operating rules:
 
 Current working directory: %s`, wd)
 	if extra := config.MeInstructions(); extra != "" {
-		prompt += "\n\nStanding instructions from the user (~/.loopy/me.md — treat as user rules):\n" + extra
+		prompt += "\n\nStanding instructions from the user (~/.whip/me.md — treat as user rules):\n" + extra
 	}
 	// the skills block is appended fresh each turn by the TUI, so newly added
 	// skills are picked up without restarting
@@ -50,7 +50,7 @@ Current working directory: %s`, wd)
 }
 
 func main() {
-	modelFlag := flag.String("m", "", "model name from ~/.loopy/config.json (default: defaultModel)")
+	modelFlag := flag.String("m", "", "model name from ~/.whip/config.json (default: defaultModel)")
 	providerFlag := flag.String("p", "", "provider to route the model through (default: model's first provider)")
 	versionFlag := flag.Bool("version", false, "print version")
 	resumeFlag := flag.String("resume", "", "resume a previous session by id (or unique prefix)")
@@ -58,23 +58,23 @@ func main() {
 	flag.Parse()
 
 	if *versionFlag {
-		fmt.Println("loopy", version)
+		fmt.Println("whip", version)
 		return
 	}
 
-	// `loopy mcp ...` — server management and the MCP server mode.
+	// `whip mcp ...` — server management and the MCP server mode.
 	if flag.NArg() > 0 && flag.Arg(0) == "mcp" {
 		if err := mcpCLI(flag.Args()[1:], version); err != nil {
-			fmt.Fprintln(os.Stderr, "loopy:", err)
+			fmt.Fprintln(os.Stderr, "whip:", err)
 			os.Exit(1)
 		}
 		return
 	}
 
-	// `loopy browser ...` — browser tooling (install the drive-my-tab extension).
+	// `whip browser ...` — browser tooling (install the drive-my-tab extension).
 	if flag.NArg() > 0 && flag.Arg(0) == "browser" {
 		if err := browserCLI(flag.Args()[1:]); err != nil {
-			fmt.Fprintln(os.Stderr, "loopy:", err)
+			fmt.Fprintln(os.Stderr, "whip:", err)
 			os.Exit(1)
 		}
 		return
@@ -82,14 +82,14 @@ func main() {
 
 	cfg, err := config.Load()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "loopy:", err)
+		fmt.Fprintln(os.Stderr, "whip:", err)
 		os.Exit(1)
 	}
 
 	if *benchFlag {
 		prov, mdl, id, err := cfg.Resolve(*modelFlag, *providerFlag)
 		if err != nil {
-			fmt.Fprintln(os.Stderr, "loopy:", err)
+			fmt.Fprintln(os.Stderr, "whip:", err)
 			os.Exit(1)
 		}
 		_ = prov.Key()
@@ -98,10 +98,10 @@ func main() {
 	}
 	sessionID, err := tui.Run(cfg, *modelFlag, *providerFlag, systemPrompt(), *resumeFlag)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "loopy:", err)
+		fmt.Fprintln(os.Stderr, "whip:", err)
 		os.Exit(1)
 	}
 	if sessionID != "" {
-		fmt.Printf("session %s — resume with: loopy --resume %s\n", sessionID, sessionID)
+		fmt.Printf("session %s — resume with: whip --resume %s\n", sessionID, sessionID)
 	}
 }

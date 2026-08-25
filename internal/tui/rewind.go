@@ -7,7 +7,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/context-labs/loopy/internal/llm"
+	"github.com/context-labs/whip/internal/llm"
 )
 
 // Rewind: double-esc while idle opens a picker over the conversation's

@@ -1,4 +1,4 @@
-// fakehelper_test.go holds the source of the Go fake loopy-computer helper
+// fakehelper_test.go holds the source of the Go fake whip-computer helper
 // (built into a temp binary by helper_test.go). It mirrors the Swift
 // driver's stdio protocol: announce version line, then newline-delimited
 // JSON-RPC. Tests inject behavior via the `handle` hook (see // SCRIPT).
@@ -33,7 +33,7 @@ import (
 	"os"
 )
 
-var versionLine = "loopy-computer/1"
+var versionLine = "whip-computer/1"
 
 type rpcErr struct {
 	Code    int

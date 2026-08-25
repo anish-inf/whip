@@ -6,14 +6,14 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/context-labs/loopy/internal/config"
-	"github.com/context-labs/loopy/internal/mcp"
+	"github.com/context-labs/whip/internal/config"
+	"github.com/context-labs/whip/internal/mcp"
 )
 
 // mcpCommand handles "/mcp [name] [reconnect|enable|disable]".
 func (m *model) mcpCommand(fields []string) (tea.Model, tea.Cmd) {
 	if m.mcpMgr == nil {
-		m.append(dimStyle.Render("no MCP servers configured — add one with `loopy mcp add <name> -- <cmd...>`, a .mcp.json, or ~/.codex/config.toml"))
+		m.append(dimStyle.Render("no MCP servers configured — add one with `whip mcp add <name> -- <cmd...>`, a .mcp.json, or ~/.codex/config.toml"))
 		return m, nil
 	}
 	if len(fields) == 1 {
@@ -40,13 +40,13 @@ func (m *model) mcpCommand(fields []string) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// mcpSetEnabled persists a toggle into loopy's own config and applies it
+// mcpSetEnabled persists a toggle into whip's own config and applies it
 // live. For imported (claude/codex) servers the FULL definition is copied
-// into loopy's config first — otherwise a bare {enabled:false} entry would
+// into whip's config first — otherwise a bare {enabled:false} entry would
 // shadow the import on next launch and lose the command/url for re-enable.
 func (m *model) mcpSetEnabled(name string, enabled bool) {
 	if m.mcpMgr.BlockedByPolicy(name) {
-		m.append(errStyle.Render(fmt.Sprintf("mcp server %s is blocked by the mcpImport config — edit ~/.loopy/config.json (or remove the gate) to enable it", name)))
+		m.append(errStyle.Render(fmt.Sprintf("mcp server %s is blocked by the mcpImport config — edit ~/.whip/config.json (or remove the gate) to enable it", name)))
 		return
 	}
 	live, ok := m.mcpMgr.Config(name)

@@ -1,4 +1,4 @@
-# browser-use as a first-class loopy feature
+# browser-use as a first-class whip feature
 
 > **Status: IMPLEMENTED (2026-02).** The §5b native design shipped:
 > `internal/browser` (rod) + `browser_exec` tool + live/dedicated/headless
@@ -13,7 +13,7 @@ hermes does.** Zero-code spike available today via the CLI's MCP server.
 
 ```mermaid
 flowchart LR
-    subgraph loopy["loopy (Go)"]
+    subgraph whip["whip (Go)"]
         A[agent loop] -->|browser_exec code| T[tool shim]
     end
     T -->|stdin: python code| CLI[browser-use CLI]
@@ -59,7 +59,7 @@ Architecture (`browser_harness/`):
 ```mermaid
 sequenceDiagram
     participant M as model
-    participant L as loopy/hermes
+    participant L as whip/hermes
     participant C as browser-use CLI<br/>(fresh python per call)
     participant D as daemon<br/>(per BU_NAME)
     participant B as Chrome
@@ -206,7 +206,7 @@ interesting machinery hermes built around it:
   secret-redacted both directions, refs preserved) or line-boundary
   truncate, with the **full snapshot always spilled to a
   content-hash-deduped file** and a pointer the agent pages with
-  `read_file offset/limit` — exactly loopy's `@`-mention philosophy.
+  `read_file offset/limit` — exactly whip's `@`-mention philosophy.
 - **Process hygiene**: stdout/stderr to temp files, not pipes (the daemon
   inherits pipe FDs, so `communicate()` never sees EOF); per-session socket
   dirs with owner-PID files; a cross-process orphan reaper that verifies
@@ -260,7 +260,7 @@ URL; credential-like query-param blocking on cloud backends only;
 about:blank and block); and a current-URL re-probe before every
 content-returning tool, closing the "JS eval navigated the page" hole.
 
-## 3. What loopy has, honestly assessed
+## 3. What whip has, honestly assessed
 
 - Tool interface is one struct (`Tool{Def, Run}`), adding a built-in is
   ~40 lines; output budget 50KB shared with MCP.
@@ -279,21 +279,21 @@ content-returning tool, closing the "JS eval navigated the page" hole.
   `browser_exec` + `browser_screenshot` with a persistent namespace and an
   exec lock). The second one is hermes's design pre-packaged as MCP,
   including native `ImageContent` screenshot returns.
-- Config/trust: `~/.loopy/config.json` sections + per-folder trust store.
+- Config/trust: `~/.whip/config.json` sections + per-folder trust store.
 
 ## 4. Integration options, re-ranked with evidence
 
 ### A. Built-in `browser_exec` tool wrapping the CLI subprocess (hermes port)
 
 ~250 lines of Go in `internal/tools/browser.go`: find CLI
-(`~/.loopy/bin/browser-use` → PATH → `uvx`), stdin-pipe code with
+(`~/.whip/bin/browser-use` → PATH → `uvx`), stdin-pipe code with
 `BU_NAME=<session>` + scrubbed env, regex-scan stdout for screenshot paths,
 return JSON-ish text. Port hermes's `_HEADER_BASE`+digest description
 (verbatim steal — it's benchmarked) with a vision-aware variant.
 
 *New information from reading the substrate*: the CLI auto-starts and
 self-heals its daemon (`ensure_daemon`), including structured "go click
-Allow in Chrome" errors — loopy inherits all of that for free. The
+Allow in Chrome" errors — whip inherits all of that for free. The
 subprocess-per-call cost is real but the daemon holds the browser; hermes
 ships this as their SOTA path.
 
@@ -306,12 +306,12 @@ return parts; (b) simpler: on screenshot detection, inject a follow-up
 zero wire changes, matches how the `!` escape already shares output with
 the model. (b) is the ponytail move; (a) is cleaner long-term.
 
-### B. MCP: point loopy at `browser-use` = zero-code validation, maybe more
+### B. MCP: point whip at `browser-use` = zero-code validation, maybe more
 
 `browser-use` CLI exposes `browser_use.mcp.cli_mcp`: stdio MCP server,
 **two tools** (`browser_exec`, `browser_screenshot` returning real
 `ImageContent`), persistent namespace, exec lock. Today this works via
-`~/.loopy/config.json` mcp block with zero new code — except loopy's MCP
+`~/.whip/config.json` mcp block with zero new code — except whip's MCP
 bridge flattens results to text (`flattenResult`, manager.go:456), so
 `browser_screenshot`'s ImageContent lands as a placeholder. Two gaps to
 close for parity: (1) teach `flattenResult` to save image content to a temp
@@ -329,7 +329,7 @@ DevToolsActivePort, PID-reuse-safe kills, OOPIF sessions, network-idle
 event filtering). A Go port is *feasible* (task-3's report maps it cleanly
 onto goroutines/channels — and the dialog-bridge JS is verbatim reusable)
 but it's a multi-week project that then tracks a fast-moving upstream.
-Only worth it if the Python dependency becomes a dealbreaker for loopy's
+Only worth it if the Python dependency becomes a dealbreaker for whip's
 single-binary story.
 
 ## 5. The design I'd actually build
@@ -347,11 +347,11 @@ Validates workflows end-to-end.
 
 **Phase 1 — `browser_exec` built-in (~300 lines + tests)**:
 - `internal/tools/browser.go`: `browser_exec{code, session?, timeout?}`.
-  CLI resolution managed-first into `~/.loopy/bin`, `uv tool install`
+  CLI resolution managed-first into `~/.whip/bin`, `uv tool install`
   bootstrap behind `/browser install`, `uvx` fallback.
 - Env scrub: build the subprocess env from scratch (PATH floor + HOME +
-  `BU_*` + `BROWSER_USE_API_KEY`), never inherit loopy's env wholesale —
-  loopy's process env carries provider API keys.
+  `BU_*` + `BROWSER_USE_API_KEY`), never inherit whip's env wholesale —
+  whip's process env carries provider API keys.
 - URL-literal pre-check: port `is_always_blocked_url`'s floor (metadata
   endpoints, every DNS answer) as ~60 lines of Go; block literals in `code`.
   Respect a `browser.allowPrivateUrls` config for the LAN case.
@@ -361,13 +361,13 @@ Validates workflows end-to-end.
   interleave).
 - Description: steal `_HEADER_BASE` + helpers digest + step-label comment
   convention; swap vision/text-only section on `Model.Vision`.
-- Default `session` = loopy session id; subagents get `<session>-<taskID>`;
+- Default `session` = whip session id; subagents get `<session>-<taskID>`;
   document "same name = same browser" in the schema.
 - TUI: tool row shows the `# comment` first line as the label (generalize
   the existing `⚒ name args` row to special-case browser_exec's first
   comment line); `/browser` command = `--doctor` + `connection_status` +
   install/connect/status subcommands.
-- Workspace: `~/.loopy/browser/<session>/` as `BH_AGENT_WORKSPACE`.
+- Workspace: `~/.whip/browser/<session>/` as `BH_AGENT_WORKSPACE`.
 
 **Phase 2 — vision loop**: screenshot-path detection (port `_IMAGE_PATH_RE`)
 → resize (1568px/256KB JPEG — needs an image lib; `golang.org/x/image` +
@@ -394,11 +394,11 @@ native-Go), Camofox, recordings (the CLI has them; revisit if users ask).
    part of the agent-visible contract — don't swallow stderr.
 3. `browser-use`'s shipped SKILL.md contains promotional content (cloud
    upsell line, "ask the user to close billing browsers" phrasing that
-   nudges cloud usage) — exactly why hermes pins its own digest. Loopy
+   nudges cloud usage) — exactly why hermes pins its own digest. Whip
    should likewise never pipe `browser-use skill` output into prompts.
 4. Screenshot data URLs baked into tool results are re-sent on every
    subsequent request — hermes caps at 256KB JPEG and still flags it. With
-   loopy's 50KB *text* truncation not applying to parts, an unguarded
+   whip's 50KB *text* truncation not applying to parts, an unguarded
    screenshot history would silently blow context: compact's
    `EstimateTokens` counts 1200 tokens/image part already.
 5. `BU_NAME` accepts only `[A-Za-z0-9_-]{1,64}` — validate before env-set
@@ -407,13 +407,13 @@ native-Go), Camofox, recordings (the CLI has them; revisit if users ask).
    workspace — that's code execution persisting across calls. Powerful
    (the agent extends its own tools) but note it in the trust story.
 7. Windows: daemon IPC is TCP loopback + token; the CLI hides console
-   windows; screenshot paths are drive-letter form. Loopy's Windows support
+   windows; screenshot paths are drive-letter form. Whip's Windows support
    is currently minimal — fine to ship POSIX-first, say so.
 8. The daemon's local-Chrome mode *attaches to the user's real browser* —
    cookies, sessions, everything. That's the feature (logged-in work) and
    the hazard (the agent acts as the user). The trust gate + step-label
    visibility + `/browser status` are what make it acceptable.
-9. Legacy-stack lessons that transfer to whichever path loopy ships:
+9. Legacy-stack lessons that transfer to whichever path whip ships:
    daemon-spawning commands must redirect stdout/stderr to **files, not
    pipes** (inherited FDs keep pipes open forever); kill process **trees**
    (npm/daemon grandchildren survive a plain kill); treat rc=0 + empty
@@ -434,7 +434,7 @@ dead-ends on `ErrNoLiveBrowser`. Ported from hermes's
   dedicated Chrome when discovery finds nothing debuggable. hermes does the
   same on `/browser connect` ("isn't running with remote debugging —
   attempting to launch..."), but into an isolated `~/.hermes/chrome-debug`
-  profile; loopy reuses its existing `~/.loopy/browser/dedicated-profile`.
+  profile; whip reuses its existing `~/.whip/browser/dedicated-profile`.
 - **Dual-stack probe** (`_LOOPBACK_PROBE_HOSTS`): a non-Chrome squatter on
   127.0.0.1:9222 pushes Chrome's debug port to [::1] only — probe both.
 - **Squatter rejection**: `/json/version` must return a Chromium `Browser`
@@ -442,18 +442,18 @@ dead-ends on `ErrNoLiveBrowser`. Ported from hermes's
   fallback now additionally requires the file's WS path to answer a
   WebSocket upgrade (101) before trusting it — otherwise a stale
   DevToolsActivePort pointing at a squatted port hands rod a bogus ws URL.
-- **Reattach-no-duplicate**: a still-running loopy Chrome is reattached via
+- **Reattach-no-duplicate**: a still-running whip Chrome is reattached via
   its profile's DevToolsActivePort instead of spawning a second instance.
   Two discoveries while building this: (1) rod's `Browser.Close()` always
   sends CDP `Browser.close`, which kills the *whole* browser process even on
-  a remote attach — loopy now detaches (severs the socket via reflect+unsafe
+  a remote attach — whip now detaches (severs the socket via reflect+unsafe
   into rod's unexported client) for live/reattached/dedicated modes and only
   kills headless; (2) that detach survives because the launcher's Leakless
   pid-guardian reaps the browser when the agent process exits, so detached
   dedicated Chromes don't leak across runs.
 - The in-band fallback notice (prepended to the first tool output) is
   hermes's `_pending_input` "browser connected to live browser" context
-  injection, adapted: loopy tells the model *which* browser it's driving
+  injection, adapted: whip tells the model *which* browser it's driving
   (launched dedicated vs attached live) so it can relay that to the user.
 
 ---
@@ -492,7 +492,7 @@ Chrome ≥ 136, where CDP on the default profile is blocked entirely.
   `Page.enable` — the extension must answer all of them (or chrome.debugger
   does, since it forwards everything).
 - **Install UX**: Chrome forbids programmatic extension install, so
-  `loopy browser install` writes the unpacked extension + `relay.json`
+  `whip browser install` writes the unpacked extension + `relay.json`
   (per-process bearer token, 0600), mints the token, and opens
   `chrome://extensions` + the folder — the user's part is exactly three
   clicks (Developer mode → Load unpacked → select folder), then click the

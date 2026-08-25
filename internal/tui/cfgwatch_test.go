@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/context-labs/loopy/internal/config"
+	"github.com/context-labs/whip/internal/config"
 )
 
 // /theme auto must resolve from the ACTUAL detected terminal background, not
@@ -15,8 +15,8 @@ import (
 // to stay dark because SetLightTheme mutated detection state).
 func TestThemeAutoResolvesFromDetection(t *testing.T) {
 	m := compactCmdModel()
-	t.Setenv("LOOPY_THEME", "light") // stub detection: the terminal bg is light
-	m.setTheme("dark")               // user overrides to dark
+	t.Setenv("WHIP_THEME", "light") // stub detection: the terminal bg is light
+	m.setTheme("dark")              // user overrides to dark
 	if CurrentTheme() != "dark" {
 		t.Fatalf("explicit dark should win, got %q", CurrentTheme())
 	}
@@ -32,7 +32,7 @@ func TestThemeAutoResolvesFromDetection(t *testing.T) {
 // diagnosable; explicit picks don't claim a source.
 func TestThemeAutoNoteNamesSource(t *testing.T) {
 	m := compactCmdModel()
-	t.Setenv("LOOPY_THEME", "dark")
+	t.Setenv("WHIP_THEME", "dark")
 	m.setTheme("auto")
 	var note string
 	for _, b := range m.blocks {
@@ -40,7 +40,7 @@ func TestThemeAutoNoteNamesSource(t *testing.T) {
 			note = b.text
 		}
 	}
-	if !strings.Contains(note, "(auto: LOOPY_THEME)") {
+	if !strings.Contains(note, "(auto: WHIP_THEME)") {
 		t.Fatalf("auto note should name the detection source, got %q", note)
 	}
 	setSchemeOverride("")
@@ -51,7 +51,7 @@ func TestThemeAutoNoteNamesSource(t *testing.T) {
 // within a poll tick, repainting without a terminal resize.
 func TestConfigSyncAppliesThemeFromFile(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("LOOPY_HOME", dir)
+	t.Setenv("WHIP_HOME", dir)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +126,7 @@ func TestThemeAutoUnpinsSync(t *testing.T) {
 // refreshed to that save's mod time) don't echo back as syncs.
 func TestConfigSyncIgnoresOwnSaves(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("LOOPY_HOME", dir)
+	t.Setenv("WHIP_HOME", dir)
 	m := compactCmdModel()
 	if err := m.cfg.Save(); err != nil { // baseline write
 		t.Fatal(err)

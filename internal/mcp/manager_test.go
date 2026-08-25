@@ -11,7 +11,7 @@ import (
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/context-labs/loopy/internal/tools"
+	"github.com/context-labs/whip/internal/tools"
 )
 
 // newTestServer builds an in-process MCP server with greet/fail/structured/
@@ -116,8 +116,8 @@ func TestManagerConnectAndCall(t *testing.T) {
 	if len(ts) != 4 {
 		t.Fatalf("expected 4 tools, got %d: %v", len(ts), toolNames(ts))
 	}
-	out := tools.Execute(context.Background(), ts, "mcp__docs__greet", json.RawMessage(`{"name":"loopy"}`))
-	if out != "hi loopy" {
+	out := tools.Execute(context.Background(), ts, "mcp__docs__greet", json.RawMessage(`{"name":"whip"}`))
+	if out != "hi whip" {
 		t.Errorf("greet = %q", out)
 	}
 
@@ -314,7 +314,7 @@ func TestManagerCallFailFast(t *testing.T) {
 // TestManagerAutoReconnect: an unexpected session drop triggers a background
 // reconnect (no manual /mcp reconnect), with bounded retries on failure.
 func TestManagerAutoReconnect(t *testing.T) {
-	t.Setenv("LOOPY_TEST_MCP_BACKOFF_MS", "20")
+	t.Setenv("WHIP_TEST_MCP_BACKOFF_MS", "20")
 
 	m := newTestManager(t, map[string]ServerConfig{"docs": testCfg("docs")})
 	m.Start(context.Background())
@@ -356,7 +356,7 @@ func TestManagerAutoReconnect(t *testing.T) {
 // TestManagerAutoReconnectGivesUp: a server that keeps failing exhausts
 // autoReconnectMax tries and stays failed (no flapping forever).
 func TestManagerAutoReconnectGivesUp(t *testing.T) {
-	t.Setenv("LOOPY_TEST_MCP_BACKOFF_MS", "10")
+	t.Setenv("WHIP_TEST_MCP_BACKOFF_MS", "10")
 
 	var connects atomic.Int64
 	m := NewManager(map[string]ServerConfig{"flaky": testCfg("flaky")})

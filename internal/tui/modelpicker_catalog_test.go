@@ -7,7 +7,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/context-labs/loopy/internal/config"
+	"github.com/context-labs/whip/internal/config"
 )
 
 func pickerCfg() *config.Config {
@@ -23,7 +23,7 @@ func pickerCfg() *config.Config {
 // Catalog-advertised models without a config entry appear after the
 // configured routes, marked fromCatalog; configured models never duplicate.
 func TestBuildModelItemsAppendsCatalogRoutes(t *testing.T) {
-	t.Setenv("LOOPY_HOME", t.TempDir())
+	t.Setenv("WHIP_HOME", t.TempDir())
 	cfg := pickerCfg()
 	if err := config.SaveCatalogs(map[string]config.Catalog{
 		"inference": {
@@ -57,7 +57,7 @@ func TestBuildModelItemsAppendsCatalogRoutes(t *testing.T) {
 // The picker view marks catalog routes (new) and shows the stale hint when
 // the cache is past its TTL.
 func TestModelPickerViewMarksCatalogAndStale(t *testing.T) {
-	t.Setenv("LOOPY_HOME", t.TempDir())
+	t.Setenv("WHIP_HOME", t.TempDir())
 	cfg := pickerCfg()
 	if err := config.SaveCatalogs(map[string]config.Catalog{
 		"inference": {
@@ -88,7 +88,7 @@ func TestModelPickerViewMarksCatalogAndStale(t *testing.T) {
 // Selecting a catalog route runs the normal switchModel path (which persists
 // the choice as the default on use).
 func TestModelPickerSelectsCatalogRoute(t *testing.T) {
-	t.Setenv("LOOPY_HOME", t.TempDir())
+	t.Setenv("WHIP_HOME", t.TempDir())
 	if err := config.SaveCatalogs(map[string]config.Catalog{
 		"inference": {
 			FetchedAt: time.Now(),
@@ -125,7 +125,7 @@ func TestModelPickerSelectsCatalogRoute(t *testing.T) {
 // fixture's provider (BaseURL https://x, no DNS) fails its fetch, so the
 // seeded catalog must survive untouched — failure keeps the stale cache.
 func TestModelRefreshForcesRefetch(t *testing.T) {
-	t.Setenv("LOOPY_HOME", t.TempDir())
+	t.Setenv("WHIP_HOME", t.TempDir())
 	if err := config.SaveCatalogs(map[string]config.Catalog{
 		"inference": {FetchedAt: time.Now(), BaseURL: "https://x", Models: []config.ModelInfoLite{{ID: "seed"}}},
 	}); err != nil {
@@ -149,7 +149,7 @@ func TestModelRefreshForcesRefetch(t *testing.T) {
 
 // refresh is offered as a /model argument, alongside catalog-advertised models.
 func TestModelRefreshCompletion(t *testing.T) {
-	t.Setenv("LOOPY_HOME", t.TempDir())
+	t.Setenv("WHIP_HOME", t.TempDir())
 	if err := config.SaveCatalogs(map[string]config.Catalog{
 		"inference": {FetchedAt: time.Now(), BaseURL: "https://x",
 			Models: []config.ModelInfoLite{{ID: "catalog-only-model"}}},

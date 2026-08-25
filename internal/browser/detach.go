@@ -1,6 +1,6 @@
 // detach.go severs a rod Browser's CDP WebSocket without sending the
 // Browser.close command. rod's Browser.Close always issues Browser.close,
-// which shuts the whole browser process down — correct for a Chrome loopy
+// which shuts the whole browser process down — correct for a Chrome whip
 // launched, wrong for one we only attached to (live mode, or a reattached
 // dedicated Chrome another backend still owns). Detaching lets such
 // backends drop their connection while leaving the process alive.

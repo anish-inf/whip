@@ -9,7 +9,7 @@ import (
 // trusted.json records which folder paths the user has trusted (the startup
 // "Do you trust the files in this folder?" dialog). Trust is per absolute
 // path, like Claude Code's hasTrustDialogAccepted per project — trusting a
-// folder means loopy may read its files (they feed the model) and, with
+// folder means whip may read its files (they feed the model) and, with
 // per-command approval, execute code in it.
 
 type trustedFile struct {

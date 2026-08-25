@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/context-labs/loopy/internal/llm"
-	"github.com/context-labs/loopy/internal/tools/bashrun"
+	"github.com/context-labs/whip/internal/llm"
+	"github.com/context-labs/whip/internal/tools/bashrun"
 )
 
 // Tool is a named executable tool with a JSON schema.
@@ -127,7 +127,7 @@ func bashTool() Tool {
 	return Tool{
 		Def: llm.NewTool("bash",
 			"Execute a bash command in the current working directory and return its combined stdout/stderr. Use for running programs, git, searching (grep/rg), listing files, etc.",
-			`{"type":"object","properties":{"command":{"type":"string","description":"The bash command to execute"},"timeout":{"type":"number","description":"Timeout in seconds (default 120)"},"interactive":{"type":"boolean","description":"Run in a PTY so sudo/ssh-style password prompts work. Loopy stays in control of the terminal and forwards your keystrokes; the command is killed after 15s of no input. Use only for commands that genuinely need a password."}},"required":["command"]}`),
+			`{"type":"object","properties":{"command":{"type":"string","description":"The bash command to execute"},"timeout":{"type":"number","description":"Timeout in seconds (default 120)"},"interactive":{"type":"boolean","description":"Run in a PTY so sudo/ssh-style password prompts work. Whip stays in control of the terminal and forwards your keystrokes; the command is killed after 15s of no input. Use only for commands that genuinely need a password."}},"required":["command"]}`),
 		Run: func(ctx context.Context, args json.RawMessage) (string, error) {
 			var a struct {
 				Command     string  `json:"command"`
@@ -144,7 +144,7 @@ func bashTool() Tool {
 
 			// Interactive mode hands the live terminal to the user only when the
 			// TUI has wired a runner. Without it we run non-interactively, which
-			// fails sudo-style prompts fast instead of hanging on loopy's tty.
+			// fails sudo-style prompts fast instead of hanging on whip's tty.
 			if a.Interactive && InteractiveBash != nil {
 				keys := make(chan []byte, 16)
 				out := InteractiveBash.Run(ctx, a.Command, dur, keys)

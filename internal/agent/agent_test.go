@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/context-labs/loopy/internal/llm"
-	"github.com/context-labs/loopy/internal/tools"
+	"github.com/context-labs/whip/internal/llm"
+	"github.com/context-labs/whip/internal/tools"
 )
 
 // server that answers with a tool call on the first request, text on the second
@@ -227,7 +227,7 @@ func TestTurnAuthoredMarksMessage(t *testing.T) {
 	if _, err := ag.TurnAuthored(context.Background(), "i typed this", Events{}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ag.Turn(context.Background(), "injected by loopy", Events{}); err != nil {
+	if _, err := ag.Turn(context.Background(), "injected by whip", Events{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -239,7 +239,7 @@ func TestTurnAuthoredMarksMessage(t *testing.T) {
 		switch m.Content {
 		case "i typed this":
 			typed = m.Authored
-		case "injected by loopy":
+		case "injected by whip":
 			injected = m.Authored
 		}
 	}

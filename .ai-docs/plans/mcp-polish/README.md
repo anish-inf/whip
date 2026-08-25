@@ -7,7 +7,7 @@ lands as its own commit so we can go one by one.
 ## What this does
 
 Twelve improvements to the MCP feature, grouped in three tiers. The unifying
-theme: **an MCP server should never be able to make loopy feel stuck, silent,
+theme: **an MCP server should never be able to make whip feel stuck, silent,
 or mysterious** — and configuring one should be debuggable without launching
 the TUI.
 
@@ -51,7 +51,7 @@ unless you run `/mcp`. On the *first* settle of each server, append one
 dimmed transcript line: `⚡ mcp: docs ready (4 tools)` / `✗ mcp: docs failed
 — /mcp docs for details`. One shot per server per session (a `seen` set in
 the TUI, fed by the existing `mcpStatusMsg`); not a toast — persistent and
-cheap, fits loopy's transcript-as-truth style. Files: `internal/tui/tui.go`
+cheap, fits whip's transcript-as-truth style. Files: `internal/tui/tui.go`
 (mcpStatusMsg case), headless test.
 
 **4. Auto-reconnect with backoff.** A dropped session currently requires
@@ -70,27 +70,27 @@ Collect `Manager.Instructions()` (name → text, ready servers only, sorted)
 and append an `<mcp_instructions><server name="docs">…</server></…>` block to
 the turn-time system suffix — the same path skills use (re-rendered every
 turn, so late-arriving servers just appear). Files: `manager.go` (capture
-`InitializeResult.Instructions` at connect), `cmd/loopy/main.go` or TUI
+`InitializeResult.Instructions` at connect), `cmd/whip/main.go` or TUI
 system-prompt assembly, unit test.
 
 ### Tier 2 — the config story, airtight
 
-**6. `loopy mcp import` — graduate from magic merge to owned config.**
-`loopy mcp import [--dry-run]`: materializes claude/codex-imported servers
-into `~/.loopy/config.json` with the merge preview printed. All parsing
+**6. `whip mcp import` — graduate from magic merge to owned config.**
+`whip mcp import [--dry-run]`: materializes claude/codex-imported servers
+into `~/.whip/config.json` with the merge preview printed. All parsing
 exists; the CLI writes through guarded `Config.Save`. `--dry-run` prints the
-merged JSONC without writing. Files: `cmd/loopy/mcp.go`, tests.
+merged JSONC without writing. Files: `cmd/whip/mcp.go`, tests.
 
-**7. `loopy mcp test <name>` — the doctor.** Connect, list tools, print
+**7. `whip mcp test <name>` — the doctor.** Connect, list tools, print
 status + timing + stderr tail + first N tool names. Nobody ships this; today
 debugging a server means launching the whole TUI. Also usable in CI to
 validate a `.mcp.json` before committing. Reuses `Manager` with
-`Start`+status print, exits non-zero on failure. Files: `cmd/loopy/mcp.go`,
+`Start`+status print, exits non-zero on failure. Files: `cmd/whip/mcp.go`,
 a `Manager.Probe(ctx, name)` helper, integration test with the in-process
 server.
 
 **8. Overlay entries instead of definition copies.** `/mcp disable` on an
-imported server currently copies the full definition into loopy's config
+imported server currently copies the full definition into whip's config
 (correct, but drifts from the source). Add `"overlay": true`: Merge treats
 overlay entries as patches (`enabled` only) over the imported definition —
 no staleness, and `/mcp enable` after the import file changed picks up the
@@ -100,9 +100,9 @@ merge semantics.
 
 ### Tier 3 — bigger swings (each gated on a real need; spec when picked up)
 
-**9. `loopy mcp serve` project conventions.** `.loopy/mcp.json` in a repo
+**9. `whip mcp serve` project conventions.** `.whip/mcp.json` in a repo
 describes the served surface (name, tool allowlist, preamble); default
-read-only (bash opt-in). Makes "register loopy as a server in claude-code" a
+read-only (bash opt-in). Makes "register whip as a server in claude-code" a
 one-line, repo-portable integration.
 
 **10. Codex bearer-token reuse.** Read `bearer_token_env_var` from codex
@@ -116,7 +116,7 @@ Pick up when a real server needs it.
 **12. Skill-declared MCP servers.** `SKILL.md` frontmatter gains `mcp:
 {command: [...]}`; the skills scanner re-indexes every turn, so project
 skills become project tools with zero extra config. Novel composition of two
-existing systems — the loopy way.
+existing systems — the whip way.
 
 ## Design constraints (apply to every item)
 
@@ -154,7 +154,7 @@ README CLI section grows `mcp import`/`mcp test` when those land.
 
 Shipped: `docs/learnings/other-harnesses/live-ux-probe.md` found that pi's
 startup [Skill conflicts] block names broken resources with exact reasons
-while loopy silently truncated over-long skill descriptions (maxDesc=300).
+while whip silently truncated over-long skill descriptions (maxDesc=300).
 The report now prints at first paint: `skills: N loaded`, one `⚠` line per
 degraded skill (truncation) or unparseable SKILL.md, and `mcp: name ✓ (N
 tools) · ghost ✗ · off ○`. Skipped on resume. It immediately exposed ~40 of

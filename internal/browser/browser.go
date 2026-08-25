@@ -1,6 +1,6 @@
-// Package browser provides loopy's native browser subsystem: one Go binary
+// Package browser provides whip's native browser subsystem: one Go binary
 // driving the user's live Chrome (their real cookies/sessions), a dedicated
-// loopy-owned Chrome, or a headless instance — no Python, no Node.
+// whip-owned Chrome, or a headless instance — no Python, no Node.
 //
 // Design: docs/learnings/browser-use-integration.md §5b. The public surface
 // is the Backend interface with go-rod/rod behind it; chromedp is a drop-in
@@ -24,7 +24,7 @@ import (
 	"github.com/go-rod/rod/lib/proto"
 )
 
-// Mode selects which browser loopy drives.
+// Mode selects which browser whip drives.
 type Mode string
 
 const (
@@ -32,23 +32,23 @@ const (
 	// CDP endpoint — their real cookies and logins. Discovered via profile
 	// scan; never launches or closes the browser.
 	ModeLive Mode = "live"
-	// ModeDedicated launches a separate Chrome instance with a loopy-owned
-	// user-data-dir (~/.loopy/browser/dedicated-profile[-<session>]) and remote
+	// ModeDedicated launches a separate Chrome instance with a whip-owned
+	// user-data-dir (~/.whip/browser/dedicated-profile[-<session>]) and remote
 	// debugging enabled from the start — no permission popups.
 	ModeDedicated Mode = "dedicated"
 	// ModeHeadless is ModeDedicated without a window.
 	ModeHeadless Mode = "headless"
 	// ModeExtension drives the user's real, logged-in Chrome tab through the
-	// loopy extension (chrome.debugger CDP tunnel via extrelay). The only way
+	// whip extension (chrome.debugger CDP tunnel via extrelay). The only way
 	// to drive the default profile on Chrome ≥ 136, where direct CDP is
 	// blocked. Requires the unpacked extension loaded + a tab pinned via the
-	// toolbar icon (`loopy browser install` sets it up).
+	// toolbar icon (`whip browser install` sets it up).
 	ModeExtension Mode = "extension"
 )
 
 // ErrPermissionBlocked reports Chrome 144+'s per-connection "Allow remote
 // debugging?" popup (or the chrome://inspect toggle being off) standing
-// between loopy and a live browser. The user must act in Chrome; retry
+// between whip and a live browser. The user must act in Chrome; retry
 // after they confirm.
 var ErrPermissionBlocked = errors.New("chrome permission-blocked")
 
@@ -115,7 +115,7 @@ type Backend interface {
 	Mode() Mode
 	// Obtained reports how the connection was established: attached to the
 	// user's live browser, freshly launched, or reattached to a running
-	// loopy Chrome. Live-mode sessions that fell back report launched, so
+	// whip Chrome. Live-mode sessions that fell back report launched, so
 	// the session layer can tell the model which browser it's driving.
 	Obtained() Obtained
 	// HandleDialog accepts or dismisses the next pending native JS dialog,
@@ -173,10 +173,10 @@ const (
 var Drivers = []string{DriverRod, DriverChromedp}
 
 // Driver selects the browser driver, read at Open time. The
-// LOOPY_BROWSER_DRIVER env wins; otherwise the value set by SetDriver
+// WHIP_BROWSER_DRIVER env wins; otherwise the value set by SetDriver
 // (default rod). A live switch invalidates open sessions via the Manager.
 var Driver = func() string {
-	if d := os.Getenv("LOOPY_BROWSER_DRIVER"); d != "" {
+	if d := os.Getenv("WHIP_BROWSER_DRIVER"); d != "" {
 		return d
 	}
 	return "rod"
@@ -185,7 +185,7 @@ var Driver = func() string {
 // SetDriver switches the active driver. When env overrides the driver,
 // SetDriver is a no-op (env is the operator's explicit pin).
 func SetDriver(d string) {
-	if os.Getenv("LOOPY_BROWSER_DRIVER") != "" {
+	if os.Getenv("WHIP_BROWSER_DRIVER") != "" {
 		return
 	}
 	switch d {
@@ -221,10 +221,10 @@ func OpenNamed(ctx context.Context, mode Mode, sessionName string) (Backend, err
 //
 // Live mode falls back hermes-style (/browser connect): when no debuggable
 // browser is found (ErrNoLiveBrowser — includes a non-Chrome squatter on
-// the debug port), loopy launches its dedicated Chrome for this session
+// the debug port), whip launches its dedicated Chrome for this session
 // instead of dead-ending the tool call. ErrPermissionBlocked still surfaces
 // — only the user can click Chrome's Allow popup. Dedicated/headless
-// reattach to an already-running loopy Chrome for the same profile rather
+// reattach to an already-running whip Chrome for the same profile rather
 // than spawning a duplicate.
 func openRod(ctx context.Context, mode Mode, sessionName string) (*Browser, error) {
 	b := &Browser{mode: mode}
@@ -259,7 +259,7 @@ func openRod(ctx context.Context, mode Mode, sessionName string) (*Browser, erro
 		}
 		profileDir := dedicatedProfileDir(home, sessionName)
 		b.profileDir = profileDir
-		// Reattach to a still-running loopy Chrome for this profile (the
+		// Reattach to a still-running whip Chrome for this profile (the
 		// prior backend died or was closed without killing the browser).
 		if ws, ok := DiscoverWSForProfile(ctx, profileDir); ok {
 			b.browser = rod.New().ControlURL(ws)
@@ -275,7 +275,7 @@ func openRod(ctx context.Context, mode Mode, sessionName string) (*Browser, erro
 				Set("remote-debugging-port", "0"). // random free port — a squatter on 9222 is irrelevant
 				Leakless(true).
 				Headless(mode == ModeHeadless)
-			if os.Getenv("LOOPY_BROWSER_DEBUG") != "" {
+			if os.Getenv("WHIP_BROWSER_DEBUG") != "" {
 				l = l.Set("enable-logging", "stderr").Set("v", "1")
 			}
 			if bin := os.Getenv("ROD_BROWSER_BIN"); bin != "" { // test/override hook
@@ -373,7 +373,7 @@ func internalURL(u string) bool {
 
 // attachPage picks the controllable tab: the first real page, else a
 // reusable blank/new-tab page, else a fresh about:blank (daemon.py's
-// attach_first_page, simplified: loopy owns the whole connection so
+// attach_first_page, simplified: whip owns the whole connection so
 // parallel agents fight over nothing — one Browser per caller).
 func (b *Browser) attachPage() error {
 	pages, err := b.browser.Pages()
@@ -817,12 +817,12 @@ func (b *Browser) UploadFiles(ctx context.Context, selector string, paths []stri
 	return el.SetFiles(paths)
 }
 
-// dedicatedProfileDir is the loopy-owned profile dir for dedicated/headless
+// dedicatedProfileDir is the whip-owned profile dir for dedicated/headless
 // sessions: one per named session (except "default", the shared one) so
 // parallel sessions never collide on SingletonLock.
 func dedicatedProfileDir(home, sessionName string) string {
 	if sessionName == "" || sessionName == "default" {
-		return filepath.Join(home, ".loopy", "browser", "dedicated-profile")
+		return filepath.Join(home, ".whip", "browser", "dedicated-profile")
 	}
-	return filepath.Join(home, ".loopy", "browser", "dedicated-profile-"+sessionName)
+	return filepath.Join(home, ".whip", "browser", "dedicated-profile-"+sessionName)
 }

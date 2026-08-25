@@ -7,10 +7,10 @@ import (
 
 func TestParseEvery(t *testing.T) {
 	cases := map[string]time.Duration{
-		"@every 10m": 10 * time.Minute,
-		"@every 30s": 30 * time.Second,
-		"@every 1h":  time.Hour,
-		"@every 2d":  48 * time.Hour,
+		"@every 10m":   10 * time.Minute,
+		"@every 30s":   30 * time.Second,
+		"@every 1h":    time.Hour,
+		"@every 2d":    48 * time.Hour,
 		"  @every 5m ": 5 * time.Minute, // whitespace-tolerant
 	}
 	for expr, want := range cases {

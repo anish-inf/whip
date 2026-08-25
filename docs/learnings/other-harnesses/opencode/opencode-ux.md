@@ -146,7 +146,7 @@ the repo root. The curated to-do view of all this lives in [../../../roadmap.md]
   clipboard, title flips to "Copy share link"; `/unshare` revokes.
 - **Clickable links**: a `Link` component (`packages/tui/src/ui/link.tsx`) opens
   `href` via `open()` on `onMouseUp` — but it's only used in auth dialogs, never
-  in the chat transcript. loopy instead emits terminal-native OSC 8 hyperlinks
+  in the chat transcript. whip instead emits terminal-native OSC 8 hyperlinks
   transcript-wide (URLs + existing local files), so every link is clickable with
   no per-widget mouse plumbing (`internal/tui/links.go`).
 - **Rename** (ctrl+r), **fork** from timeline or from any message's action menu (fork
@@ -211,7 +211,7 @@ the repo root. The curated to-do view of all this lives in [../../../roadmap.md]
   readable selection contrast by luminance for transparent terminals.
 - **KV prefs** (`context/kv.tsx`): file-locked atomic `kv.json`; every palette toggle
   persists (animations, diff wrap, tips, conceal, tool details, pinned sessions,
-  share consent…). For loopy: one `settings(key, value)` table in sessions.db.
+  share consent…). For whip: one `settings(key, value)` table in sessions.db.
 - `/status` dialog: MCP/LSP/formatters/plugins with per-item status colors.
 - Rotating home-screen tips, auto-hidden after first session.
 
@@ -237,7 +237,7 @@ Entry `packages/opencode/src/index.ts` (yargs). Worth copying:
 - Global flags: `--print-logs`, `--log-level`, `--pure` (no external plugins — great for
   bug reports). Env markers for children: `AGENT=1`, `OPENCODE=1`, `OPENCODE_PID`.
 
-## Cheapest-first shortlist for loopy
+## Cheapest-first shortlist for whip
 
 1. Keybind/command single registry → palette, help, slash commands, config schema.
 2. One DialogSelect-equivalent fuzzy widget; every picker becomes ~40 lines.

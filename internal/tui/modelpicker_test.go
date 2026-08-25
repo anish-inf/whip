@@ -3,7 +3,7 @@ package tui
 import (
 	"testing"
 
-	"github.com/context-labs/loopy/internal/config"
+	"github.com/context-labs/whip/internal/config"
 )
 
 func TestBuildModelItems(t *testing.T) {

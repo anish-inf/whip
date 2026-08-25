@@ -109,7 +109,7 @@ func TestSynthTargetCommands(t *testing.T) {
 	ext := dialWS(t, fmt.Sprintf("ws://%s/ext?token=%s", r.Addr(), r.Token()))
 	defer ext.Close()
 	// Extension reports the pinned tab's identity.
-	writeCli(t, ext, `{"method":"loopy.attached","params":{"tabId":42,"title":"X / chamath","url":"https://x.com/chamath"}}`)
+	writeCli(t, ext, `{"method":"whip.attached","params":{"tabId":42,"title":"X / chamath","url":"https://x.com/chamath"}}`)
 	time.Sleep(100 * time.Millisecond)
 
 	cdp := dialWS(t, "ws://"+r.Addr()+"/cdp")
@@ -117,7 +117,7 @@ func TestSynthTargetCommands(t *testing.T) {
 
 	for m, want := range map[string]string{
 		`{"id":1,"method":"Target.setDiscoverTargets","params":{"discover":true}}`:                `"id":1,"result":{}`,
-		`{"id":3,"method":"Target.attachToTarget","params":{"targetId":"tab-42","flatten":true}}`: `"sessionId":"loopy-ext"`,
+		`{"id":3,"method":"Target.attachToTarget","params":{"targetId":"tab-42","flatten":true}}`: `"sessionId":"whip-ext"`,
 	} {
 		writeCli(t, cdp, m)
 		if resp := readSrv(t, cdp); !strings.Contains(resp, want) {
@@ -141,7 +141,7 @@ func TestNoTabAttachedErrors(t *testing.T) {
 	cdp := dialWS(t, "ws://"+r.Addr()+"/cdp")
 	defer cdp.Close()
 	writeCli(t, cdp, `{"id":5,"method":"Runtime.evaluate","params":{"expression":"1"}}`)
-	if resp := readSrv(t, cdp); !strings.Contains(resp, "click the loopy extension icon") {
+	if resp := readSrv(t, cdp); !strings.Contains(resp, "click the whip extension icon") {
 		t.Fatalf("want actionable no-tab error, got %s", resp)
 	}
 }

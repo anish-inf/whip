@@ -6,10 +6,10 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/context-labs/loopy/internal/agent"
-	"github.com/context-labs/loopy/internal/config"
-	"github.com/context-labs/loopy/internal/llm"
-	"github.com/context-labs/loopy/internal/session"
+	"github.com/context-labs/whip/internal/agent"
+	"github.com/context-labs/whip/internal/config"
+	"github.com/context-labs/whip/internal/llm"
+	"github.com/context-labs/whip/internal/session"
 )
 
 func TestEffortCycleAndParse(t *testing.T) {

@@ -12,7 +12,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/context-labs/loopy/internal/config"
+	"github.com/context-labs/whip/internal/config"
 )
 
 // imageExts are the clipboard image formats we accept, in preference order.
@@ -101,7 +101,7 @@ func xselImage() (string, []byte, error) {
 }
 
 func pngpasteImage() (string, []byte, error) {
-	tmp, err := os.CreateTemp("", "loopy-paste-*.png")
+	tmp, err := os.CreateTemp("", "whip-paste-*.png")
 	if err != nil {
 		return "", nil, err
 	}
@@ -129,7 +129,7 @@ func powershellImage() (string, []byte, error) {
 	return "png", data, nil
 }
 
-// saveClipboardImage writes data to ~/.loopy/pastes/ and returns the path.
+// saveClipboardImage writes data to ~/.whip/pastes/ and returns the path.
 func saveClipboardImage(ext string, data []byte) (string, error) {
 	dir, err := config.Dir()
 	if err != nil {

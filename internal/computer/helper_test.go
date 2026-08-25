@@ -15,7 +15,7 @@ import (
 )
 
 // fakeHelper runs the Go fake helper as the subprocess by pointing the
-// Helper at it via LOOPY_COMPUTER_BIN.
+// Helper at it via WHIP_COMPUTER_BIN.
 func fakeHelper(t *testing.T, script string) *Helper {
 	t.Helper()
 	dir := t.TempDir()
@@ -38,7 +38,7 @@ func fakeHelper(t *testing.T, script string) *Helper {
 	if out, err := runGo(t, dir, "build", "-o", bin, "."); err != nil {
 		t.Fatalf("build fake helper: %v\n%s", err, out)
 	}
-	t.Setenv("LOOPY_COMPUTER_BIN", bin)
+	t.Setenv("WHIP_COMPUTER_BIN", bin)
 	h := &Helper{}
 	if err := h.spawn(); err != nil {
 		t.Fatalf("spawn fake helper: %v", err)
@@ -93,7 +93,7 @@ func TestHandshakeAndCall(t *testing.T) {
 func TestVersionMismatch(t *testing.T) {
 	dir := t.TempDir()
 	bin := filepath.Join(dir, "fake-helper")
-	src := "package main\n\n" + strings.Replace(fakeHelperSource, `versionLine = "loopy-computer/1"`, `versionLine = "loopy-computer/0"`, 1)
+	src := "package main\n\n" + strings.Replace(fakeHelperSource, `versionLine = "whip-computer/1"`, `versionLine = "whip-computer/0"`, 1)
 	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte(src), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +103,7 @@ func TestVersionMismatch(t *testing.T) {
 	if out, err := runGo(t, dir, "build", "-o", bin, "."); err != nil {
 		t.Fatalf("build fake helper: %v\n%s", err, out)
 	}
-	t.Setenv("LOOPY_COMPUTER_BIN", bin)
+	t.Setenv("WHIP_COMPUTER_BIN", bin)
 	h := &Helper{}
 	err := h.spawn()
 	if err == nil || !strings.Contains(err.Error(), "protocol mismatch") {
@@ -160,7 +160,7 @@ func TestCrashRestart(t *testing.T) {
 	if out, err := runGo(t, dir, "build", "-o", bin, "."); err != nil {
 		t.Fatalf("build fake helper: %v\n%s", err, out)
 	}
-	t.Setenv("LOOPY_COMPUTER_BIN", bin)
+	t.Setenv("WHIP_COMPUTER_BIN", bin)
 	h := &Helper{}
 	if err := h.spawn(); err != nil {
 		t.Fatalf("spawn: %v", err)

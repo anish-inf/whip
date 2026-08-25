@@ -1,6 +1,6 @@
 package tui
 
-import "github.com/context-labs/loopy/internal/config"
+import "github.com/context-labs/whip/internal/config"
 
 // defaultEfforts are the fallback levels when the provider doesn't advertise
 // supported reasoning efforts; "" means off (parameter omitted from requests).

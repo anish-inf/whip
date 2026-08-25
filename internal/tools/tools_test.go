@@ -111,7 +111,7 @@ func TestHelpersAndEdgeCases(t *testing.T) {
 
 	// Regression: a command that reads from /dev/tty (as sudo does for a
 	// password) must NOT hang the tool. pre-fix the tool used CombinedOutput
-	// with the child sharing loopy's controlling terminal, so the read
+	// with the child sharing whip's controlling terminal, so the read
 	// blocked until the 120s bash timeout. post-fix the child runs in a new
 	// session with no controlling tty and stdin tied to /dev/null, so the
 	// read fails immediately. We assert it returns well under the cap and

@@ -17,7 +17,7 @@ type Catalog struct {
 	Models    []ModelInfoLite `json:"models"`
 }
 
-// ModelInfoLite is the subset of the provider's /models entry loopy uses.
+// ModelInfoLite is the subset of the provider's /models entry whip uses.
 type ModelInfoLite struct {
 	ID                  string   `json:"id"`
 	ContextLength       int      `json:"contextLength,omitempty"`       // model's context window (input), 0 if unadvertised
@@ -101,7 +101,7 @@ func catalogPath() (string, error) {
 	return filepath.Join(dir, "models.json"), nil
 }
 
-// LoadCatalogs reads ~/.loopy/models.json. A missing or unreadable file is
+// LoadCatalogs reads ~/.whip/models.json. A missing or unreadable file is
 // not an error and yields an empty (non-nil) map, so callers can always write
 // into the result.
 func LoadCatalogs() map[string]Catalog {
@@ -120,7 +120,7 @@ func LoadCatalogs() map[string]Catalog {
 	return cats
 }
 
-// SaveCatalogs writes ~/.loopy/models.json.
+// SaveCatalogs writes ~/.whip/models.json.
 func SaveCatalogs(cats map[string]Catalog) error {
 	p, err := catalogPath()
 	if err != nil {

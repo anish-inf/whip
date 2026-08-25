@@ -19,7 +19,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/context-labs/loopy/internal/agent"
+	"github.com/context-labs/whip/internal/agent"
 )
 
 // taskEventMsg is one live event from an opened background task (OnText /

@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/x/ansi"
-	"github.com/context-labs/loopy/internal/llm"
+	"github.com/context-labs/whip/internal/llm"
 )
 
 // Regression: at a narrow terminal width, a long tool-call command must wrap

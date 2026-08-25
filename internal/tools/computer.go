@@ -2,7 +2,7 @@
 // drive the user's desktop with the same helper-call mini-language as
 // browser_exec. Two tiers (plan: .ai-docs/plans/computer-use-native/README.md):
 //
-//   - Native (macOS, loopy-computer Swift helper over JSON-RPC/stdio): AX-tree
+//   - Native (macOS, whip-computer Swift helper over JSON-RPC/stdio): AX-tree
 //     reads, CGEvent input, ScreenCaptureKit screenshots, TCC preflight.
 //     Mutations return fresh state in-call; element indexes are guarded by a
 //     generation counter (stale index → "state changed — re-read").
@@ -21,9 +21,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/context-labs/loopy/internal/browser"
-	"github.com/context-labs/loopy/internal/computer"
-	"github.com/context-labs/loopy/internal/llm"
+	"github.com/context-labs/whip/internal/browser"
+	"github.com/context-labs/whip/internal/computer"
+	"github.com/context-labs/whip/internal/llm"
 )
 
 // ComputerPolicy gates which apps computer_exec may drive. Installed by the
@@ -39,7 +39,7 @@ const computerDescription = `Drive the user's Mac — control apps and the alrea
 
 STATE: the desktop persists (apps stay open); code variables do NOT. Batch a sub-procedure into one call.
 
-NATIVE HELPERS (AX-first; need the embedded loopy-computer helper — granted Accessibility + Screen Recording once): ` +
+NATIVE HELPERS (AX-first; need the embedded whip-computer helper — granted Accessibility + Screen Recording once): ` +
 	"`apps()`" + ` lists running apps (name, bundleId, pid); ` +
 	"`state(app)`" + ` returns the app's indexed AX tree + a screenshot (in-call) — call once per app before acting; ` +
 	"`click(app, index)`" + ` clicks an AX element (preferred — indexes come from state()), ` + "`click(app, x, y)`" + ` is the pixel fallback in point coordinates; ` +
@@ -147,7 +147,7 @@ func gateApp(app string) error {
 func helper() (*computer.Helper, error) {
 	h, err := computer.Shared()
 	if err != nil {
-		return nil, fmt.Errorf("native helpers need the loopy-computer driver: %w", err)
+		return nil, fmt.Errorf("native helpers need the whip-computer driver: %w", err)
 	}
 	return h, nil
 }

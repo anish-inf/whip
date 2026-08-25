@@ -1,6 +1,6 @@
 package agent
 
-import "github.com/context-labs/loopy/internal/llm"
+import "github.com/context-labs/whip/internal/llm"
 
 // FanIn multiplexes several Events values into one: every fired callback is
 // invoked on each source that implements it. A background worker runs its

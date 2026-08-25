@@ -39,7 +39,7 @@ type chromedpBackend struct {
 // openChromedp connects per mode: live attaches via the discovered WS URL
 // (remote allocator), falling back hermes-style to a launched dedicated
 // instance when none is debuggable; dedicated/headless reattach to a
-// still-running loopy Chrome for the profile, else launch via the default
+// still-running whip Chrome for the profile, else launch via the default
 // allocator (chromedp's own launcher, headed off in headless mode).
 func openChromedp(ctx context.Context, mode Mode, sessionName string) (*chromedpBackend, error) {
 	b := &chromedpBackend{mode: mode}
@@ -462,7 +462,7 @@ func (b *chromedpBackend) UploadFiles(ctx context.Context, selector string, path
 
 // chromedp's ExecAllocator kills Chrome when its context is cancelled —
 // there's no detach-only path as there is with rod (see detach.go), and
-// loopy's default driver is rod. So chromedp dedicated keeps kill-on-Close
+// whip's default driver is rod. So chromedp dedicated keeps kill-on-Close
 // semantics and does NOT reattach: reattach is a rod-driver behavior. This
 // preserves chromedp's role as the spike backup without the reflection
 // machinery the rod detach requires.

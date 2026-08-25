@@ -13,8 +13,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/context-labs/loopy/internal/browser"
-	"github.com/context-labs/loopy/internal/llm"
+	"github.com/context-labs/whip/internal/browser"
+	"github.com/context-labs/whip/internal/llm"
 )
 
 // Browser is the hook installed by the agent (nil in tests/headless runs

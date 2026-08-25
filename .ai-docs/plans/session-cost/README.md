@@ -10,7 +10,7 @@ provider's `GET /models` endpoint (already fetched at startup).
 
 ## Goal
 
-`~/code/loopy   kimi-k3-fast (high)   inference   31.1k(20.7k)/360 tok · $0.0134`
+`~/code/whip   kimi-k3-fast (high)   inference   31.1k(20.7k)/360 tok · $0.0134`
 
 Cost formula (per-million-token rates, matching pi's `models.ts:878`
 `calculateCost`):

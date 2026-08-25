@@ -3,7 +3,7 @@
 **Branch:** `computer-use-native` (off `main`) · **Status:** steps 1–4 built (INF-4999); TCC window (5) wired; granted-app E2E (6) pending the one-time user TCC grant
 
 The plan for the full-desktop tier: everything codex's native driver does
-(ScreenCaptureKit capture, CGEvent input, AX-tree reads), built into loopy as
+(ScreenCaptureKit capture, CGEvent input, AX-tree reads), built into whip as
 one binary with a seamless first-run. Codex's architecture is dissected in
 `docs/learnings/other-harnesses/codex-computer-use-plugin.md` (INF-4997);
 this plan beats it on grounding (their pixel-guessing → our AX-first), UX
@@ -12,34 +12,34 @@ flow), and openness (theirs is closed → ours is in-repo).
 
 ## The one-sentence architecture
 
-A single **`loopy-computer` helper binary** (Swift, built in CI, signed,
-embedded into the loopy binary via `go:embed` per-arch), talking JSON-RPC
+A single **`whip-computer` helper binary** (Swift, built in CI, signed,
+embedded into the whip binary via `go:embed` per-arch), talking JSON-RPC
 over a stdio pipe, behind `internal/computer`'s existing `Backend`-shaped
-interface. Loopy stays `go build ./...`-able on every OS; on macOS the
-helper extracts to `~/.loopy/bin/loopy-computer` on first use and the user
+interface. Whip stays `go build ./...`-able on every OS; on macOS the
+helper extracts to `~/.whip/bin/whip-computer` on first use and the user
 grants TCC once.
 
 ## Why embed, and why it works
 
-- **`go:embed` + extract-once**: the helper ships inside the loopy binary,
+- **`go:embed` + extract-once**: the helper ships inside the whip binary,
   written to a stable path on first run. No separate installer, no app
   bundle to drag anywhere — the codex dance (a separate `Codex Computer
   Use.app` + Installer) disappears.
 - **Stable identity = sticky TCC.** Permissions bind to the binary's code
-  signature + path. A fixed path (`~/.loopy/bin/loopy-computer`) and a
+  signature + path. A fixed path (`~/.whip/bin/whip-computer`) and a
   stable signature mean Accessibility/Screen Recording/Automation are
   granted *once*, forever — vs an ad-hoc binary re-prompting every run.
 - **Why a helper at all (not CGO)?** TCC on macOS grants to the *process
-  bundle*. CGO-in-loopy would bind Screen Recording to the loopy binary
+  bundle*. CGO-in-whip would bind Screen Recording to the whip binary
   itself — fine, but a helper gives us: (a) crash isolation (a wedged
   driver never takes the agent loop down), (b) a separate code-signed
   identity with its own Info.plist usage strings (the permission prompts
-  say "loopy-computer needs…", not a generic terminal), (c) the Swift/SCK
+  say "whip-computer needs…", not a generic terminal), (c) the Swift/SCK
   toolchain off the critical `go build` path (CI cross-compiles the helper
   on a mac runner; `go build` on Linux embeds a stub).
 - **JSON-RPC over stdio, not XPC.** Codex used XPC + Mach ports + sender
   code-signing auth (`cua_ipc_sender_*`). We don't need it — the helper is
-  spawned by loopy and never shared cross-process, so stdio JSON-RPC with a
+  spawned by whip and never shared cross-process, so stdio JSON-RPC with a
   handshake token (the parent passes it via env; the helper refuses
   connections without it) is the right-sized security boundary. Their XPC
   ceremony buys cross-app trust we don't have.
@@ -108,9 +108,9 @@ One first-run flow instead of codex's separate installer app:
 
 - Per-app consent: the existing `internal/computer/policy.go` (already
   codex-shaped) drives the gate; the helper refuses to touch unapproved
-  apps (belt + suspenders: loopy gates before sending, helper re-checks).
+  apps (belt + suspenders: whip gates before sending, helper re-checks).
 - The confirmation taxonomy from their SKILL.md (hand-off / confirm-always /
-  pre-approve / never) becomes loopy's reviewer rules — v1 wires the
+  pre-approve / never) becomes whip's reviewer rules — v1 wires the
   four-tier taxonomy into the tool's error strings and a
   `computer.review` config for the Guardian-style second-model pass (v2).
 - Screen content stays "untrusted evidence" — the tool description says so,
@@ -125,8 +125,8 @@ One first-run flow instead of codex's separate installer app:
 - `go:embed` in `internal/computer/embed_darwin_arm64.go` /
   `embed_darwin_amd64.go` (build-tagged); a `embed_stub.go` (other platforms)
   embeds nothing. `go:embed` needs the bytes at build time, so CI builds
-  helper-then-loopy; local dev on Mac uses `task driver` to rebuild.
-- Version handshake: helper prints its protocol version on launch; loopy
+  helper-then-whip; local dev on Mac uses `task driver` to rebuild.
+- Version handshake: helper prints its protocol version on launch; whip
   refuses mismatches (codex's `CodexComputerUseIPC-4` lesson).
 
 ## Platforms
@@ -152,8 +152,8 @@ shape on a different backend, behind the same JSON-RPC contract.
    panel. Exercised: pending path verified; the grant-click is the user's.
 6. ⏳ E2E on the Mac: handshake/apps/error-gates verified against the real
    helper. The granted AX walk + CGEvent input + SCK capture against
-   Chrome/TextEdit needs the one-time TCC grant for `~/.loopy/bin/
-   loopy-computer` (a user System Settings click — the design's whole point).
+   Chrome/TextEdit needs the one-time TCC grant for `~/.whip/bin/
+   whip-computer` (a user System Settings click — the design's whole point).
 
 ## What we do NOT copy
 

@@ -7,7 +7,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/context-labs/loopy/internal/config"
+	"github.com/context-labs/whip/internal/config"
 )
 
 // dimNew marks catalog-advertised routes that have no config entry yet.
@@ -19,7 +19,7 @@ type modelItem struct {
 	provider string
 	url      string
 	// fromCatalog marks routes advertised by the provider's /models catalog
-	// rather than configured in ~/.loopy/config.json — rendered dim with a
+	// rather than configured in ~/.whip/config.json — rendered dim with a
 	// (new) marker.
 	fromCatalog bool
 }
@@ -102,7 +102,7 @@ func staleCatalogs(cfg *config.Config, cats map[string]config.Catalog) []string 
 func (m *model) openModelPicker() {
 	items := buildModelItems(m.cfg)
 	if len(items) == 0 {
-		m.append(errStyle.Render("no models configured in ~/.loopy/config.json"))
+		m.append(errStyle.Render("no models configured in ~/.whip/config.json"))
 		return
 	}
 	mp := &modelPicker{items: items, staleHints: staleCatalogs(m.cfg, config.LoadCatalogs())}

@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/context-labs/loopy/internal/llm"
-	"github.com/context-labs/loopy/internal/tools"
+	"github.com/context-labs/whip/internal/llm"
+	"github.com/context-labs/whip/internal/tools"
 )
 
 // slowTool returns a tool that records how many copies of itself are running

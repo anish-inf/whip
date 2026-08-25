@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/context-labs/loopy/internal/agent"
-	"github.com/context-labs/loopy/internal/config"
-	"github.com/context-labs/loopy/internal/llm"
+	"github.com/context-labs/whip/internal/agent"
+	"github.com/context-labs/whip/internal/config"
+	"github.com/context-labs/whip/internal/llm"
 )
 
 // statusModel builds a model with an agent so statusView has data.
@@ -88,7 +88,7 @@ func TestStatusLineBelowInputAndWarnings(t *testing.T) {
 	lines := strings.Split(strings.TrimRight(v, "\n"), "\n")
 	var inputRow, statusRow int
 	for i, l := range lines {
-		if strings.Contains(l, "Ask loopy anything") {
+		if strings.Contains(l, "Ask whip anything") {
 			inputRow = i
 		}
 		if strings.Contains(l, "0/0 tok") {

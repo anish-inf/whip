@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/context-labs/loopy/internal/memory"
+	"github.com/context-labs/whip/internal/memory"
 )
 
 // /memory — the visible half of the memory feature: the user sees exactly

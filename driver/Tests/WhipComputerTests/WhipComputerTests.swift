@@ -1,5 +1,5 @@
 import XCTest
-@testable import LoopyComputerCore
+@testable import WhipComputerCore
 
 final class KeyMapTests: XCTestCase {
     func testPlainLetter() throws {

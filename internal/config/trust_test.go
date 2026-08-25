@@ -7,8 +7,8 @@ import (
 )
 
 func TestTrustRoundTrip(t *testing.T) {
-	t.Setenv("LOOPY_HOME", t.TempDir())
-	dir := "/home/abe/code/loopy"
+	t.Setenv("WHIP_HOME", t.TempDir())
+	dir := "/home/abe/code/whip"
 	if Trusted(dir) {
 		t.Fatal("should not be trusted initially")
 	}
@@ -26,7 +26,7 @@ func TestTrustRoundTrip(t *testing.T) {
 	if Trusted("/other/path") {
 		t.Fatal("unrelated path must not be trusted")
 	}
-	// file exists in LOOPY_HOME
+	// file exists in WHIP_HOME
 	home, _ := Dir()
 	if _, err := os.Stat(filepath.Join(home, "trusted.json")); err != nil {
 		t.Fatalf("trusted.json missing: %v", err)

@@ -1,6 +1,6 @@
 ---
 name: ponytail
-description: "The lazy senior dev: write the least code that works — the ponytail ladder (does it need to exist? already here? stdlib? native? existing dep? one line?), root cause over symptom, deletion over addition, `ponytail:` comments for shortcuts. loopy's default posture; /ponytail on a diff or review."
+description: "The lazy senior dev: write the least code that works — the ponytail ladder (does it need to exist? already here? stdlib? native? existing dep? one line?), root cause over symptom, deletion over addition, `ponytail:` comments for shortcuts. whip's default posture; /ponytail on a diff or review."
 license: MIT
 metadata:
   upstream: "https://github.com/DietrichGebert/ponytail/blob/main/.agents/rules/ponytail.md"

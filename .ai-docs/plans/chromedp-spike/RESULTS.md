@@ -51,13 +51,13 @@
 
 ## Decision
 
-**Stay on rod for main; keep chromedp behind `LOOPY_BROWSER_DRIVER=chromedp`.**
+**Stay on rod for main; keep chromedp behind `WHIP_BROWSER_DRIVER=chromedp`.**
 
 Why not switch despite the smaller backend:
 - **Full behavioral parity** — no capability gap in either direction; the
   switch would be a churn-only move.
 - rod's launcher + `Leakless` process guard is load-bearing for the
-  dedicated/headless modes (self-kill on loopy exit); chromedp's allocator
+  dedicated/headless modes (self-kill on whip exit); chromedp's allocator
   is equivalent in the spike but less battle-tested *here*.
 - The two rod quirks we hit are already worked around in shipped code (raw
   eval, readyState poll) — sunk, tested, race-clean.
@@ -74,6 +74,6 @@ Promoting is `Driver = "chromedp"` default + delete the rod file.
 - `internal/browser/chromedp_backend.go` — the chromedp `Backend`.
 - `internal/browser/parity_test.go` — `TestDriverParity` (the table above,
   regenerated on every run).
-- `Open` returns `Backend`; `LOOPY_BROWSER_DRIVER=rod|chromedp` selects;
+- `Open` returns `Backend`; `WHIP_BROWSER_DRIVER=rod|chromedp` selects;
   `Session`/`Do` and the tool layer are driver-agnostic.
 EOF

@@ -6,11 +6,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/context-labs/loopy/internal/browser/extrelay"
+	"github.com/context-labs/whip/internal/browser/extrelay"
 	"github.com/go-rod/rod"
 )
 
-// TestBackendThroughRelay drives loopy's real *Browser (the Backend methods
+// TestBackendThroughRelay drives whip's real *Browser (the Backend methods
 // browser_exec calls — Navigate, ClickAt, TypeText, Screenshot, AXTree, Eval)
 // through the extension relay, with a fake extension answering CDP the way
 // chrome.debugger does. Proves the rod Backend is reused unchanged end-to-end.
@@ -24,7 +24,7 @@ func TestBackendThroughRelay(t *testing.T) {
 	// Fake extension: pin a tab, then answer every CDP command.
 	ext := dialRelayExt(t, rel)
 	defer ext.close()
-	ext.send(t, `{"method":"loopy.attached","params":{"tabId":7,"title":"Example","url":"https://example.com/"}}`)
+	ext.send(t, `{"method":"whip.attached","params":{"tabId":7,"title":"Example","url":"https://example.com/"}}`)
 	time.Sleep(100 * time.Millisecond)
 	go ext.answerLoop(t)
 

@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/context-labs/loopy/internal/config"
+	"github.com/context-labs/whip/internal/config"
 )
 
 // fakeServer is a scripted in-process LSP server on pipes: it parses frames,

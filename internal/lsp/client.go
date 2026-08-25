@@ -198,7 +198,7 @@ func readFrame(br *bufio.Reader) ([]byte, error) {
 }
 
 // writeTimeout bounds how long send blocks on a full buffer: a wedged server
-// that stops reading stdin must kill the client, not the turn (or loopy's
+// that stops reading stdin must kill the client, not the turn (or whip's
 // exit path, which also sends).
 const writeTimeout = 5 * time.Second
 

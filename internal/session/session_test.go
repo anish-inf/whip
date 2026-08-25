@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/context-labs/loopy/internal/llm"
+	"github.com/context-labs/whip/internal/llm"
 )
 
 func TestTaskRoundTrip(t *testing.T) {
@@ -224,7 +224,7 @@ func TestUserHistory(t *testing.T) {
 	}
 }
 
-// History recall must skip messages loopy injected on the user's behalf
+// History recall must skip messages whip injected on the user's behalf
 // (steered background-task results, goal-continuation prompts) — only genuinely
 // typed submissions are recalled.
 func TestUserHistorySkipsInjected(t *testing.T) {

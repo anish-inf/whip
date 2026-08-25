@@ -7,10 +7,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/context-labs/loopy/internal/agent"
-	"github.com/context-labs/loopy/internal/config"
-	"github.com/context-labs/loopy/internal/llm"
-	"github.com/context-labs/loopy/internal/skills"
+	"github.com/context-labs/whip/internal/agent"
+	"github.com/context-labs/whip/internal/config"
+	"github.com/context-labs/whip/internal/llm"
+	"github.com/context-labs/whip/internal/skills"
 )
 
 func TestExpandMentions(t *testing.T) {
@@ -87,7 +87,7 @@ func TestPrepareTurnReloadsSkillsEveryTurn(t *testing.T) {
 	old, _ := os.Getwd()
 	os.Chdir(dir)
 	defer os.Chdir(old)
-	t.Setenv("HOME", t.TempDir()) // isolate ~/.loopy/skills
+	t.Setenv("HOME", t.TempDir()) // isolate ~/.whip/skills
 
 	os.MkdirAll(filepath.Join(dir, ".agents/skills/demo"), 0o755)
 	os.WriteFile(filepath.Join(dir, ".agents/skills/demo/SKILL.md"),

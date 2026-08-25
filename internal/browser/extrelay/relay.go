@@ -1,5 +1,5 @@
 // Package extrelay turns the user's real, logged-in Chrome tab into a
-// browser_exec backend: the loopy browser extension holds an outbound
+// browser_exec backend: the whip browser extension holds an outbound
 // WebSocket to this loopback relay and pipes raw CDP through chrome.debugger
 // on the tab the user pinned. rod connects to the relay's /cdp endpoint and
 // drives the tab unchanged — no second driver.
@@ -10,8 +10,8 @@
 // page target) and forwards everything else verbatim to the tab.
 //
 // Security: loopback only, and the extension must present the per-process
-// bearer token (written to ~/.loopy/browser/extension/relay.json by
-// `loopy browser install`, 0600). Only a tab the user explicitly activated
+// bearer token (written to ~/.whip/browser/extension/relay.json by
+// `whip browser install`, 0600). Only a tab the user explicitly activated
 // by clicking the extension icon is drivable.
 package extrelay
 
@@ -266,7 +266,7 @@ func (r *Relay) serveExt(c *conn) {
 		if err != nil {
 			return
 		}
-		// Control frames are ours ("loopy.*"); everything else is CDP for rod.
+		// Control frames are ours ("whip.*"); everything else is CDP for rod.
 		if isControl(msg) {
 			r.handleControl(msg)
 			continue
@@ -307,7 +307,7 @@ func (r *Relay) serveCDP(c *conn) {
 		ext := r.ext
 		r.mu.Unlock()
 		if ext == nil {
-			r.replyErr(c, msg, "no browser tab attached — click the loopy extension icon on a tab")
+			r.replyErr(c, msg, "no browser tab attached — click the whip extension icon on a tab")
 			continue
 		}
 		_ = ext.writeText(msg)
@@ -345,7 +345,7 @@ func (r *Relay) handleSynth(c *conn, msg []byte) bool {
 	case "Target.attachToTarget":
 		// Single session: confirm with a fixed session id; subsequent
 		// page-scoped commands carry it and we strip/forward as-is.
-		r.reply(c, f.ID, `{"sessionId":"loopy-ext"}`)
+		r.reply(c, f.ID, `{"sessionId":"whip-ext"}`)
 		return true
 	case "Target.createTarget", "Browser.close", "Browser.getVersion":
 		// No tab creation / no process control over the user's browser, and
@@ -356,7 +356,7 @@ func (r *Relay) handleSynth(c *conn, msg []byte) bool {
 		case "Browser.close":
 			r.reply(c, f.ID, `{}`)
 		default:
-			r.reply(c, f.ID, `{"product":"loopy-extension-relay"}`)
+			r.reply(c, f.ID, `{"product":"whip-extension-relay"}`)
 		}
 		return true
 	}
@@ -370,7 +370,7 @@ func (r *Relay) targetsJSON() string {
 	r.mu.Unlock()
 	tid, title, url := ti.ID, ti.Title, ti.URL
 	if tid == "" {
-		tid = "loopy-ext-tab"
+		tid = "whip-ext-tab"
 	}
 	b, _ := json.Marshal(map[string]any{
 		"targetInfos": []map[string]any{{
@@ -392,7 +392,7 @@ func (r *Relay) targetInfoJSON() string {
 	r.mu.Unlock()
 	tid, title, url := ti.ID, ti.Title, ti.URL
 	if tid == "" {
-		tid = "loopy-ext-tab"
+		tid = "whip-ext-tab"
 	}
 	b, _ := json.Marshal(map[string]any{
 		"targetInfo": map[string]any{
@@ -421,14 +421,14 @@ func (r *Relay) replyErr(c *conn, msg []byte, text string) {
 
 type tabInfo struct{ ID, Title, URL string }
 
-// handleControl processes "loopy.*" frames: the extension reports the pinned
+// handleControl processes "whip.*" frames: the extension reports the pinned
 // tab's identity on attach so Target.getTargets can describe it.
 func (r *Relay) handleControl(msg []byte) {
 	var f frame
-	if json.Unmarshal(msg, &f) != nil || !strings.HasPrefix(f.Method, "loopy.") {
+	if json.Unmarshal(msg, &f) != nil || !strings.HasPrefix(f.Method, "whip.") {
 		return
 	}
-	if f.Method == "loopy.attached" {
+	if f.Method == "whip.attached" {
 		var p struct {
 			TabID int    `json:"tabId"`
 			Title string `json:"title"`
@@ -443,7 +443,7 @@ func (r *Relay) handleControl(msg []byte) {
 
 func isControl(msg []byte) bool {
 	var f frame
-	return json.Unmarshal(msg, &f) == nil && strings.HasPrefix(f.Method, "loopy.")
+	return json.Unmarshal(msg, &f) == nil && strings.HasPrefix(f.Method, "whip.")
 }
 
 // WaitAttached blocks until the extension connects or ctx expires — used by
@@ -457,7 +457,7 @@ func (r *Relay) WaitAttached(ctx context.Context) error {
 		}
 		select {
 		case <-ctx.Done():
-			return errors.New("no tab attached: click the loopy extension icon on the tab to drive")
+			return errors.New("no tab attached: click the whip extension icon on the tab to drive")
 		case <-t.C:
 		}
 	}

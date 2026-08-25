@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/context-labs/loopy/internal/computer"
-	"github.com/context-labs/loopy/internal/tools"
+	"github.com/context-labs/whip/internal/computer"
+	"github.com/context-labs/whip/internal/tools"
 )
 
 func TestComputerUseCommand(t *testing.T) {

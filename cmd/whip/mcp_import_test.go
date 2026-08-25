@@ -8,16 +8,16 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/context-labs/loopy/internal/config"
-	"github.com/context-labs/loopy/internal/mcp"
+	"github.com/context-labs/whip/internal/config"
+	"github.com/context-labs/whip/internal/mcp"
 )
 
-// importFixture writes a healthy loopy config plus a codex config with two
+// importFixture writes a healthy whip config plus a codex config with two
 // servers, and points CodexPath at the fixture.
 func importFixture(t *testing.T, mcpImport string) (wd string) {
 	t.Helper()
-	loopyHome := t.TempDir()
-	t.Setenv("LOOPY_HOME", loopyHome)
+	whipHome := t.TempDir()
+	t.Setenv("WHIP_HOME", whipHome)
 	wd = t.TempDir()
 	cfgSrc := `{
   "defaultModel": "m1",
@@ -25,7 +25,7 @@ func importFixture(t *testing.T, mcpImport string) (wd string) {
   "models": { "m1": { "providers": ["a"] } }
   ` + mcpImport + `
 }`
-	if err := os.WriteFile(filepath.Join(loopyHome, "config.json"), []byte(cfgSrc), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(whipHome, "config.json"), []byte(cfgSrc), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	codexFile := filepath.Join(wd, "codex.toml")

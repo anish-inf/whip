@@ -1,11 +1,11 @@
-# exo: what loopy can learn from it
+# exo: what whip can learn from it
 
 Source: `/home/abe/code/coding-harnesses/exo` (Rust "exoharness" substrate + TypeScript
 executor/harness + Node adapter sidecars). Exo is not a coding-agent TUI — it's a
 **long-running personal agent** built for recursive self-improvement: it can read and
 edit its own mounted source tree, rebuild and restart itself, snapshot/rewind its
 sandbox, schedule recurring work, and talk to IRC/Discord/WhatsApp/Signal/Slack/web
-chat. The ideas below are curated for loopy (a single-binary Go TUI); the curated
+chat. The ideas below are curated for whip (a single-binary Go TUI); the curated
 checklist lives in [../../roadmap.md](../../roadmap.md).
 
 The three docs that matter most: `exoharness/docs/spec.md` (architecture),
@@ -62,7 +62,7 @@ Two spec lines worth internalizing:
   custom event that points at a derived context view or summary. Compaction itself
   does not need to exist as a first-class exoharness concept."
 
-Loopy already has the SQLite session store; the upgrade is to treat it as an
+Whip already has the SQLite session store; the upgrade is to treat it as an
 **append-only event log with typed kinds + custom kinds** instead of a messages table,
 and to make `/compact` a recorded event rather than a destructive rewrite.
 
@@ -75,7 +75,7 @@ and to make `/compact` a recorded event rather than a destructive rewrite.
 extension point. Notable decisions:
 
 - **UUIDv7 ids** → lexicographically sortable → free ordering, cursor pagination,
-  and filesystem tailing. (SQLite rowid gives the same in loopy.)
+  and filesystem tailing. (SQLite rowid gives the same in whip.)
 - **Usage on the event, not a side table**: each `Messages` event carries
   `{model, prompt/completion/cached tokens, cost_usd, ttft_ms, duration_ms}`. Cost is
   computed in userspace (LiteLLM price DB), stored verbatim by the substrate —
@@ -98,10 +98,10 @@ extension point. Notable decisions:
 - **Crash recovery**: prompt materialization synthesizes error tool_results for
   dangling tool calls from an interrupted turn ("tool execution did not complete
   before the previous turn ended") — keeps the API's tool-call pairing invariant
-  intact across crashes. Directly applicable to loopy's `--resume` of a dead turn.
+  intact across crashes. Directly applicable to whip's `--resume` of a dead turn.
 
 Operator debugging is `pnpm events:tail` — a 266-line script polling the event dir.
-For loopy this is `loopy events --tail <session>` doing `SELECT … WHERE id > ?`.
+For whip this is `whip events --tail <session>` doing `SELECT … WHERE id > ?`.
 
 ## 3. Fork vs. rewind: two different time-travel operations
 
@@ -140,16 +140,16 @@ Exo's cleanest separation (sandbox-snapshots.md:39-41):
   append-only log the agent cannot modify.
 - **Conversation fork** deep-copies events up to `up_to_inclusive` (re-minting ids),
   plus bindings/secrets/artifacts, and records provenance *inside the new log* as
-  `ThreadForked{source, up_to_inclusive}`. Loopy's `/fork` already does the
+  `ThreadForked{source, up_to_inclusive}`. Whip's `/fork` already does the
   conversation half.
 
 The durable-vs-resettable state table (`docs/SELF-CONTROL.md` §2) is worth copying
-verbatim as a design artifact for loopy: code+prompts (git, survives everything),
+verbatim as a design artifact for whip: code+prompts (git, survives everything),
 event log/artifacts/scheduler records (`.exo`, survives rewind+restart), sandbox
 filesystem (the *one* resettable layer — "that is the point"), secrets (the one
 category that can't be casually recreated).
 
-Loopy's missing half is **workspace rewind**: git-snapshot the working tree at each
+Whip's missing half is **workspace rewind**: git-snapshot the working tree at each
 turn boundary (or on demand), let the model/user roll back files, and append an event
 recording the rollback. Opencode's `revert.ts` is the same idea.
 
@@ -197,7 +197,7 @@ sequenceDiagram
 4. Outcome written to the outcome file **and** appended to the conversation's event
    log — so the model can later ask `list_conversation_events` "did my update land?"
 
-For loopy this becomes: a `rebuild_and_restart_loopy` tool + drain marker claimed
+For whip this becomes: a `rebuild_and_restart_whip` tool + drain marker claimed
 between turns + Unix `exec()` to swap the binary image. See roadmap.
 
 ## 5. SELF.md: the navigational self-map
@@ -218,7 +218,7 @@ directly stealable for any agent:
   and escalate it plainly instead of looping." Autonomous (no user attached): "record
   the blocker clearly and fail loudly rather than waiting."
 - "Do not speculate about code you have not opened… cite it as
-  `file_path:line_number`." (loopy already has this.)
+  `file_path:line_number`." (whip already has this.)
 - Git hygiene: "review the staged diff for secrets first. Never run `git add .` —
   stage only the files you intend to commit — and never force-push."
 
@@ -269,13 +269,13 @@ flowchart TB
 - **Todos** (`exo/tools/todo-tools.ts`): conversation-scoped, full-list rewrite each
   call, one item in_progress, "mark completed only after verified," caps 50×300, not
   injected when all done.
-- **Skills**: same progressive disclosure as loopy (names+descriptions injected, body
+- **Skills**: same progressive disclosure as whip (names+descriptions injected, body
   on demand), but stored as **artifacts** (`skills/index.json` + `skills/<name>.json`)
   instead of a directory scan — survives sandbox rewinds, versioned, auditable;
   install validates frontmatter and rejects `..` paths. Uninstall removes the index
   entry only; old versions remain readable.
 
-Loopy translation: a `memory`/`artifacts` table in sessions.db. Note exo flags a
+Whip translation: a `memory`/`artifacts` table in sessions.db. Note exo flags a
 read-modify-write race in its file store that SQLite makes disappear.
 
 ## 8. The scheduler (cron for agents)
@@ -311,7 +311,7 @@ flowchart LR
     boot["post-restart notice"]
     ext["adapter inbound<br/>IRC/Discord/…"]
 
-    subgraph loopy["ONE MECHANISM"]
+    subgraph whip["ONE MECHANISM"]
         ch["Wakeup{source, prompt}<br/>channel"]
         loop["agent loop<br/>(renders with ⏰ gutter marker)"]
         ch --> loop
@@ -364,13 +364,13 @@ log never see values. Tool initialization uses literal `"${ENV_VAR}"` references
 resolved at load time "so the raw value never enters the lockfile." (This overlaps
 with the existing roadmap item for `"$VAR"`/`"!cmd"` apiKey resolution.)
 
-## What loopy should probably NOT take
+## What whip should probably NOT take
 
 - The full adapter fleet + guardian bash scripts + multi-process supervision —
   that's a different product (always-on personal agent). Take the wakeup channel and
-  outbox patterns only if/when loopy grows external channels.
-- Firecracker/E2B/Daytona sandbox backends — loopy runs where the user runs.
-- Manifest-based agent-installed TS tools — loopy's answer to dynamic capability is
+  outbox patterns only if/when whip grows external channels.
+- Firecracker/E2B/Daytona sandbox backends — whip runs where the user runs.
+- Manifest-based agent-installed TS tools — whip's answer to dynamic capability is
   skills + MCP, and that's fine.
 - The conversation/thread mid-rename churn and file-per-event storage — SQLite is
-  strictly better for loopy's scale.
+  strictly better for whip's scale.

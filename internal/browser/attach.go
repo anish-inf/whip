@@ -270,13 +270,13 @@ func wsUpgradeAnswers(ctx context.Context, scheme, host string, port int, path s
 
 // DiscoverLiveWS finds a running Chromium-family browser with remote
 // debugging enabled and returns its browser-level WebSocket URL. Explicit
-// endpoints win: LOOPY_CDP_WS (ws:// URL, used verbatim) then LOOPY_CDP_URL
+// endpoints win: WHIP_CDP_WS (ws:// URL, used verbatim) then WHIP_CDP_URL
 // (http:// endpoint, resolved). Otherwise the profile scan runs.
 func DiscoverLiveWS(ctx context.Context) (string, error) {
-	if ws := os.Getenv("LOOPY_CDP_WS"); ws != "" {
+	if ws := os.Getenv("WHIP_CDP_WS"); ws != "" {
 		return ws, nil
 	}
-	if httpURL := os.Getenv("LOOPY_CDP_URL"); httpURL != "" {
+	if httpURL := os.Getenv("WHIP_CDP_URL"); httpURL != "" {
 		scheme, host, port := splitEndpoint(httpURL)
 		return resolveWSURL(ctx, scheme, host, port, "")
 	}
@@ -314,7 +314,7 @@ func DiscoverLiveWS(ctx context.Context) (string, error) {
 
 // DiscoverWSForProfile resolves a live browser's WS URL from one specific
 // user-data-dir's DevToolsActivePort — used to reattach to a previously
-// launched loopy Chrome instead of spawning a duplicate (hermes
+// launched whip Chrome instead of spawning a duplicate (hermes
 // /browser connect's already-listening check, via the profile file).
 // ok is false when the file is absent or the browser behind it is gone.
 func DiscoverWSForProfile(ctx context.Context, base string) (ws string, ok bool) {

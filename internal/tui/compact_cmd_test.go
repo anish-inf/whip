@@ -8,15 +8,15 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/context-labs/loopy/internal/agent"
-	"github.com/context-labs/loopy/internal/config"
-	"github.com/context-labs/loopy/internal/llm"
+	"github.com/context-labs/whip/internal/agent"
+	"github.com/context-labs/whip/internal/config"
+	"github.com/context-labs/whip/internal/llm"
 )
 
 func compactCmdModel() *model {
 	// NOTE: any test that drives setEffort/switchModel/compactCommand writes
-	// through cfg.Save(); TestMain points LOOPY_HOME at a scratch dir so
-	// those writes can never reach the real ~/.loopy/config.json.
+	// through cfg.Save(); TestMain points WHIP_HOME at a scratch dir so
+	// those writes can never reach the real ~/.whip/config.json.
 	// serve the compaction summary so a bare /compact completes in-test
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(`{"choices":[{"message":{"content":"sim"}}]}`))
@@ -49,17 +49,17 @@ func compactCmdModel() *model {
 }
 
 // Regression guard for the config corruption bug: running a persistence
-// command from a test must write under the isolated LOOPY_HOME, never the
-// user's real ~/.loopy.
+// command from a test must write under the isolated WHIP_HOME, never the
+// user's real ~/.whip.
 func TestCompactCommandNeverTouchesRealHome(t *testing.T) {
 	m := compactCmdModel()
 	m.compactCommand([]string{"glm-5.2-fast"}) // triggers cfg.Save()
-	dir := os.Getenv("LOOPY_HOME")
-	if dir == "" || dir == filepath.Join(os.Getenv("HOME"), ".loopy") {
-		t.Fatalf("tests must run with an isolated LOOPY_HOME, got %q", dir)
+	dir := os.Getenv("WHIP_HOME")
+	if dir == "" || dir == filepath.Join(os.Getenv("HOME"), ".whip") {
+		t.Fatalf("tests must run with an isolated WHIP_HOME, got %q", dir)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "config.json")); err != nil {
-		t.Fatalf("expected the save to land under LOOPY_HOME: %v", err)
+		t.Fatalf("expected the save to land under WHIP_HOME: %v", err)
 	}
 }
 

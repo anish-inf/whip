@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/context-labs/loopy/internal/browser"
+	"github.com/context-labs/whip/internal/browser"
 )
 
 // End-to-end through the tool: browser_exec drives a real headless Chrome.

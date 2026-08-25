@@ -15,7 +15,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/context-labs/loopy/internal/config"
+	"github.com/context-labs/whip/internal/config"
 )
 
 // diagWait caps how long a write/edit tool call blocks for diagnostics
@@ -31,7 +31,7 @@ type ServerSpec struct {
 	Command     []string          // argv; nil for a disabled entry
 	Extensions  []string          // file extensions served, e.g. [".go"]
 	RootMarkers []string          // files that mark a project root
-	Env         map[string]string // extra env layered over loopy's
+	Env         map[string]string // extra env layered over whip's
 	Disabled    bool
 }
 
@@ -474,7 +474,7 @@ func (m *Manager) Statuses() []Status {
 }
 
 // Close shuts every server down (shutdown/exit then kill) and wakes all
-// waiters. Called on loopy exit before bashrun.KillAll, mirroring mcpMgr.
+// waiters. Called on whip exit before bashrun.KillAll, mirroring mcpMgr.
 func (m *Manager) Close() {
 	m.mu.Lock()
 	if m.closed {

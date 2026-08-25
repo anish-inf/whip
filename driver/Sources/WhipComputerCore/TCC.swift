@@ -68,7 +68,7 @@ public final class PermissionsWindow {
             contentRect: NSRect(x: 0, y: 0, width: 460, height: 220),
             styleMask: [.titled, .closable],
             backing: .buffered, defer: false)
-        panel.title = "loopy-computer permissions"
+        panel.title = "whip-computer permissions"
         panel.isFloatingPanel = true
         panel.level = .floating
 
@@ -78,7 +78,7 @@ public final class PermissionsWindow {
         stack.spacing = 12
         stack.edgeInsets = NSEdgeInsets(top: 16, left: 16, bottom: 16, right: 16)
 
-        let header = NSTextField(labelWithString: "loopy needs these permissions to drive your Mac:")
+        let header = NSTextField(labelWithString: "whip needs these permissions to drive your Mac:")
         header.font = .boldSystemFont(ofSize: 13)
         stack.addArrangedSubview(header)
 
@@ -89,7 +89,7 @@ public final class PermissionsWindow {
             stack.addArrangedSubview(btn)
         }
 
-        let hint = NSTextField(wrappingLabelWithString: "Grant each permission, then return here — loopy continues automatically once everything is granted.")
+        let hint = NSTextField(wrappingLabelWithString: "Grant each permission, then return here — whip continues automatically once everything is granted.")
         hint.font = .systemFont(ofSize: 11)
         hint.textColor = .secondaryLabelColor
         stack.addArrangedSubview(hint)

@@ -13,10 +13,10 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/context-labs/loopy/internal/agent"
-	"github.com/context-labs/loopy/internal/config"
-	"github.com/context-labs/loopy/internal/llm"
-	"github.com/context-labs/loopy/internal/session"
+	"github.com/context-labs/whip/internal/agent"
+	"github.com/context-labs/whip/internal/config"
+	"github.com/context-labs/whip/internal/llm"
+	"github.com/context-labs/whip/internal/session"
 )
 
 // sseTextServer serves every streaming chat request with a fixed text
@@ -72,7 +72,7 @@ func TestResumeRestoresTasks(t *testing.T) {
 	m := tasksModelStore(t, srv.URL)
 
 	// a session with messages and two tasks: one settled, one "running" (the
-	// state a crashed loopy leaves behind)
+	// state a crashed whip leaves behind)
 	id, err := m.store.Create("/tmp", "m", "p")
 	if err != nil {
 		t.Fatal(err)
@@ -530,7 +530,7 @@ func TestLayoutReservesDockHeight(t *testing.T) {
 	// and the dock renders on its own row above the input, not glued to it
 	v := stripAll(m.View())
 	di := strings.Index(v, "probe")
-	ii := strings.Index(v, "Ask loopy")
+	ii := strings.Index(v, "Ask whip")
 	if di < 0 || ii < 0 || di > ii {
 		t.Fatalf("dock must render above the input: dock@%d input@%d\n%s", di, ii, v)
 	}

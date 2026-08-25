@@ -1,11 +1,11 @@
-// Package memory is loopy's durable memory: plain markdown files of
+// Package memory is whip's durable memory: plain markdown files of
 // checkbox bullets that the model appends to with `remember` and marks done
 // with `forget`, and the user can read, edit, or delete in any editor.
 //
 // Two scopes:
-//   - installation: ~/.loopy/memory.md — facts about the user, injected into
+//   - installation: ~/.whip/memory.md — facts about the user, injected into
 //     every session
-//   - session: ~/.loopy/sessions/<id>.memory.md — continuation notes for one
+//   - session: ~/.whip/sessions/<id>.memory.md — continuation notes for one
 //     conversation
 //
 // Retrieval is always-inject with a hard cap (maxEntries short lines): at
@@ -24,7 +24,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/context-labs/loopy/internal/config"
+	"github.com/context-labs/whip/internal/config"
 )
 
 const (
@@ -46,7 +46,7 @@ type Scope struct {
 	Name string // "installation" or "session" — used in the injected header
 }
 
-// Installation returns the ~/.loopy/memory.md scope.
+// Installation returns the ~/.whip/memory.md scope.
 func Installation() Scope {
 	dir, err := config.Dir()
 	if err != nil {

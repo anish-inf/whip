@@ -16,7 +16,7 @@ import (
 // noEnvCDP skips the test when explicit CDP env endpoints bypass discovery.
 func noEnvCDP(t *testing.T) {
 	t.Helper()
-	if os.Getenv("LOOPY_CDP_WS") != "" || os.Getenv("LOOPY_CDP_URL") != "" {
+	if os.Getenv("WHIP_CDP_WS") != "" || os.Getenv("WHIP_CDP_URL") != "" {
 		t.Skip("explicit CDP endpoint set — profile scan bypassed")
 	}
 }
@@ -38,7 +38,7 @@ func TestParseDevToolsActivePort(t *testing.T) {
 // Profile scan finds a DevToolsActivePort in a fake profile dir.
 func TestProfileScanFindsPortFile(t *testing.T) {
 	noEnvCDP(t)
-	if os.Getenv("LOOPY_CDP_WS") != "" || os.Getenv("LOOPY_CDP_URL") != "" {
+	if os.Getenv("WHIP_CDP_WS") != "" || os.Getenv("WHIP_CDP_URL") != "" {
 		t.Skip("explicit CDP endpoint set — profile scan bypassed")
 	}
 	for _, p := range []int{9222, 9223} { // a real Chrome here wins the fallback probe
@@ -205,10 +205,10 @@ func TestDiscoverPermissionBlocked(t *testing.T) {
 
 // Explicit endpoints beat the scan.
 func TestDiscoverExplicitEndpoints(t *testing.T) {
-	t.Setenv("LOOPY_CDP_WS", "ws://example:1234/devtools/browser/explicit")
+	t.Setenv("WHIP_CDP_WS", "ws://example:1234/devtools/browser/explicit")
 	ws, err := DiscoverLiveWS(context.Background())
 	if err != nil || ws != "ws://example:1234/devtools/browser/explicit" {
-		t.Fatalf("LOOPY_CDP_WS: got %q %v", ws, err)
+		t.Fatalf("WHIP_CDP_WS: got %q %v", ws, err)
 	}
 }
 

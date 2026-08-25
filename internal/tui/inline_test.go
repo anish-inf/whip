@@ -18,7 +18,7 @@ func TestInlineRendering(t *testing.T) {
 	if strings.Contains(v, "\x1b[?1049h") || strings.Contains(v, "\x1b[?47h") {
 		t.Fatal("view must not enter the alternate screen")
 	}
-	for _, want := range []string{"loopy ·", "hello", "world"} {
+	for _, want := range []string{"whip ·", "hello", "world"} {
 		if !strings.Contains(stripAll(v), want) {
 			t.Errorf("inline view missing %q", want)
 		}

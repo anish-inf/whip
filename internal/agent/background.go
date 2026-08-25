@@ -10,7 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/context-labs/loopy/internal/tools"
+	"github.com/context-labs/whip/internal/tools"
 )
 
 // TaskStatus is the lifecycle of a background subagent.

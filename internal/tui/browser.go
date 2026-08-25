@@ -5,8 +5,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/context-labs/loopy/internal/browser"
-	"github.com/context-labs/loopy/internal/tools"
+	"github.com/context-labs/whip/internal/browser"
+	"github.com/context-labs/whip/internal/tools"
 )
 
 // browserStepLabel extracts the step label from browser_exec args: the
@@ -37,11 +37,11 @@ func browserStepLabel(argsJSON string) string {
 
 // switchBrowserDriver changes the browser automation driver (rod ↔
 // chromedp) and invalidates open sessions so the next browser_exec reopens
-// on the new driver. Env-pinned (LOOPY_BROWSER_DRIVER) wins — the switch
+// on the new driver. Env-pinned (WHIP_BROWSER_DRIVER) wins — the switch
 // reports that instead of pretending to apply.
 func (m *model) switchBrowserDriver(d string) {
-	if os.Getenv("LOOPY_BROWSER_DRIVER") != "" {
-		m.append(dimStyle.Render("◎ browser driver pinned by LOOPY_BROWSER_DRIVER=" + os.Getenv("LOOPY_BROWSER_DRIVER") + " — unset it to switch"))
+	if os.Getenv("WHIP_BROWSER_DRIVER") != "" {
+		m.append(dimStyle.Render("◎ browser driver pinned by WHIP_BROWSER_DRIVER=" + os.Getenv("WHIP_BROWSER_DRIVER") + " — unset it to switch"))
 		return
 	}
 	if tools.Browser != nil {

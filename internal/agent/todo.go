@@ -1,7 +1,7 @@
 // todowrite: a conversation-scoped plan the model rewrites in full on every
 // call. Open items are injected back into the request each round so the plan
 // survives long tool loops and compactions. Design: docs/learnings/
-// other-harnesses/exo.md §7 (exo's todo-tools.ts), trimmed to loopy's scale.
+// other-harnesses/exo.md §7 (exo's todo-tools.ts), trimmed to whip's scale.
 package agent
 
 import (
@@ -10,8 +10,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/context-labs/loopy/internal/llm"
-	"github.com/context-labs/loopy/internal/tools"
+	"github.com/context-labs/whip/internal/llm"
+	"github.com/context-labs/whip/internal/tools"
 )
 
 const (

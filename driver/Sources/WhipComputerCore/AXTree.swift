@@ -84,7 +84,7 @@ public final class AXTree {
     public func snapshot(app: String, maxElements: Int = 400) throws -> AXSnapshot {
         let (_, pid) = try resolveApp(app)
         guard TCC.accessibilityGranted else {
-            throw RPCError(.noAXPermission, "Accessibility permission not granted to loopy-computer")
+            throw RPCError(.noAXPermission, "Accessibility permission not granted to whip-computer")
         }
         let appEl = AXUIElementCreateApplication(pid)
         // Raise the app so key window is fresh.

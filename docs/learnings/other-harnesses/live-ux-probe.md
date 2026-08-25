@@ -1,11 +1,11 @@
-# Live UX probe: claude-code, codex, grok, opencode, pi (and loopy)
+# Live UX probe: claude-code, codex, grok, opencode, pi (and whip)
 
 Method: launched each harness in a PTY (`/tmp/harness-probe/probe2.py`), answered
 its terminal queries (OSC 11 background, cursor-position), drove it with
 keystrokes (trust prompt → `/` menu → filter), captured the stripped screen.
 Versions: claude 2.1.239, codex-cli 0.147.0 (broken install on this machine —
 missing `@openai/codex-linux-x64`), grok 1.0.4, opencode 1.18.19, pi 0.84.2,
-loopy @ mcp-support.
+whip @ mcp-support.
 
 ## What each does at first paint
 
@@ -40,15 +40,15 @@ a terminal query it never times out is bricked in any non-mainstream terminal.*
 source at ~/code/coding-harnesses): quiet startup, `/goal`-style persistence,
 queued steers.
 
-**loopy (ours, for contrast)**: trust gate → one header line
-(`loopy · model @ provider · cwd · 0% ctx ⚡ medium`) → `/` opens a clean
+**whip (ours, for contrast)**: trust gate → one header line
+(`whip · model @ provider · cwd · 0% ctx ⚡ medium`) → `/` opens a clean
 completion list. Solid, but *silent*: no tips, no "what's loaded", no next-step
 guidance.
 
-## Concrete UX gaps in loopy, ranked by value/line
+## Concrete UX gaps in whip, ranked by value/line
 
 1. **Startup resource report (pi's [Skills]/[Extensions]/[Skill conflicts]).**
-   loopy already scans skills and MCP servers at startup — but says nothing.
+   whip already scans skills and MCP servers at startup — but says nothing.
    One block at first paint: `skills: 47 loaded · mcp: docs ✓ (4 tools), ghost ✗
    (see /mcp)` plus **validation warnings** (pi surfaces a skill whose
    description is too long! we have `maxDesc = 300` silently truncating — the
@@ -59,12 +59,12 @@ guidance.
    teach features (mentions, $skills, /goal, MCP). Ours is static/blank. A
    `[]string` of examples + rotate on idle tick; zero deps.
 
-3. **First-run "next steps" card (claude).** On a brand-new `~/.loopy`, show 3
+3. **First-run "next steps" card (claude).** On a brand-new `~/.whip`, show 3
    lines: set a key, try /goal, drop a .mcp.json. Disappears once config exists.
    We currently drop users into a header and silence.
 
 4. **Degraded-mode honesty (claude's renderer fallback notice, spend-limit
-   notice).** loopy has silent degradation: skills truncated at maxDesc, MCP
+   notice).** whip has silent degradation: skills truncated at maxDesc, MCP
    discovery errors (we append one errStyle line — good), catalog fetch
    failures (silent). The rule from claude: *every fallback names itself and
    its remedy*.
@@ -90,7 +90,7 @@ guidance.
 - opencode's ASCII-art logo — one paint of charm, then permanent noise.
 - claude's auto-permission-mode banner complexity — ours is simpler (trust gate).
 
-## Where loopy already beats them
+## Where whip already beats them
 
 - Trust gate is clearer than claude's (theirs buries the risk in chattiness).
 - MCP failure UX after the polish pass (fail-fast + did-you-mean + first-settle

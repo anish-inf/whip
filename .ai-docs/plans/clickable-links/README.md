@@ -4,7 +4,7 @@ Branch: `feat/clickable-links`
 
 ## What this does
 
-Makes URLs and locally-accessible file paths in the loopy transcript
+Makes URLs and locally-accessible file paths in the whip transcript
 clickable: terminal-level OSC 8 hyperlinks (cmd/ctrl-click opens browser /
 editor / file manager, per terminal config). Pure render-layer; zero new
 dependencies (`github.com/charmbracelet/x/ansi.SetHyperlink` is already
@@ -73,7 +73,7 @@ var fileRefRE = regexp.MustCompile(
 ```
 
 `exists` defaults to a tiny wrapper over `os.Stat` (not-a-dir). Absolute
-paths resolved as-is; relative against `os.Getwd()` (loopy runs in the
+paths resolved as-is; relative against `os.Getwd()` (whip runs in the
 project root; sessions resume with the same CWD contract).
 
 ### Assistant blocks (`markdown.go` renderMarkdown)
@@ -152,7 +152,7 @@ stdlib `testing`, no new deps.
   `internal/tui/links.go`, `markdown.go` → `links_test.go`).
 - `docs/roadmap.md`: no entry exists; none to check.
 - `docs/learnings/other-harnesses/opencode/opencode-ux.md`: one line noting
-  opencode's Link component + that loopy does transcript-wide OSC 8 instead.
+  opencode's Link component + that whip does transcript-wide OSC 8 instead.
 
 ## Deviations from the original sketch
 
