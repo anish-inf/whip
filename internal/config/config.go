@@ -141,7 +141,9 @@ type ComputerConfig struct {
 	Allow []string `json:"allow,omitempty"`
 	// Deny lists apps never drivable (wins over allow).
 	Deny []string `json:"deny,omitempty"`
-	// DefaultDeny (default true) requires approval for unlisted apps.
+	// DefaultDeny, when true, gates unlisted apps behind approval. Default
+	// is false — allow-all, and users build blocklists via `deny` (or
+	// /computer-use deny <app> in-session).
 	DefaultDeny *bool `json:"defaultDeny,omitempty"`
 	// Enabled false hides computer_exec entirely.
 	Enabled *bool `json:"enabled,omitempty"`

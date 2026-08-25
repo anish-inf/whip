@@ -621,12 +621,12 @@ the on-disk driver).
   from Apple Events" toggle; the error surfaces it). Our osascript helper
   fixes mack's flaws: newlines preserved (tab lists stay readable), quotes
   escaped (no injection).
-- **Per-app consent gate** (`policy.go`, ported from codex's
-  computer_use.rs): every action targets an app; the app must be in
-  `computer.allow` config, or session-approved. `computer.deny` always wins.
-  Default-deny is on. The TUI installs the consent hook (v1: a transcript
-  note + the model surfaces the ask; an interactive approve-prompt is the
-  follow-up — no turn-pausing modal exists yet).
+- **Per-app policy** (`policy.go`, ported from codex's computer_use.rs):
+  every action targets an app. **Default is allow-all** — users build
+  blocklists (`computer.deny` config, or `/computer-use deny <app>`
+  in-session), not allowlists. `computer.deny` always wins (config and
+  session). `computer.allow` and `computer.defaultDeny: true` restore the
+  gated posture for anyone who wants it.
 - **Tool shape** — the same helper-call mini-language as browser_exec
   (`internal/tools/browser_lang.go`, now shared): `chrome_state`,
   `chrome_tabs`, `chrome_goto`, `chrome_new_tab`, `chrome_activate`,

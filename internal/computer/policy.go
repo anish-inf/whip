@@ -24,7 +24,9 @@ type Policy struct {
 	allow map[string]bool
 	deny  map[string]bool
 	// DefaultDeny (true) means unlisted apps are denied; false = allowed.
-	// Codex's default_app_access; we default to deny for safety.
+	// Codex's default_app_access — but loopy's default is allow-all:
+	// users build up blocklists, not allowlists (set computer.defaultDeny
+	// in config to restore the gated posture).
 	DefaultDeny bool
 }
 

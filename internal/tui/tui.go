@@ -869,7 +869,7 @@ func buildAgent(cfg *config.Config, modelName, provName, sysPrompt string) (*age
 	// installed below (the model never touches an unapproved app silently).
 	ag.ComputerDisabled = cfg.Computer.Enabled != nil && !*cfg.Computer.Enabled
 	if !ag.ComputerDisabled {
-		defaultDeny := cfg.Computer.DefaultDeny == nil || *cfg.Computer.DefaultDeny
+		defaultDeny := cfg.Computer.DefaultDeny != nil && *cfg.Computer.DefaultDeny // default: allow-all
 		tools.ComputerPolicy = computer.NewPolicy(cfg.Computer.Allow, cfg.Computer.Deny, defaultDeny)
 	}
 	if !ag.BrowserDisabled && tools.Browser == nil {
