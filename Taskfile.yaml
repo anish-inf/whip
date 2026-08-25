@@ -84,3 +84,16 @@ tasks:
     desc: Tidy go.mod
     cmds:
       - go mod tidy
+
+  driver:
+    desc: "Build the loopy-computer Swift driver (macOS; Xcode CLT) and copy it into internal/computer/bin for go:embed"
+    cmds:
+      - swift build -c release --package-path driver
+      - cp driver/.build/release/loopy-computer internal/computer/bin/loopy-computer
+      - codesign --sign - --force internal/computer/bin/loopy-computer 2>/dev/null || true
+      - echo "driver built → internal/computer/bin/loopy-computer (rebuild loopy to re-embed)"
+
+  driver-test:
+    desc: "Run the Swift driver XCTest suite (needs full Xcode — XCTest isn't in CLT)"
+    cmds:
+      - swift test --package-path driver
