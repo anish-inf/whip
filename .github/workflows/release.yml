@@ -73,7 +73,11 @@ jobs:
         if: ${{ matrix.driver }}
         run: |
           xcodebuild -version >/dev/null 2>&1 || true # CLT is enough for swift build
-          swift build -c release --package-path driver
+          # -Xswiftc -swift-version -Xswiftc 5: the Package pins
+          # swift-tools-version 5.10 but the runner's Swift 6 toolchain still
+          # enforces strict concurrency on DispatchQueue.main.sync captures;
+          # pin the language mode so the runner matches local builds.
+          swift build -c release --package-path driver -Xswiftc -swift-version -Xswiftc 5
           cp driver/.build/release/loopy-computer internal/computer/bin/loopy-computer
           codesign --sign - --force internal/computer/bin/loopy-computer 2>/dev/null || true
           test -s internal/computer/bin/loopy-computer
