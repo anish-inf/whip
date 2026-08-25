@@ -265,18 +265,25 @@ public final class Dispatcher {
         }
     }
 
+    /// Box for the semaphore bridge — a captured `var` mutated inside a Task
+    /// is a strict-concurrency error on newer Swift 6 toolchains even in
+    /// language mode 5. Same class-box escape as syncOnMain in TCC.swift.
+    private final class ResultBox: @unchecked Sendable {
+        var result: Result<Data, Error>?
+    }
+
     /// SCK is async; bridge it synchronously (we're in a sync stdio loop).
     private func awaitCapture(pid: pid_t) throws -> AnyCodable? {
         guard TCC.screenRecordingGranted else { return nil }
-        var result: Result<Data, Error>?
+        let box = ResultBox()
         let sem = DispatchSemaphore(value: 0)
         Task {
-            do { result = .success(try await Capture.screenshot(pid: pid)) }
-            catch { result = .failure(error) }
+            do { box.result = .success(try await Capture.screenshot(pid: pid)) }
+            catch { box.result = .failure(error) }
             sem.signal()
         }
         _ = sem.wait(timeout: .now() + 10)
-        switch result {
+        switch box.result {
         case .success(let data):
             return .object([
                 "jpegBase64": .string(data.base64EncodedString()),
