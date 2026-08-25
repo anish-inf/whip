@@ -27,6 +27,7 @@ import (
 	"github.com/context-labs/loopy/internal/llm"
 	"github.com/context-labs/loopy/internal/lsp"
 	"github.com/context-labs/loopy/internal/mcp"
+	"github.com/context-labs/loopy/internal/memory"
 	"github.com/context-labs/loopy/internal/session"
 	"github.com/context-labs/loopy/internal/skills"
 	"github.com/context-labs/loopy/internal/tools"
@@ -542,6 +543,7 @@ func (m *model) resume(id string) error {
 	m.wireTasks()
 	// Publish before restoring so the settled rows record against this session.
 	m.agent.Tasks().SetSessionID(meta.ID)
+	m.agent.SetSessionID(meta.ID)
 	// Restore the session's background subagents into the dock. Everything
 	// comes back settled: a process exit kills in-flight subagents, so a row
 	// still "running" on disk means it died with the last exit.
@@ -687,6 +689,7 @@ func (m *model) persist() {
 		}
 		m.sessionID = id
 		m.agent.Tasks().SetSessionID(id) // publish before Save so a settling subagent records
+		m.agent.SetSessionID(id)         // scopes the per-session memory file
 	}
 	// Bookkeeping re-stamps every persist — even one with no new messages —
 	// so a resume restores goal/effort, and the cumulative token totals that
@@ -2251,6 +2254,7 @@ func (m *model) wireTasks() {
 		}
 	}
 	m.agent.Tasks().SetSessionID(m.sessionID)
+	m.agent.SetSessionID(m.sessionID)
 	if m.prog == nil {
 		return // headless (tests)
 	}
@@ -2523,6 +2527,7 @@ func (m *model) prepareTurn(text string) (string, []llm.ContentPart) {
 	if m.mcpMgr != nil {
 		sys += m.mcpMgr.InstructionsBlock()
 	}
+	sys += memory.PromptBlock(memory.Installation(), memory.Session(m.sessionID))
 	m.agent.Messages[0].Content = sys
 	expanded := expandMentions(expandSkills(text, sk))
 	if !m.supportsVision() {
@@ -2848,8 +2853,11 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 		m.setGoal("")    // clear before detaching so the old session's goal is dropped too
 		m.sessionID = "" // next turn starts a fresh session
 		m.agent.Tasks().SetSessionID("")
+		m.agent.SetSessionID("")
 		m.saved = 1
 		m.append(dimStyle.Render("(conversation cleared)"))
+	case "/memory":
+		m.memoryCommand(fields[1:])
 	case "/compact":
 		if len(fields) > 1 {
 			m.compactCommand(fields[1:])
@@ -3071,7 +3079,7 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 		m.append(m.doctorReport())
 	case "/help":
 		m.append(dimStyle.Render(
-			"/model <name> [provider] — switch model\n/context-doctor — audit what a fresh session injects (skills, MCP, tool schemas) and its token cost\n/mcp [name] [reconnect|enable|disable] — MCP servers: status, reconnect, toggle\n/compact [model] [provider]|off — compact now, or pick the compaction model (off restores the default); compaction level: ctrl+p › Compaction level\n/mouse — toggle mouse capture (on = wheel scroll + clicks, drag to copy)\n/theme [light|dark|auto] — color scheme (bare opens the switcher)\n/tasks [id] — background subagents: focus the dock, or open one subagent's live view (ctrl+t toggles dock focus)\n/resume [id] — resume a previous session\n/fork [name] — copy this conversation into a new session (pick a point in the rewind picker with f)\n/rename [title] — retitle this session\n/goal <text> — keep working until the goal is met (resume | clear | rounds <n>|default [--global])\n/goal-from-context [n] — formulate a goal from the last n messages (default 8) and work until it's met\n/clear — reset conversation\n/cd [dir] — change working directory (bare prints it)\n/pwd — print working directory\n!<cmd> — run a shell command locally; output lands in the transcript and the conversation\n/quit — exit\ntab — complete · ctrl+t — focus the subagents dock (↑/↓ select, enter opens, esc backs out) · ctrl+o — toggle thinking tokens · ctrl+e — expand the last tool result · ctrl+j / shift+enter — newline · ctrl+v — paste image · esc — interrupt the agent · esc esc (idle) — rewind the conversation (↑/↓ browse, enter rewinds, f forks) · while busy with queued messages: ↑/↓ select, del removes · PgUp/PgDn — scroll · wheel — scroll · drag — select/copy text · ctrl+c ctrl+c — quit"))
+			"/model <name> [provider] — switch model\n/context-doctor — audit what a fresh session injects (skills, MCP, tool schemas) and its token cost\n/mcp [name] [reconnect|enable|disable] — MCP servers: status, reconnect, toggle\n/compact [model] [provider]|off — compact now, or pick the compaction model (off restores the default); compaction level: ctrl+p › Compaction level\n/mouse — toggle mouse capture (on = wheel scroll + clicks, drag to copy)\n/theme [light|dark|auto] — color scheme (bare opens the switcher)\n/tasks [id] — background subagents: focus the dock, or open one subagent's live view (ctrl+t toggles dock focus)\n/resume [id] — resume a previous session\n/fork [name] — copy this conversation into a new session (pick a point in the rewind picker with f)\n/rename [title] — retitle this session\n/goal <text> — keep working until the goal is met (resume | clear | rounds <n>|default [--global])\n/goal-from-context [n] — formulate a goal from the last n messages (default 8) and work until it's met\n/clear — reset conversation\n/memory [n] [session] — saved memories: list what's injected each turn, mark entry n done\n/cd [dir] — change working directory (bare prints it)\n/pwd — print working directory\n!<cmd> — run a shell command locally; output lands in the transcript and the conversation\n/quit — exit\ntab — complete · ctrl+t — focus the subagents dock (↑/↓ select, enter opens, esc backs out) · ctrl+o — toggle thinking tokens · ctrl+e — expand the last tool result · ctrl+j / shift+enter — newline · ctrl+v — paste image · esc — interrupt the agent · esc esc (idle) — rewind the conversation (↑/↓ browse, enter rewinds, f forks) · while busy with queued messages: ↑/↓ select, del removes · PgUp/PgDn — scroll · wheel — scroll · drag — select/copy text · ctrl+c ctrl+c — quit"))
 	case "/model":
 		if len(fields) < 2 {
 			m.openModelPicker()

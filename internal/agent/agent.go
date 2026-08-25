@@ -65,6 +65,8 @@ type Agent struct {
 	// goroutine; the TUI reads it between turns via TodosJSON.
 	Todos []Todo
 
+	sessionID string // scopes the per-session memory file (SetSessionID)
+
 	// toolsMu guards mcpTools: the MCP manager's OnChange can fire (server
 	// settled) while a Turn is streaming, and Turn reads the tool set per
 	// request.
@@ -183,6 +185,7 @@ func New(client *llm.Client, model string, maxTokens int, systemPrompt string) *
 	}
 	a.Tools = append(a.Tools, taskTool(a))
 	a.Tools = append(a.Tools, todoTool(a))
+	a.Tools = append(a.Tools, memoryTools(a)...)
 	a.files = newFileLocks()
 	a.bg = newTaskRegistry()
 	return a

@@ -34,6 +34,12 @@ Guidelines:
 - Be concise in your responses
 - Show file paths clearly when working with files
 
+Operating rules:
+- The tool set changes turn to turn: MCP servers connect and drop, skills come and go. Never assume a tool exists because it did earlier — check the current set before calling it.
+- Bias toward acting on reasonable assumptions. But after about three failed attempts on the same blocker, stop and escalate it plainly instead of looping.
+- When the user shares a durable preference or fact about themselves, save it with remember; drop stale entries with forget.
+- Git hygiene: review the staged diff for secrets before committing, never run git add . — stage only the files you intend — and never force-push.
+
 Current working directory: %s`, wd)
 	// the skills block is appended fresh each turn by the TUI, so newly added
 	// skills are picked up without restarting

@@ -148,8 +148,8 @@ worth doing now.
 
 **High value, cheap:**
 
-- [ ] `remember`/`forget` memory tools: one agent-global store (`~/.loopy/memory.json` or a KV row), injected as a developer message every turn with hard caps (exo: 200 entries × 600 chars, oldest dropped), corrupt store degrades loudly instead of bricking prompt assembly (exo `exo/tools/memory-tools.ts`)
-- [ ] Stealable `me.md` operating rules for the system prompt: "the tool set changes turn to turn — never assume a tool exists because it did earlier"; "after ~3 failed attempts on the same blocker, escalate plainly instead of looping"; git hygiene ("never `git add .`, review staged diff for secrets, never force-push") (exo `exo/prompts/me.md`)
+- [x] `remember`/`forget` memory tools: plain markdown files (`~/.loopy/memory.md` installation scope + `~/.loopy/sessions/<id>.memory.md` session scope), checkbox bullets the user can edit by hand; `forget` strikes rather than deletes; always-inject with a hard cap (50 × 300 chars — the cap is the retrieval strategy, no embeddings); `/memory` lists both scopes numbered and marks entries done from the TUI (exo `exo/tools/memory-tools.ts`, redesigned to markdown after the opencode finding: opencode has no memory tool, its answer is AGENTS.md — files you own and diff)
+- [x] Stealable `me.md` operating rules for the system prompt: "the tool set changes turn to turn — never assume a tool exists because it did earlier"; "after ~3 failed attempts on the same blocker, escalate plainly instead of looping"; git hygiene ("never `git add .`, review staged diff for secrets, never force-push") (exo `exo/prompts/me.md`) — shipped in `cmd/loopy/main.go`'s system prompt, plus a remember/forget pointer
 
 **Later (needs `/goal` usage to justify the always-on turn):**
 
