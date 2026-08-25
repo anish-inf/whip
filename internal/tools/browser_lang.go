@@ -62,7 +62,17 @@ func splitStatements(code string) []string {
 		}
 		cur.Reset()
 	}
-	for _, r := range code {
+	// A chunk that starts with # or // is a comment — strip it BEFORE the
+	// quote-aware scan, or an apostrophe inside a comment ("TextEdit's")
+	// opens a phantom quote that swallows the following real statement.
+	var lines []string
+	for _, ln := range strings.Split(code, "\n") {
+		if t := strings.TrimSpace(ln); strings.HasPrefix(t, "#") || strings.HasPrefix(t, "//") {
+			continue
+		}
+		lines = append(lines, ln)
+	}
+	for _, r := range strings.Join(lines, "\n") {
 		switch {
 		case escaped:
 			cur.WriteRune(r)

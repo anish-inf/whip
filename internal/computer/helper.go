@@ -216,7 +216,7 @@ func (h *Helper) spawn() error {
 	var hs struct {
 		Version string `json:"version"`
 	}
-	if err := h.callLocked(context.Background(), "handshake", nil, &hs); err != nil {
+	if err := h.callLocked(context.Background(), "handshake", map[string]any{"token": h.token}, &hs); err != nil {
 		h.kill()
 		return fmt.Errorf("loopy-computer handshake: %w", err)
 	}
