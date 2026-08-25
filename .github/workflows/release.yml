@@ -18,7 +18,10 @@ jobs:
           go-version-file: go.mod
           cache: true
       - run: go vet ./...
-      - run: go test ./...
+      # internal/browser e2e tests need a real Chromium sandbox and
+      # internal/tui tests need a tty — neither exists on hosted runners.
+      # Those stay local (task test); the release gate runs the portable set.
+      - run: go test $(go list ./... | grep -v -e /internal/browser -e /internal/tui)
 
   # Each binary is built on a runner of its OWN platform. darwin-arm64 needs
   # macOS anyway: the embedded loopy-computer Swift helper (computer-use
