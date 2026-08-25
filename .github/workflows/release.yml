@@ -49,14 +49,17 @@ jobs:
             goarch: arm64
             asset: loopy-darwin-arm64
             driver: true
-          # darwin-x64: the Swift helper only ships arm64 (Apple Silicon is
-          # the supported computer-use target); Intel macs get the core CLI
-          # with the osascript fallback tier.
-          - os: macos-13
+          # darwin-x64 is cross-built on ubuntu (macOS Intel hosted runners
+          # are scarce and stall releases — clocked-in hit this too). Pure-Go
+          # cross-compile, no Swift helper on x64: Intel macs get the core
+          # CLI with the osascript fallback tier. Can't run a darwin binary
+          # on linux, so no smoke here; the arm64 mac job proves the mac path.
+          - os: ubuntu-latest
             goos: darwin
             goarch: amd64
             asset: loopy-darwin-x64
             driver: false
+            smoke: false
     runs-on: ${{ matrix.os }}
     env:
       GOOS: ${{ matrix.goos }}
@@ -88,6 +91,7 @@ jobs:
             -o "dist/release/${{ matrix.asset }}" ./cmd/loopy
 
       - name: Smoke test on a clean directory
+        if: ${{ matrix.smoke != false }}
         run: |
           bin="$RUNNER_TEMP/${{ matrix.asset }}"
           cp "dist/release/${{ matrix.asset }}" "$bin"
