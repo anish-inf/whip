@@ -181,14 +181,16 @@ pieces (policy, language, Chrome-AS script construction) test anywhere.
   instructions"); ours is programmatic — mutating helpers return the
   affected state in the same call.
 
-## v1 build order
+## v1 build order — STATUS
 
-1. `internal/computer` package: policy + osascript helper + mini-language
-   reuse from browser_exec.
-2. Chrome-via-AppleScript helpers (tabs/goto/js) — the flagship "drive the
-   user's open Chrome with zero CDP setup" path.
-3. `computer_exec` tool + trust gate (folder trust, codex-shaped per-app
-   allow/deny in config).
+1. ✅ `internal/computer` package: policy + osascript helper + mini-language
+   reuse from browser_exec (browser_lang.go's parser is now shared).
+2. ✅ Chrome-via-AppleScript helpers (tabs/goto/js) — the flagship "drive the
+   user's open Chrome with zero CDP setup" path. `internal/computer/chrome.go`.
+3. ✅ `computer_exec` tool + trust gate (codex-shaped per-app allow/deny in
+   config via `computer.allow`/`computer.deny`/`defaultDeny`; consent hook
+   installed — v1 surfaces the ask in-transcript, interactive approve-prompt
+   is the follow-up).
 4. AX tree reads (System Events UI scripting via osascript for v1 — no CGO).
 5. CGEvent/cliclick input + screencapture screenshots → ScreenshotSink.
 6. Guardian-style review: defer — loopy's trust model + step-label

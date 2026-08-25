@@ -94,7 +94,7 @@ func BrowserExec() Tool {
 // which keeps parsing trivially safe and the semantics obvious. js(...)
 // snippets are passed through to the page verbatim.
 func runBrowserCode(ctx context.Context, b browser.Backend, code, session string) (string, error) {
-	prog, err := parseBrowserProgram(code)
+	prog, err := parseHelperProgram(code)
 	if err != nil {
 		return "", err
 	}

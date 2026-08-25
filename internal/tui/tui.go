@@ -23,6 +23,7 @@ import (
 
 	"github.com/context-labs/loopy/internal/agent"
 	"github.com/context-labs/loopy/internal/browser"
+	"github.com/context-labs/loopy/internal/computer"
 	"github.com/context-labs/loopy/internal/config"
 	"github.com/context-labs/loopy/internal/llm"
 	"github.com/context-labs/loopy/internal/lsp"
@@ -294,6 +295,9 @@ func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string) (s
 		m.lspMgr = lsp.NewManager(lsp.FromConfigMap(cfg.LSPServers))
 		tools.LSP = m.lspMgr
 	}
+	// computer-use: the per-app consent prompt — installed once, here, where
+	// the model exists (buildAgent is package-level and has no m).
+	tools.ComputerApprover = m.computerConsent
 	if dir, derr := config.Dir(); derr == nil {
 		if st, serr := session.Open(dir + "/sessions.db"); serr == nil {
 			m.store = st
@@ -864,6 +868,13 @@ func buildAgent(cfg *config.Config, modelName, provName, sysPrompt string) (*age
 	// Native browser subsystem: install the shared manager once; screenshots
 	// steer back into the conversation as image parts on vision models.
 	ag.BrowserDisabled = cfg.Browser.Enabled != nil && !*cfg.Browser.Enabled
+	// Computer-use: per-app consent policy from config; the consent prompt is
+	// installed below (the model never touches an unapproved app silently).
+	ag.ComputerDisabled = cfg.Computer.Enabled != nil && !*cfg.Computer.Enabled
+	if !ag.ComputerDisabled {
+		defaultDeny := cfg.Computer.DefaultDeny == nil || *cfg.Computer.DefaultDeny
+		tools.ComputerPolicy = computer.NewPolicy(cfg.Computer.Allow, cfg.Computer.Deny, defaultDeny)
+	}
 	if !ag.BrowserDisabled && tools.Browser == nil {
 		mode := browser.ModeLive
 		switch cfg.Browser.Mode {
@@ -1433,7 +1444,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.flushThink()
 		m.flushCurrent()
 		args := msg.args
-		if msg.name == "browser_exec" {
+		if msg.name == "browser_exec" || msg.name == "computer_exec" {
 			// Surface the step label (the code's first # comment) as the row
 			// text instead of raw JSON — the model writes it for the user.
 			if label := browserStepLabel(msg.args); label != "" {

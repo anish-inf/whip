@@ -124,6 +124,22 @@ type Config struct {
 	LSPServers map[string]LSPServer `json:"lsp,omitempty"`
 	// Browser configures the native browser subsystem (internal/browser).
 	Browser BrowserConfig `json:"browser,omitempty"`
+	// Computer configures computer-use (internal/computer): which apps
+	// computer_exec may drive.
+	Computer ComputerConfig `json:"computer,omitempty"`
+}
+
+// ComputerConfig gates computer_exec per app (codex's per-bundle-id model).
+type ComputerConfig struct {
+	// Allow lists app names/bundle ids approved without prompting
+	// (e.g. ["Google Chrome", "com.google.Chrome"]).
+	Allow []string `json:"allow,omitempty"`
+	// Deny lists apps never drivable (wins over allow).
+	Deny []string `json:"deny,omitempty"`
+	// DefaultDeny (default true) requires approval for unlisted apps.
+	DefaultDeny *bool `json:"defaultDeny,omitempty"`
+	// Enabled false hides computer_exec entirely.
+	Enabled *bool `json:"enabled,omitempty"`
 }
 
 // BrowserConfig controls browser_exec: which Chrome to drive and the

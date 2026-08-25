@@ -5,7 +5,7 @@ import (
 )
 
 func TestParseBrowserProgram(t *testing.T) {
-	prog, err := parseBrowserProgram(`# Searching example for widgets
+	prog, err := parseHelperProgram(`# Searching example for widgets
 goto("https://example.com"); waitLoad()
 print(js("document.title"))
 fill('#q', "paper, towels")
@@ -20,7 +20,7 @@ press(Enter)`)
 		t.Errorf("stmt0: %+v", prog[0])
 	}
 	// semicolon inside a js string must not split
-	jsStmt := prog[2].args[0].(browserStmt)
+	jsStmt := prog[2].args[0].(helperStmt)
 	if jsStmt.name != "js" || jsStmt.args[0] != "document.title" {
 		t.Errorf("nested js: %+v", jsStmt)
 	}
@@ -33,7 +33,7 @@ press(Enter)`)
 }
 
 func TestParseSemicolonsInsideStrings(t *testing.T) {
-	prog, err := parseBrowserProgram(`js("(()=>{const a=1;return a})()"); click(10, 20.5)`)
+	prog, err := parseHelperProgram(`js("(()=>{const a=1;return a})()"); click(10, 20.5)`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,22 +46,22 @@ func TestParseSemicolonsInsideStrings(t *testing.T) {
 }
 
 func TestParseCommentsAndBlanksOnly(t *testing.T) {
-	if _, err := parseBrowserProgram("# just a label\n// nothing else"); err == nil {
+	if _, err := parseHelperProgram("# just a label\n// nothing else"); err == nil {
 		t.Fatal("comment-only program must fail")
 	}
 }
 
 func TestParseMalformed(t *testing.T) {
-	if _, err := parseBrowserProgram(`goto("https://x" `); err == nil {
+	if _, err := parseHelperProgram(`goto("https://x" `); err == nil {
 		t.Fatal("unbalanced call must fail")
 	}
-	if _, err := parseBrowserProgram(`print()`); err == nil {
+	if _, err := parseHelperProgram(`print()`); err == nil {
 		t.Fatal("empty print must fail")
 	}
 }
 
 func TestParseArraysAndBools(t *testing.T) {
-	prog, err := parseBrowserProgram(`upload("#f", ["/tmp/a.png", "/tmp/b.png"]); waitFor(".ok", true)`)
+	prog, err := parseHelperProgram(`upload("#f", ["/tmp/a.png", "/tmp/b.png"]); waitFor(".ok", true)`)
 	if err != nil {
 		t.Fatal(err)
 	}

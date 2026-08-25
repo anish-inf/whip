@@ -16,22 +16,23 @@ import (
 	"github.com/context-labs/loopy/internal/browser"
 )
 
-// browserStmt is one parsed helper call.
-type browserStmt struct {
+// helperStmt is one parsed helper call (shared by browser_exec and
+// computer_exec — same mini-language).
+type helperStmt struct {
 	name string
 	args []any
 	raw  string // original text, for error messages
 }
 
-func (s browserStmt) String() string { return s.raw }
+func (s helperStmt) String() string { return s.raw }
 
 // parseBrowserProgram splits code into statements. Lines starting with #
 // or // are comments (the first one doubles as the TUI step label).
 // Semicolons split multiple calls on one line, except inside js("...")
 // string arguments (the JSON string parser handles that; splitting is
 // quote-aware).
-func parseBrowserProgram(code string) ([]browserStmt, error) {
-	var out []browserStmt
+func parseHelperProgram(code string) ([]helperStmt, error) {
+	var out []helperStmt
 	for _, chunk := range splitStatements(code) {
 		chunk = strings.TrimSpace(chunk)
 		if chunk == "" || strings.HasPrefix(chunk, "#") || strings.HasPrefix(chunk, "//") {
@@ -89,32 +90,32 @@ func splitStatements(code string) []string {
 
 // parseStatement parses `name(arg, ...)` or `print(expr)` where expr is a
 // nested helper call or string literal.
-func parseStatement(s string) (browserStmt, error) {
+func parseStatement(s string) (helperStmt, error) {
 	open := strings.Index(s, "(")
 	if open <= 0 || !strings.HasSuffix(s, ")") {
-		return browserStmt{}, fmt.Errorf("malformed statement %q — expected name(args...)", s)
+		return helperStmt{}, fmt.Errorf("malformed statement %q — expected name(args...)", s)
 	}
 	name := strings.TrimSpace(s[:open])
 	inner := s[open+1 : len(s)-1]
 	if name == "print" {
 		inner = strings.TrimSpace(inner)
 		if inner == "" {
-			return browserStmt{}, fmt.Errorf("print() needs an argument")
+			return helperStmt{}, fmt.Errorf("print() needs an argument")
 		}
 		// print(helper(...)) nests the call; print("lit") passes the string.
 		if strings.Contains(inner, "(") && strings.HasSuffix(inner, ")") {
 			sub, err := parseStatement(inner)
 			if err != nil {
-				return browserStmt{}, err
+				return helperStmt{}, err
 			}
-			return browserStmt{name: "print", args: []any{sub}, raw: s}, nil
+			return helperStmt{name: "print", args: []any{sub}, raw: s}, nil
 		}
 	}
 	args, err := parseArgs(inner)
 	if err != nil {
-		return browserStmt{}, fmt.Errorf("%s: %w", s, err)
+		return helperStmt{}, fmt.Errorf("%s: %w", s, err)
 	}
-	return browserStmt{name: name, args: args, raw: s}, nil
+	return helperStmt{name: name, args: args, raw: s}, nil
 }
 
 // parseArgs parses a JSON-ish argument list: strings (double or single
@@ -196,10 +197,10 @@ func parseValue(s string) (any, error) {
 
 // exec runs one statement, returning printed output and an optional
 // screenshot JPEG.
-func (s browserStmt) exec(ctx context.Context, b browser.Backend) (out string, shot []byte, err error) {
+func (s helperStmt) exec(ctx context.Context, b browser.Backend) (out string, shot []byte, err error) {
 	if s.name == "print" {
 		switch a := s.args[0].(type) {
-		case browserStmt:
+		case helperStmt:
 			sub, shot, err := a.exec(ctx, b)
 			return sub, shot, err
 		case string:
