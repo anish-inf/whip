@@ -65,3 +65,71 @@ func TestChromeTabsParse(t *testing.T) {
 		t.Fatalf("separator parse: %v", f)
 	}
 }
+
+// On non-macOS every osascript-tier entry point must fail with
+// ErrUnsupportedPlatform (the platform gate fires before any exec).
+func TestUnsupportedPlatform(t *testing.T) {
+	if Available() {
+		t.Skip("darwin: osascript tier would drive the real desktop")
+	}
+	if _, err := osascript(`return "x"`); !errors.Is(err, ErrUnsupportedPlatform) {
+		t.Errorf("osascript: %v", err)
+	}
+	if _, err := Tell("Finder", "activate"); !errors.Is(err, ErrUnsupportedPlatform) {
+		t.Errorf("Tell: %v", err)
+	}
+	calls := map[string]error{}
+	_, _, calls["ChromeActive"] = ChromeActive()
+	_, calls["ChromeTabs"] = ChromeTabs()
+	calls["ChromeGoto"] = ChromeGoto("https://example.com")
+	calls["ChromeNewTab"] = ChromeNewTab("https://example.com")
+	calls["ChromeActivateTab"] = ChromeActivateTab(1, 2)
+	calls["ChromeCloseTab"] = ChromeCloseTab(1, 2)
+	calls["ChromeBack"] = ChromeBack()
+	calls["ChromeReload"] = ChromeReload()
+	_, calls["ChromeFindTab"] = ChromeFindTab("example")
+	_, calls["ChromeState"] = ChromeState()
+	for name, err := range calls {
+		if !errors.Is(err, ErrUnsupportedPlatform) {
+			t.Errorf("%s: want ErrUnsupportedPlatform, got %v", name, err)
+		}
+	}
+	// The platform error must NOT be rewritten to the Chrome-toggle guidance.
+	if _, err := ChromeJS("1+1"); !errors.Is(err, ErrUnsupportedPlatform) || errors.Is(err, ErrJSFromAppleEvents) {
+		t.Errorf("ChromeJS: %v", err)
+	}
+	if _, err := ensureHelperBinary(); !errors.Is(err, ErrUnsupportedPlatform) {
+		t.Errorf("ensureHelperBinary: %v", err)
+	}
+}
+
+func TestPolicyDenyAndSummary(t *testing.T) {
+	p := NewPolicy([]string{"Google Chrome"}, nil, false)
+	if got := p.Summary(); got != "google chrome" {
+		t.Errorf("Summary: %q", got)
+	}
+	p.Approve("Safari")
+	if got := p.Summary(); !strings.Contains(got, "google chrome") || !strings.Contains(got, "safari (session)") {
+		t.Errorf("Summary with session approval: %q", got)
+	}
+	// Deny blocks for the session and revokes a session approval.
+	p.Deny("Safari")
+	if err := p.Check("Safari"); err == nil || !strings.Contains(err.Error(), "policy") {
+		t.Errorf("session-denied app must fail: %v", err)
+	}
+	// Approve clears a session deny again.
+	p.Approve("Safari")
+	if err := p.Check("Safari"); err != nil {
+		t.Errorf("re-approval must unblock: %v", err)
+	}
+	if got := NewPolicy(nil, nil, true).Summary(); got != "none" {
+		t.Errorf("empty Summary: %q", got)
+	}
+}
+
+func TestApprovalNeededError(t *testing.T) {
+	e := &ApprovalNeeded{App: "Safari"}
+	if !strings.Contains(e.Error(), `"Safari"`) || !strings.Contains(e.Error(), "computer.allow") {
+		t.Errorf("ApprovalNeeded.Error: %q", e.Error())
+	}
+}

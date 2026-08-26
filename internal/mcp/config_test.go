@@ -440,3 +440,23 @@ func TestValidAndDefaults(t *testing.T) {
 		t.Error("command+url should be invalid")
 	}
 }
+
+func TestDefaultCodexPath(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if got, want := defaultCodexPath(), filepath.Join(home, ".codex", "config.toml"); got != want {
+		t.Fatalf("defaultCodexPath() = %q, want %q", got, want)
+	}
+}
+
+func TestToInt(t *testing.T) {
+	if n, ok := toInt(int64(7)); !ok || n != 7 {
+		t.Errorf("toInt(int64) = %d, %v", n, ok)
+	}
+	if n, ok := toInt(float64(30)); !ok || n != 30 {
+		t.Errorf("toInt(float64) = %d, %v", n, ok)
+	}
+	if _, ok := toInt("30"); ok {
+		t.Error("toInt(string) should be !ok")
+	}
+}

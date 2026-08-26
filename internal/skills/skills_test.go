@@ -51,3 +51,22 @@ func TestScanAndPromptBlock(t *testing.T) {
 		t.Fatalf("spec-legal description must not be truncated")
 	}
 }
+
+// DefaultDirs: project .agents/skills (from the cwd) then user ~/.whip/skills.
+func TestDefaultDirs(t *testing.T) {
+	wd := t.TempDir()
+	home := t.TempDir()
+	t.Chdir(wd)
+	t.Setenv("HOME", home)
+
+	dirs := DefaultDirs()
+	if len(dirs) != 2 {
+		t.Fatalf("DefaultDirs() = %v", dirs)
+	}
+	if dirs[0] != filepath.Join(wd, ".agents", "skills") {
+		t.Fatalf("project dir: %q", dirs[0])
+	}
+	if dirs[1] != filepath.Join(home, ".whip", "skills") {
+		t.Fatalf("user dir: %q", dirs[1])
+	}
+}

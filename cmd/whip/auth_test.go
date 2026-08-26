@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/context-labs/whip/internal/config"
@@ -143,6 +145,24 @@ func TestAuthCLIDispatch(t *testing.T) {
 	t.Setenv(config.OpenRouterEnvVar, "")
 	if err := authCLI([]string{"openrouter"}); err == nil {
 		t.Error("openrouter with no key should error, not hang or write config")
+	}
+}
+
+// Without a terminal (tests, pipes) offerShellExport prints the manual
+// export line and never touches the rc file — appending needs a confirmed
+// [y/N], which needs a TTY.
+func TestOfferShellExportNonTTY(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	for _, shell := range []string{"/bin/zsh", "/bin/fish"} { // known rc target and none
+		t.Setenv("SHELL", shell)
+		out := captureStdout(t, func() { offerShellExport("sk-or-test") })
+		if !strings.Contains(out, "export "+config.OpenRouterEnvVar+"=sk-or-test") {
+			t.Errorf("SHELL=%s: manual export line missing:\n%s", shell, out)
+		}
+	}
+	if _, err := os.Stat(home + "/.zshrc"); !os.IsNotExist(err) {
+		t.Error("non-tty run must not create or modify the rc file")
 	}
 }
 

@@ -462,3 +462,188 @@ func TestCompactionEvent(t *testing.T) {
 		t.Fatalf("after deleting the event, raw history should load: %+v", got)
 	}
 }
+
+func TestTodosAndUsagePersistence(t *testing.T) {
+	st, err := Open(filepath.Join(t.TempDir(), "s.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	id, _ := st.Create("/tmp", "m", "p")
+	st.Save(id, 1, []llm.Message{{Role: "system"}, {Role: "user", Content: "q"}}, "m", "p")
+
+	if got := st.Todos(id); got != "" {
+		t.Fatalf("fresh session should have no todos, got %q", got)
+	}
+	plan := `[{"content":"write tests","status":"in_progress"}]`
+	if err := st.SetTodos(id, plan); err != nil {
+		t.Fatal(err)
+	}
+	if got := st.Todos(id); got != plan {
+		t.Fatalf("todos did not round-trip: %q", got)
+	}
+	// whole-list overwrite, and "" clears
+	if err := st.SetTodos(id, ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := st.Todos(id); got != "" {
+		t.Fatalf("todos not cleared: %q", got)
+	}
+	// unknown session reads as empty, never an error
+	if got := st.Todos("nope"); got != "" {
+		t.Fatalf("unknown session todos: %q", got)
+	}
+
+	// usage totals are absolute and survive a reload
+	if err := st.SetUsage(id, 100, 40, 7); err != nil {
+		t.Fatal(err)
+	}
+	meta, _, err := st.Load(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.UsageIn != 100 || meta.UsageCached != 40 || meta.UsageOut != 7 {
+		t.Fatalf("usage did not round-trip: %+v", meta)
+	}
+}
+
+func TestClearMessages(t *testing.T) {
+	st, err := Open(filepath.Join(t.TempDir(), "s.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	id, _ := st.Create("/tmp", "m", "p")
+	st.Save(id, 0, []llm.Message{
+		{Role: "system", Content: "sys"},
+		{Role: "user", Content: "q"},
+		{Role: "assistant", Content: "a"},
+	}, "m", "p")
+
+	if err := st.ClearMessages(id); err != nil {
+		t.Fatal(err)
+	}
+	if raw := st.RawMessages(id); len(raw) != 0 {
+		t.Fatalf("messages should be gone, got %d", len(raw))
+	}
+	// the session row survives: Load resolves it, with no messages
+	meta, msgs, err := st.Load(id)
+	if err != nil || meta.ID != id || len(msgs) != 0 {
+		t.Fatalf("session row must survive ClearMessages: %+v %d %v", meta, len(msgs), err)
+	}
+}
+
+func TestSnapshotRoundTrip(t *testing.T) {
+	st, err := Open(filepath.Join(t.TempDir(), "s.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	id, _ := st.Create("/tmp", "m", "p")
+
+	if got := st.Snapshots(id); len(got) != 0 {
+		t.Fatalf("fresh session should have no snapshots, got %v", got)
+	}
+	if err := st.SetSnapshot(id, 1, "stash@{0}"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetSnapshot(id, 3, "stash@{1}"); err != nil {
+		t.Fatal(err)
+	}
+	// same seq replaces
+	if err := st.SetSnapshot(id, 1, "stash@{9}"); err != nil {
+		t.Fatal(err)
+	}
+	got := st.Snapshots(id)
+	if len(got) != 2 || got[1] != "stash@{9}" || got[3] != "stash@{1}" {
+		t.Fatalf("snapshots: %v", got)
+	}
+	// "" deletes one turn's ref
+	if err := st.SetSnapshot(id, 3, ""); err != nil {
+		t.Fatal(err)
+	}
+	if got = st.Snapshots(id); len(got) != 1 || got[1] != "stash@{9}" {
+		t.Fatalf("after delete: %v", got)
+	}
+
+	// DeleteFrom trims snapshots along with messages
+	st.SetSnapshot(id, 5, "stash@{2}")
+	if err := st.DeleteFrom(id, 5); err != nil {
+		t.Fatal(err)
+	}
+	if got = st.Snapshots(id); len(got) != 1 || got[1] != "stash@{9}" {
+		t.Fatalf("DeleteFrom should trim snapshots too: %v", got)
+	}
+
+	// ClearSnapshots drops the rest
+	if err := st.ClearSnapshots(id); err != nil {
+		t.Fatal(err)
+	}
+	if got = st.Snapshots(id); len(got) != 0 {
+		t.Fatalf("ClearSnapshots left rows: %v", got)
+	}
+}
+
+func TestScheduleRoundTrip(t *testing.T) {
+	st, err := Open(filepath.Join(t.TempDir(), "s.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	id, _ := st.Create("/tmp", "m", "p")
+
+	if got := st.Schedules(id); len(got) != 0 {
+		t.Fatalf("fresh session should have no schedules, got %v", got)
+	}
+	anchor := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	id1, err := st.AddSchedule(id, "@every 10m", "check the build", anchor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id2, err := st.AddSchedule(id, "@at 2026-01-03T00:00:00Z", "one shot", anchor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id1 != 1 || id2 != 2 {
+		t.Fatalf("ids should increment per session: %d %d", id1, id2)
+	}
+	// ids are per-session: another session starts at 1 again
+	other, _ := st.Create("/tmp", "m", "p")
+	if oid, _ := st.AddSchedule(other, "@every 1h", "p", anchor); oid != 1 {
+		t.Fatalf("other session's first schedule id: %d", oid)
+	}
+
+	scs := st.Schedules(id)
+	if len(scs) != 2 {
+		t.Fatalf("schedules: %+v", scs)
+	}
+	if scs[0].ID != 1 || scs[0].Schedule != "@every 10m" || scs[0].Prompt != "check the build" {
+		t.Fatalf("schedule 1: %+v", scs[0])
+	}
+	if !scs[0].Anchor.Equal(anchor) {
+		t.Fatalf("anchor did not round-trip: %v", scs[0].Anchor)
+	}
+	if !scs[0].LastFire.IsZero() {
+		t.Fatalf("never-fired task should have zero LastFire: %v", scs[0].LastFire)
+	}
+
+	fired := anchor.Add(10 * time.Minute)
+	if err := st.MarkFired(id, id1, fired); err != nil {
+		t.Fatal(err)
+	}
+	scs = st.Schedules(id)
+	if !scs[0].LastFire.Equal(fired) {
+		t.Fatalf("MarkFired did not stamp: %v", scs[0].LastFire)
+	}
+	if !scs[1].LastFire.IsZero() {
+		t.Fatalf("MarkFired touched the wrong row: %+v", scs[1])
+	}
+
+	if err := st.DeleteSchedule(id, id1); err != nil {
+		t.Fatal(err)
+	}
+	scs = st.Schedules(id)
+	if len(scs) != 1 || scs[0].ID != id2 {
+		t.Fatalf("after delete: %+v", scs)
+	}
+}

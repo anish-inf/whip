@@ -58,17 +58,14 @@ jobs:
             -coverprofile=cover.out -coverpkg="$(echo $PKGS | tr ' ' ',')" $PKGS
 
       # Self-contained coverage floor — no external service or token, so it
-      # works identically on fork PRs. The gate fails if total statement
-      # coverage drops below the floor. Ratchet the floor up over time as
-      # coverage improves (don't lower it). NOTE: calibrate the floor against
-      # what CI runners measure, not a local run — environment-dependent tests
-      # skip on runners, so CI reads ~1% lower (69.4% when the "~70%" floor
-      # landed, which turned main red on arrival).
-      - name: coverage floor (69%)
+      # works identically on fork PRs. Baseline today is ~84%; the gate fails
+      # if total statement coverage drops below the floor. Ratchet the floor up
+      # over time as coverage improves (don't lower it).
+      - name: coverage floor (80%)
         run: |
           total=$(go tool cover -func=cover.out | awk '/^total:/ {gsub("%","",$3); print $3}')
           echo "total coverage: ${total}%"
-          awk -v t="$total" -v floor=69 'BEGIN { if (t+0 < floor) { printf "coverage %.1f%% is below the %d%% floor\n", t, floor; exit 1 } }'
+          awk -v t="$total" -v floor=80 'BEGIN { if (t+0 < floor) { printf "coverage %.1f%% is below the %d%% floor\n", t, floor; exit 1 } }'
 
       - name: go mod tidy is a no-op
         run: |
