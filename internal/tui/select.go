@@ -107,17 +107,15 @@ func cellSlice(s string, off, n int) string {
 	return b.String()
 }
 
-// selText extracts the selected text, one line per covered row, dropping the
-// blank separator rows between blocks and trimming trailing whitespace per
-// line (terminals do the same on copy).
+// selText extracts the selected text, one line per covered row — blank rows
+// included, so paragraph breaks and block separators paste as the blank lines
+// they are on screen (a terminal's native copy does the same). Trailing
+// whitespace is trimmed per line, trailing blank lines from the whole copy.
 func (m *model) selText(s selection) string {
 	lo, hi := selOrder(s)
 	var lines []string
 	for r := lo.row; r <= hi.row; r++ {
 		ln := m.contentLine(r)
-		if strings.TrimSpace(ln) == "" && r != lo.row && r != hi.row {
-			continue // blank separator between blocks
-		}
 		start, end := selCols(lo, hi, r, ansi.StringWidth(ln))
 		lines = append(lines, strings.TrimRight(cellSlice(ln, start, end-start), " \t"))
 	}

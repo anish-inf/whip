@@ -139,7 +139,7 @@ func TestPressOutsideTranscriptNotConsumed(t *testing.T) {
 	m.handleMouseSelect(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: 0, Y: blockRowY(m, m.blocks[0].y0)})
 	m.handleMouseSelect(tea.MouseMsg{Action: tea.MouseActionMotion, Button: tea.MouseButtonLeft, X: 80, Y: m.height - 1})
 	m.handleMouseSelect(tea.MouseMsg{Action: tea.MouseActionRelease, Button: tea.MouseButtonLeft, X: 80, Y: m.height - 1})
-	if got := m.selText(*m.sel); got != "hello world\nsecond block here" {
+	if got := m.selText(*m.sel); got != "hello world\n\nsecond block here" {
 		t.Fatalf("overshooting drag selected %q", got)
 	}
 }
@@ -156,14 +156,34 @@ func TestDragBackward(t *testing.T) {
 	}
 }
 
-// A multi-row drag joins lines and skips the blank separator between blocks.
+// A multi-row drag copies the rows AS RENDERED: the blank separator between
+// blocks pastes as a blank line, exactly like a terminal's native copy.
 func TestDragAcrossBlocks(t *testing.T) {
 	m := selTestModel()
 	m.handleMouseSelect(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: 6, Y: blockRowY(m, m.blocks[0].y0)})
 	m.handleMouseSelect(tea.MouseMsg{Action: tea.MouseActionMotion, Button: tea.MouseButtonLeft, X: 6, Y: blockRowY(m, m.blocks[1].y0)})
 	m.handleMouseSelect(tea.MouseMsg{Action: tea.MouseActionRelease, Button: tea.MouseButtonLeft, X: 6, Y: blockRowY(m, m.blocks[1].y0)})
-	if got := m.selText(*m.sel); got != "world\nsecond" {
-		t.Fatalf("cross-block drag selected %q, want %q", got, "world\nsecond")
+	if got := m.selText(*m.sel); got != "world\n\nsecond" {
+		t.Fatalf("cross-block drag selected %q, want %q", got, "world\n\nsecond")
+	}
+}
+
+// Blank rows INSIDE a block (paragraph breaks in rendered markdown) must
+// survive the copy — dropping them glued multi-paragraph output into one
+// run-on text (the missing-newlines bug).
+func TestCopyKeepsParagraphBreaks(t *testing.T) {
+	m := compactCmdModel()
+	m.Update(mkWinSize(80, 30))
+	m.append("para one\n\npara two")
+	tm, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(" ")}) // settle layout
+	m = tm.(*model)
+	m.input.SetValue("")
+	b := m.blocks[0]
+	m.handleMouseSelect(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: 0, Y: blockRowY(m, b.y0)})
+	m.handleMouseSelect(tea.MouseMsg{Action: tea.MouseActionMotion, Button: tea.MouseButtonLeft, X: 8, Y: blockRowY(m, b.y1)})
+	m.handleMouseSelect(tea.MouseMsg{Action: tea.MouseActionRelease, Button: tea.MouseButtonLeft, X: 8, Y: blockRowY(m, b.y1)})
+	if got := m.selText(*m.sel); got != "para one\n\npara two" {
+		t.Fatalf("paragraph break lost: copied %q", got)
 	}
 }
 
