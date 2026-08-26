@@ -22,6 +22,55 @@ func TestReadWriteJSONRoundTrip(t *testing.T) {
 	}
 }
 
+// TestParseJSONCEdgeCases pins the stripper's tricky cases: comment markers
+// and commas inside string literals must survive, escapes must not end a
+// string early, and malformed sources must be reported rather than silently
+// producing broken JSON.
+func TestParseJSONCEdgeCases(t *testing.T) {
+	ok := []struct {
+		name, src, want string
+	}{
+		{"escaped quote", `{"a": "say \"hi\", ok"}`, `say "hi", ok`},
+		{"escaped backslash", `{"a": "c:\\path\\"}`, `c:\path\`},
+		{"comment marker in string", `{"a": "http://x/y"}`, "http://x/y"},
+		{"division-like slash", `{"a": "1"} // 2/3`, "1"},
+		{"block comment", `{/* skip */ "a": "1"}`, "1"},
+		{"trailing comma", `{"a": "1",}`, "1"},
+		{"comma inside string", `{"a": ", }"}`, ", }"},
+	}
+	for _, c := range ok {
+		t.Run(c.name, func(t *testing.T) {
+			var v struct {
+				A string `json:"a"`
+			}
+			if err := parseJSONC([]byte(c.src), &v); err != nil {
+				t.Fatalf("parse %s: %v", c.src, err)
+			}
+			if v.A != c.want {
+				t.Fatalf("got %q, want %q", v.A, c.want)
+			}
+		})
+	}
+
+	// a lone slash that starts neither comment form is left alone
+	if got, err := stripJSONC([]byte(`{"a":"1"}/`)); err != nil || string(got) != `{"a":"1"}/` {
+		t.Fatalf("bare slash: %q %v", got, err)
+	}
+
+	bad := map[string]string{
+		"unterminated block comment": `{"a": 1} /* nope`,
+		"unterminated string":        `{"a": "nope}`,
+	}
+	for name, src := range bad {
+		t.Run(name, func(t *testing.T) {
+			var v map[string]any
+			if err := parseJSONC([]byte(src), &v); err == nil {
+				t.Fatalf("%s should be an error", name)
+			}
+		})
+	}
+}
+
 func TestReadJSONMissingFileErrors(t *testing.T) {
 	t.Setenv("WHIP_HOME", t.TempDir())
 	var v map[string]any

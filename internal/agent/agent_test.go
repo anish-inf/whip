@@ -872,10 +872,48 @@ func TestManualCompactFiresEvent(t *testing.T) {
 		)
 	}
 	var fired bool
-	if err := ag.ManualCompact(context.Background(), Events{OnCompact: func(took, kept int) { fired = true }}); err != nil {
+	var gotSummary string
+	ev := Events{
+		OnCompact:   func(took, kept int) { fired = true },
+		OnCompacted: func(summary string, cutoff int) { gotSummary = summary },
+	}
+	if err := ag.ManualCompact(context.Background(), ev); err != nil {
 		t.Fatalf("manual compact: %v", err)
 	}
 	if !fired {
 		t.Fatal("OnCompact should fire for ManualCompact")
+	}
+	if gotSummary != "sim" {
+		t.Fatalf("OnCompacted summary = %q", gotSummary)
+	}
+
+	// Too little history: the error surfaces instead of a silent no-op.
+	empty := New(llm.New(srv.URL, "k"), "m", 100, "sys")
+	if err := empty.ManualCompact(context.Background(), Events{}); err == nil {
+		t.Fatal("ManualCompact on a fresh agent should report too little history")
+	}
+}
+
+// MessagesSnapshot hands out a copy — mutating it must not touch the agent's
+// transcript (the TUI reads it while a turn runs).
+func TestMessagesSnapshotIsACopy(t *testing.T) {
+	ag := New(nil, "m", 0, "sys")
+	ag.AppendUser("hello")
+	snap := ag.MessagesSnapshot()
+	if len(snap) != len(ag.Messages) {
+		t.Fatalf("snapshot len %d, agent %d", len(snap), len(ag.Messages))
+	}
+	snap[0].Content = "clobbered"
+	if ag.Messages[0].Content == "clobbered" {
+		t.Fatal("snapshot must not alias the agent's messages")
+	}
+}
+
+func TestTruncateField(t *testing.T) {
+	if got := truncateField("  a\nb  ", 10); got != "a b" {
+		t.Errorf("newlines/trim: %q", got)
+	}
+	if got := truncateField("abcdefghij", 5); got != "abcd…" {
+		t.Errorf("truncation: %q", got)
 	}
 }

@@ -254,6 +254,22 @@ func main() {
 			reply(enc, id, next)
 		case "type":
 			reply(enc, id, map[string]any{"action": "typed", "stateUnavailable": "no AX grant", "hint": "grant it"})
+		case "press", "scroll", "set", "select", "menu":
+			// press("...", "BADJSON") answers with a non-AppState result so the
+			// tool's fold-in unmarshal fails.
+			if k, _ := params["key"].(string); k == "BADJSON" {
+				reply(enc, id, "not a state object")
+				continue
+			}
+			// Echo every param back as an AX row so the test can assert what
+			// the tool actually sent over the wire.
+			var rows []map[string]any
+			i := 0
+			for k, v := range params {
+				rows = append(rows, map[string]any{"index": i, "role": "AXParam", "title": k, "value": fmt.Sprint(v)})
+				i++
+			}
+			reply(enc, id, map[string]any{"generation": 2, "app": "TestApp", "elements": rows})
 		case "screenshot":
 			reply(enc, id, map[string]any{"jpegBase64": "aGVsbG8=", "bytes": 5})
 		default:
@@ -345,5 +361,166 @@ func TestNativeTierWithFakeHelper(t *testing.T) {
 	out, err = runComputerCode(ctx, `screenshot("TestApp")`)
 	if err != nil || !strings.Contains(out, "screenshot captured: 5 bytes") {
 		t.Fatalf("screenshot: %q %v", out, err)
+	}
+}
+
+// Every remaining native mutation forwards its arguments to the helper under
+// the app + generation the tool tracks (the fake echoes the params back).
+func TestNativeMutationParams(t *testing.T) {
+	fakeNativeHelper(t)
+	withComputerPolicy(t, computer.NewPolicy([]string{"TestApp"}, nil, true))
+	ctx := t.Context()
+
+	// state() first so the generation guard has something to send.
+	if _, err := runComputerCode(ctx, `state("TestApp")`); err != nil {
+		t.Fatalf("state: %v", err)
+	}
+	for _, tc := range []struct {
+		code string
+		want []string
+	}{
+		{`press("TestApp", "super+c")`, []string{`title="key" value="super+c"`, `title="gen" value="2"`, `title="app" value="TestApp"`}},
+		{`scroll("TestApp", 4, "down", 3)`, []string{`title="index" value="4"`, `title="dir" value="down"`, `title="clicks" value="3"`}},
+		{`scroll("TestApp", 4)`, []string{`title="index" value="4"`}}, // optional dir/clicks omitted
+		{`set("TestApp", 2, "hello")`, []string{`title="index" value="2"`, `title="value" value="hello"`}},
+		{`select("TestApp", 2, "word")`, []string{`title="index" value="2"`, `title="target" value="word"`}},
+		{`menu("TestApp", 2, "AXShowMenu")`, []string{`title="index" value="2"`, `title="action" value="AXShowMenu"`}},
+	} {
+		out, err := runComputerCode(ctx, tc.code)
+		if err != nil {
+			t.Errorf("%s: %v", tc.code, err)
+			continue
+		}
+		for _, w := range tc.want {
+			if !strings.Contains(out, w) {
+				t.Errorf("%s: missing %s in:\n%s", tc.code, w, out)
+			}
+		}
+	}
+
+	// scroll's optional dir/clicks are dropped when absent.
+	if out, err := runComputerCode(ctx, `scroll("TestApp", 4)`); err != nil || strings.Contains(out, `title="dir"`) {
+		t.Errorf("scroll without dir: %q %v", out, err)
+	}
+
+	// Pixel-coordinate click (the fallback arity) reaches the helper as x/y.
+	if _, err := runComputerCode(ctx, `state("TestApp")`); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runComputerCode(ctx, `click("TestApp", 10, 20)`)
+	if err != nil {
+		t.Fatalf("pixel click: %v", err)
+	}
+	if !strings.Contains(out, "generation=3") {
+		t.Errorf("pixel click state fold-in: %s", out)
+	}
+
+	// ax() reads the tree without capturing a screenshot (unlike state()).
+	if out, err := runComputerCode(ctx, `ax("TestApp")`); err != nil || strings.Contains(out, "screenshot(s) attached") {
+		t.Errorf("ax: %q %v", out, err)
+	}
+
+	// A helper reply that isn't an AppState surfaces as an unmarshal error
+	// rather than a silent success.
+	if _, err := runComputerCode(ctx, `press("TestApp", "BADJSON")`); err == nil || !strings.Contains(err.Error(), "cannot unmarshal") {
+		t.Errorf("non-state reply: %v", err)
+	}
+
+	// A denied app never reaches the helper.
+	withComputerPolicy(t, computer.NewPolicy(nil, []string{"TestApp"}, true))
+	if _, err := runComputerCode(ctx, `press("TestApp", "Return")`); err == nil || !strings.Contains(err.Error(), "policy") {
+		t.Errorf("denied mutation: %v", err)
+	}
+}
+
+// Argument validation and the policy gate fire before any platform call, for
+// every helper that takes arguments.
+func TestComputerArgAndGateErrors(t *testing.T) {
+	withComputerPolicy(t, computer.NewPolicy(nil, []string{"Google Chrome", "Denied"}, true))
+	ctx := t.Context()
+	for _, tc := range []struct{ code, want string }{
+		// missing/ill-typed args
+		{`state()`, "missing arg 1"},
+		{`screenshot()`, "missing arg 1"},
+		{`click()`, "missing arg 1"},
+		{`click("A", "x")`, "must be a number"},
+		{`click("A", "x", "y")`, "must be a number"},
+		{`click("A", 1, "y")`, "must be a number"},
+		{`type()`, "missing arg 1"},
+		{`type("A")`, "missing arg 2"},
+		{`press()`, "missing arg 1"},
+		{`press("A")`, "missing arg 2"},
+		{`scroll()`, "missing arg 1"},
+		{`scroll("A")`, "missing arg 2"},
+		{`set()`, "missing arg 1"},
+		{`set("A")`, "missing arg 2"},
+		{`set("A", 1)`, "missing arg 3"},
+		{`select()`, "missing arg 1"},
+		{`select("A")`, "missing arg 2"},
+		{`menu()`, "missing arg 1"},
+		{`menu("A", "x")`, "must be a number"},
+		{`menu("A", 1)`, "missing arg 3"},
+		{`tell()`, "missing arg 1"},
+		{`tell("A")`, "missing arg 2"},
+		{`chrome_goto()`, "missing arg 1"},
+		{`chrome_activate("w", 1)`, "must be a number"},
+		{`chrome_activate(1, "i")`, "must be a number"},
+		{`chrome_close(1, "i")`, "must be a number"},
+		{`chrome_find()`, "missing arg 1"},
+		// policy gate
+		{`state("Denied")`, "policy"},
+		{`screenshot("Denied")`, "policy"},
+		{`chrome_state()`, "policy"},
+		{`chrome_tabs()`, "policy"},
+		{`chrome_back()`, "policy"},
+		{`chrome_reload()`, "policy"},
+		{`chrome_js("1+1")`, "policy"},
+		{`chrome_find("x")`, "policy"},
+		{`chrome_goto("http://93.184.216.34/")`, "policy"},
+		{`chrome_activate(1, 2)`, "policy"},
+		{`chrome_close(1, 2)`, "policy"},
+	} {
+		_, err := runComputerCode(ctx, tc.code)
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: want %q, got %v", tc.code, tc.want, err)
+		}
+	}
+
+	// Non-string args are coerced for string parameters: numbers formatted,
+	// anything else JSON-encoded.
+	if _, err := runComputerCode(ctx, `tell("Denied", 42)`); err == nil || !strings.Contains(err.Error(), "policy") {
+		t.Errorf("number arg coercion: %v", err)
+	}
+	if _, err := runComputerCode(ctx, `tell("Denied", true)`); err == nil || !strings.Contains(err.Error(), "policy") {
+		t.Errorf("bool arg coercion: %v", err)
+	}
+}
+
+// With no policy installed at all the tool refuses rather than defaulting to
+// allow.
+func TestGateAppNoPolicy(t *testing.T) {
+	withComputerPolicy(t, nil)
+	if err := gateApp("Anything"); err == nil || !strings.Contains(err.Error(), "no policy installed") {
+		t.Errorf("nil policy: %v", err)
+	}
+}
+
+// Native helpers that need the driver report the missing-driver guidance
+// instead of a confusing RPC error.
+func TestNativeHelpersWithoutDriver(t *testing.T) {
+	if computer.Available() {
+		t.Skip("darwin: an embedded helper may exist")
+	}
+	t.Setenv("WHIP_COMPUTER_BIN", "")
+	computer.ResetShared()
+	t.Cleanup(computer.ResetShared)
+	withComputerPolicy(t, computer.NewPolicy([]string{"TestApp"}, nil, true))
+	for _, code := range []string{
+		`permissions()`, `state("TestApp")`, `ax("TestApp")`, `screenshot("TestApp")`,
+		`click("TestApp", 0)`,
+	} {
+		if _, err := runComputerCode(t.Context(), code); err == nil || !strings.Contains(err.Error(), "whip-computer driver") {
+			t.Errorf("%s: %v", code, err)
+		}
 	}
 }

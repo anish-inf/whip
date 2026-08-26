@@ -66,6 +66,35 @@ func TestTodowriteValidation(t *testing.T) {
 	}
 }
 
+// An oversized list, malformed arguments, and the clear-the-plan call.
+func TestTodowriteEdges(t *testing.T) {
+	a := New(nil, "m", 0, "sys")
+
+	var big strings.Builder
+	big.WriteString(`{"todos":[`)
+	for i := range maxTodos + 1 {
+		if i > 0 {
+			big.WriteString(",")
+		}
+		big.WriteString(`{"content":"step","status":"pending"}`)
+	}
+	big.WriteString(`]}`)
+	if out := callTodowrite(t, a, big.String()); !strings.Contains(out, "consolidate steps") {
+		t.Errorf("oversized list: %q", out)
+	}
+	if out := callTodowrite(t, a, `{"todos":`); !strings.HasPrefix(out, "Error:") {
+		t.Errorf("malformed args: %q", out)
+	}
+
+	callTodowrite(t, a, `{"todos":[{"content":"do it","status":"pending"}]}`)
+	if out := callTodowrite(t, a, `{"todos":[]}`); out != "Plan cleared." {
+		t.Errorf("clear: %q", out)
+	}
+	if a.todoBlock() != "" || a.TodosJSON() != "" {
+		t.Error("cleared plan should inject and serialize nothing")
+	}
+}
+
 // End-to-end: a plan set via the tool reaches the model request as an
 // ephemeral system message each round, and a.Messages stays clean.
 func TestTodowriteEndToEnd(t *testing.T) {
