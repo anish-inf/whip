@@ -506,7 +506,8 @@ func TestTasksDockShowsSettledTasks(t *testing.T) {
 }
 
 // The dock eats into the transcript's height exactly by its rendered rows
-// (plus the blank separator), so it never overlaps or underflows the layout.
+// (the blank above the input is part of the base chrome), so it never
+// overlaps or underflows the layout.
 // Go through Update: its deferred layout() always runs, whereas a direct
 // layout() call skips the resize when the dims coincidentally match.
 func TestLayoutReservesDockHeight(t *testing.T) {
@@ -524,8 +525,8 @@ func TestLayoutReservesDockHeight(t *testing.T) {
 	if dockRows != 1 {
 		t.Fatalf("one unfocused task should be one dock row, got %d", dockRows)
 	}
-	if m.vp.Height != base-dockRows-1 {
-		t.Fatalf("viewport should shrink by dock+separator: base=%d now=%d dock=%d", base, m.vp.Height, dockRows)
+	if m.vp.Height != base-dockRows {
+		t.Fatalf("viewport should shrink by exactly the dock rows: base=%d now=%d dock=%d", base, m.vp.Height, dockRows)
 	}
 	// and the dock renders on its own row above the input, not glued to it
 	v := stripAll(m.View())
@@ -541,8 +542,8 @@ func TestLayoutReservesDockHeight(t *testing.T) {
 	m.tasksFocus = true // the focused hint row costs one more
 	tm, _ = m.Update(taskUpdateMsg{})
 	m = tm.(*model)
-	if m.vp.Height != base-dockRows-2 {
-		t.Fatalf("focused dock should cost the hint row too: %d vs %d", m.vp.Height, base-dockRows-2)
+	if m.vp.Height != base-dockRows-1 {
+		t.Fatalf("focused dock should cost the hint row too: %d vs %d", m.vp.Height, base-dockRows-1)
 	}
 }
 

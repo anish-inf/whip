@@ -1313,7 +1313,14 @@ func (m *model) growInput() {
 // growing the input box with its content so the whole prompt stays visible.
 func (m *model) layout() {
 	m.growInput()
-	chrome := 4 + m.input.Height() // header + tips + blanks + input + bottom pad
+	// Always-on rows around the viewport: header, tips, blank below tips,
+	// blank above the input, the input itself, blank above the status line,
+	// and the status line. This count MUST match viewBody exactly: if chrome
+	// undercounts, a full transcript renders MORE rows than the terminal has,
+	// every frame scrolls the top rows off-screen, and all mouse math lands
+	// that many rows above the pointer (the off-by-two drag-select bug: the
+	// status line + its blank were never budgeted).
+	chrome := 6 + m.input.Height()
 	if m.iactive != nil {
 		// input box is hidden while a command has the terminal; drop its height
 		// and the leading blank line View inserts before it.
@@ -1337,6 +1344,15 @@ func (m *model) layout() {
 	if len(m.queue) > 0 {
 		chrome += len(m.queue) + 1
 	}
+	if m.rew != nil {
+		chrome += lipgloss.Height(m.rewindView()) + 1 // + the extra blank below
+	}
+	if m.quit1 {
+		chrome++ // "press ctrl+c again to quit"
+	}
+	if m.escClr || (m.esc1 && m.rew == nil && m.namePrompt == nil) {
+		chrome++ // esc hint line (same conditions as viewBody)
+	}
 	if m.taskVP != nil {
 		m.refreshTaskVP() // the task pane owns the free area; size it to fit
 	}
@@ -1349,7 +1365,7 @@ func (m *model) layout() {
 		if m.tasksFocus {
 			m.dockSkip++
 		}
-		chrome += m.dockRows + 1 // strip + the blank line above the input
+		chrome += m.dockRows // the blank above the input is already in the base
 	}
 	// Floor the viewport width too: a degenerate m.width (1–4 cols) would set
 	// the viewport to 1 col and re-slice the transcript into a one-char strip,
