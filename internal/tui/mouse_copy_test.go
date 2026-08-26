@@ -15,14 +15,17 @@ func TestShiftMousePassesThrough(t *testing.T) {
 	m.appendRaw(blockTool, "line1\nline2")
 	m.refreshVP()
 	before := m.blocks[0].expanded
+	rowY := blockRowY(m, m.blocks[0].y0)
 	// shift+click on the tool block must NOT expand it (native selection owns it)
-	tm, _ := m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, Shift: true, X: 5, Y: m.blocks[0].y0 + m.contentPad() - m.vp.YOffset + 2})
+	tm, _ := m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, Shift: true, X: 5, Y: rowY})
 	m = tm.(*model)
 	if m.blocks[0].expanded != before {
 		t.Fatal("shift+click must not toggle the block — it belongs to native selection")
 	}
-	// plain click still toggles
-	tm, _ = m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: 5, Y: m.blocks[0].y0 + m.contentPad() - m.vp.YOffset + 2})
+	// plain click still toggles (release-without-drag replays it)
+	tm, _ = m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: 5, Y: rowY})
+	m = tm.(*model)
+	tm, _ = m.Update(tea.MouseMsg{Action: tea.MouseActionRelease, Button: tea.MouseButtonLeft, X: 5, Y: rowY})
 	m = tm.(*model)
 	if m.blocks[0].expanded == before {
 		t.Fatal("plain click should toggle the block")
