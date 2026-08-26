@@ -49,9 +49,9 @@ func completions(val string, models, providers, skillCands, efforts []cand) (hea
 	case strings.HasPrefix(val, "/") && len(fields) == 0:
 		cands = filterPrefix(commands, token)
 	case len(fields) == 1 && fields[0] == "/model":
-		cands = filterPrefix(append([]cand{{"refresh", "refetch provider model catalogs"}}, models...), token)
+		cands = filterFuzzy(append([]cand{{"refresh", "refetch provider model catalogs"}}, models...), token)
 	case len(fields) == 2 && fields[0] == "/model" && fields[1] != "refresh":
-		cands = filterPrefix(providers, token)
+		cands = filterFuzzy(providers, token)
 	case len(fields) == 1 && fields[0] == "/effort":
 		cands = filterPrefix(efforts, token)
 	case len(fields) == 1 && fields[0] == "/compact":
@@ -87,6 +87,30 @@ func filterPrefix(all []cand, prefix string) []cand {
 		if strings.HasPrefix(c.Text, prefix) {
 			out = append(out, c)
 		}
+	}
+	return out
+}
+
+// filterFuzzy matches candidates tiered like fuzzyFiles (substring, then
+// subsequence), best tier first. An empty prefix keeps the original order.
+func filterFuzzy(all []cand, q string) []cand {
+	if q == "" {
+		return append([]cand(nil), all...)
+	}
+	type hit struct {
+		c    cand
+		tier int
+	}
+	var hits []hit
+	for _, c := range all {
+		if tier := matchTier(c.Text, q); tier >= 0 {
+			hits = append(hits, hit{c, tier})
+		}
+	}
+	sort.SliceStable(hits, func(a, b int) bool { return hits[a].tier < hits[b].tier })
+	out := make([]cand, 0, len(hits))
+	for _, h := range hits {
+		out = append(out, h.c)
 	}
 	return out
 }

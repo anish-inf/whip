@@ -43,22 +43,86 @@ func (p *modelPicker) view() []modelItem {
 }
 
 // applyQuery refilters items; empty query restores the full list. Matches are
-// case-insensitive substrings of the model or provider name. A query with no
-// matches yields an empty (non-nil) filtered slice — nil means "no query".
+// fuzzy (tiered: substring of the model or provider, then subsequence), ranked
+// best-first. A query with no matches yields an empty (non-nil) filtered
+// slice — nil means "no query".
 func (p *modelPicker) applyQuery() {
 	q := strings.ToLower(strings.TrimSpace(p.query))
 	if q == "" {
 		p.filtered = nil
 		return
 	}
-	out := make([]modelItem, 0, len(p.items))
+	type hit struct {
+		item modelItem
+		tier int
+	}
+	var hits []hit
 	for _, it := range p.items {
-		if strings.Contains(strings.ToLower(it.model), q) ||
-			strings.Contains(strings.ToLower(it.provider), q) {
-			out = append(out, it)
+		if tier := bestTier(it.model, it.provider, q); tier >= 0 {
+			hits = append(hits, hit{it, tier})
 		}
 	}
-	p.filtered = out
+	sort.SliceStable(hits, func(a, b int) bool { return hits[a].tier < hits[b].tier })
+	p.filtered = make([]modelItem, 0, len(hits))
+	for _, h := range hits {
+		p.filtered = append(p.filtered, h.item)
+	}
+}
+
+// bestTier is the best (lowest non-negative) match tier of the model and
+// provider names against query q; -1 if neither matches.
+func bestTier(model, provider, q string) int {
+	tm, tp := matchTier(model, q), matchTier(provider, q)
+	switch {
+	case tm >= 0 && tp >= 0:
+		return min(tm, tp)
+	case tm >= 0:
+		return tm
+	default:
+		return tp
+	}
+}
+
+// resolveModelFuzzy fuzzy-matches name against the known model routes (config +
+// catalog). Exact names pass through untouched. A single best-tier hit wins;
+// several equally-good distinct models report false with the candidates named.
+func resolveModelFuzzy(cfg *config.Config, name string) (string, bool, []string) {
+	if _, ok := cfg.Models[name]; ok {
+		return name, true, nil
+	}
+	for p := range cfg.Providers {
+		if cat, ok := config.LoadCatalogs()[p]; ok && cat.Find(name) != nil {
+			return name, true, nil // exact catalog id
+		}
+	}
+	q := strings.ToLower(name)
+	type hit struct {
+		model string
+		tier  int
+	}
+	var hits []hit
+	for _, it := range buildModelItems(cfg) {
+		if tier := bestTier(it.model, it.provider, q); tier >= 0 {
+			hits = append(hits, hit{it.model, tier})
+		}
+	}
+	if len(hits) == 0 {
+		return "", false, nil
+	}
+	best := hits[0].tier
+	seen := map[string]bool{}
+	var models []string
+	for _, h := range hits {
+		if h.tier != best || seen[h.model] {
+			continue
+		}
+		seen[h.model] = true
+		models = append(models, h.model)
+	}
+	if len(models) > 1 {
+		return "", false, models
+	}
+	return models[0], true, nil
 }
 
 // buildModelItems flattens the config into selectable routes, models sorted

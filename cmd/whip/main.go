@@ -55,6 +55,7 @@ func main() {
 	versionFlag := flag.Bool("version", false, "print version")
 	resumeFlag := flag.String("resume", "", "resume a previous session by id (or unique prefix)")
 	benchFlag := flag.Bool("bench", false, "do full startup init (config, routing, key, agent) then exit; for `task benchmark`")
+	cautiousFlag := flag.Bool("cautious", false, "ask before running commands / writing files")
 	flag.Parse()
 
 	if *versionFlag {
@@ -134,7 +135,7 @@ func main() {
 		return
 	}
 	tui.Version = version // /report names the build in the bug-report bundle
-	sessionID, err := tui.Run(cfg, *modelFlag, *providerFlag, systemPrompt(), *resumeFlag)
+	sessionID, err := tui.Run(cfg, *modelFlag, *providerFlag, systemPrompt(), *resumeFlag, *cautiousFlag)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "whip:", err)
 		os.Exit(1)

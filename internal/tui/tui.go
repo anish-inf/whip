@@ -232,7 +232,7 @@ func newInput() textarea.Model {
 
 // Run starts the interactive session. It returns the id of the session that
 // was active on exit ("" if nothing was said).
-func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string) (string, error) {
+func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string, cautious bool) (string, error) {
 	// Trust gate first: before whip reads a single file, ask whether this
 	// folder's contents may steer the model. Persisted per absolute path in
 	// ~/.whip/trusted.json (claude-code's per-project trust dialog).
@@ -320,7 +320,10 @@ func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string) (s
 	// computer-use: the per-app consent prompt — installed once, here, where
 	// the model exists (buildAgent is package-level and has no m).
 	tools.ComputerApprover = m.computerConsent
-	m.installPermGate()
+	// Permission prompts are opt-in (--cautious); without it tools run free.
+	if cautious {
+		m.installPermGate()
+	}
 	if dir, derr := config.Dir(); derr == nil {
 		if st, serr := session.Open(dir + "/sessions.db"); serr == nil {
 			m.store = st
@@ -3352,7 +3355,17 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 		if len(fields) > 2 {
 			prov = fields[2]
 		}
-		m.switchModel(fields[1], prov)
+		name := fields[1]
+		resolved, ok, alts := resolveModelFuzzy(m.cfg, name)
+		if !ok {
+			if len(alts) > 0 {
+				m.append(errStyle.Render(fmt.Sprintf("ambiguous model %q — did you mean: %s?", name, strings.Join(alts, ", "))))
+				return m, nil
+			}
+			m.append(errStyle.Render("unknown model " + name))
+			return m, nil
+		}
+		m.switchModel(resolved, prov)
 	default:
 		m.append(errStyle.Render("unknown command " + fields[0]))
 	}
