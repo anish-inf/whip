@@ -18,8 +18,8 @@ import (
 type Events struct {
 	OnText      func(delta string)               // assistant text as it streams
 	OnThink     func(delta string)               // reasoning/thinking tokens as they stream
-	OnToolStart func(id, name, args string)   // a tool call is about to run
-	OnToolEnd   func(id, name, result string) // a tool call finished
+	OnToolStart func(id, name, args string)      // a tool call is about to run
+	OnToolEnd   func(id, name, result string)    // a tool call finished
 	OnSteer     func(text string)                // a steered message was injected
 	OnCompact   func(took, kept int)             // context was auto-compacted (messages removed/kept)
 	OnCompacted func(summary string, cutoff int) // a compaction ran; record it (raw log survives)
