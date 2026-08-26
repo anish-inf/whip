@@ -170,6 +170,10 @@ type model struct {
 	mcpMgr       *mcp.Manager              // MCP server connections; nil when none configured
 	mcpSeen      map[string]bool           // servers whose first settle was announced
 	lspMgr       *lsp.Manager              // LSP diagnostics source for write/edit tool output
+	// skillScan is the skills discovery seam (skills.Scan over DefaultDirs in
+	// the real model): a field so the context doctor can be tested against
+	// temp-dir skills instead of whatever the test machine happens to have.
+	skillScan func() []skills.Skill
 
 	irunner *interactiveRunner // installed on tools.InteractiveBash at startup
 	iactive *interactive       // in-flight interactive command; nil when idle
@@ -271,6 +275,7 @@ func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string) (s
 		input: ti, spin: spinner.New(spinner.WithSpinner(spinner.Dot)), follow: true, saved: 1,
 		catalogs: config.LoadCatalogs(), mouseOn: mouseOn, now: time.Now, showThinking: showThinking,
 		compactModel: cfg.CompactModel, compactProv: cfg.CompactProvider,
+		skillScan: func() []skills.Skill { return skills.Scan(skills.DefaultDirs()...) },
 	}
 	m.applyCompactModel()
 	m.agent.CompactThreshold = compactThresholdFor(cfg)
