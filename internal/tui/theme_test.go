@@ -139,7 +139,7 @@ func TestRenderedLinesSelfTerminate(t *testing.T) {
 	SetUnknownTheme()
 	defer SetLightTheme(false)
 	out := renderMarkdown("## Head\n\n| A | B |\n|---|---|\n| 1 | 2 |", 60)
-	for _, l := range strings.Split(out, "\n") {
+	for l := range strings.SplitSeq(out, "\n") {
 		if strings.Contains(l, "\x1b[") && !strings.HasSuffix(l, "\x1b[0m") {
 			t.Errorf("styled line not reset-terminated: %q", l)
 		}

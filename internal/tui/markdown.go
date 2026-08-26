@@ -224,7 +224,7 @@ func neutralStyle() glamouransi.StyleConfig {
 	st.ImageText.Color = new("8")
 	st.Code.Color = new("1") // inline code: ANSI red, no chip
 	st.Code.BackgroundColor = nil
-	st.CodeBlock.StylePrimitive.Color = nil
+	st.CodeBlock.Color = nil
 	st.CodeBlock.Chroma = nil
 	return st
 }
