@@ -136,7 +136,7 @@ func TestLoadSessionReplaysHistory(t *testing.T) {
 	iu := strings.Index(joined, "user_chunk")
 	it := strings.Index(joined, "tool_call(")
 	ia := strings.LastIndex(joined, "agent_chunk")
-	if !(iu < it && it < ia) {
+	if iu >= it || it >= ia {
 		t.Errorf("replay out of order: %s", joined)
 	}
 

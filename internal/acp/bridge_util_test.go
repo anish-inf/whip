@@ -1,7 +1,6 @@
 package acp
 
 import (
-	"encoding/json"
 	"os"
 
 	"github.com/context-labs/whip/internal/llm"
@@ -42,5 +41,3 @@ type errStringT string
 func (e errStringT) Error() string { return string(e) }
 
 func errString(s string) error { return errStringT(s) }
-
-var _ = json.RawMessage{} // permission_test uses json.RawMessage in closures

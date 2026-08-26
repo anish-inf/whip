@@ -9,7 +9,6 @@ package acp
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -37,11 +36,10 @@ type permAnswer struct {
 }
 
 type fakeClient struct {
-	mu       sync.Mutex
-	updates  []acp.SessionNotification
-	perms    []acp.RequestPermissionRequest
-	answer   func(acp.RequestPermissionRequest) permAnswer // nil = allow-once
-	blockRel chan struct{}                                 // optional: gate prompt completions in the provider
+	mu      sync.Mutex
+	updates []acp.SessionNotification
+	perms   []acp.RequestPermissionRequest
+	answer  func(acp.RequestPermissionRequest) permAnswer // nil = allow-once
 }
 
 func (c *fakeClient) SessionUpdate(_ context.Context, n acp.SessionNotification) error {
@@ -304,5 +302,3 @@ func factoryFor(srv *httptest.Server, ts []tools.Tool) Factory {
 		return ag, mcp.NewManager(nil), nil
 	}
 }
-
-var errSentinel = errors.New("sentinel")
