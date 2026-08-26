@@ -50,6 +50,10 @@ type Agent struct {
 	// proactively; 0 uses defaultCompactThreshold.
 	CompactThreshold float64
 
+	// MaxTurns caps the tool-call loop (rounds of model→tools→model) so a
+	// scripted run can't run away. 0 = uncapped (the TUI default).
+	MaxTurns int
+
 	mu        sync.Mutex
 	pending   []pendingSteer // steered user messages awaiting injection
 	compacted bool           // a compaction already happened this turn — don't retry-loop
@@ -279,7 +283,12 @@ func (a *Agent) turn(ctx context.Context, input string, parts []llm.ContentPart,
 	a.msgsMu.Lock()
 	a.Messages = append(a.Messages, msg)
 	a.msgsMu.Unlock()
+	rounds := 0
 	for {
+		if a.MaxTurns > 0 && rounds >= a.MaxTurns {
+			return "", fmt.Errorf("max turns (%d) reached — the model kept calling tools; re-run with a higher -max-turns or a more specific prompt", a.MaxTurns)
+		}
+		rounds++
 		if err := a.maybeCompact(ctx, ev); err != nil {
 			return "", err
 		}

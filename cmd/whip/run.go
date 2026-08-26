@@ -8,6 +8,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -27,8 +28,15 @@ func runCLI(args []string) error {
 	format := fs.String("format", "text", "output format: text (stream the reply) or json (newline-delimited event stream)")
 	modelFlag := fs.String("m", "", "model name from ~/.whip/config.json (default: defaultModel)")
 	providerFlag := fs.String("p", "", "provider to route the model through (default: model's first provider)")
+	resumeFlag := fs.String("resume", "", "continue this session id (see `whip sessions`) instead of starting fresh")
+	systemFlag := fs.String("system", "", "override the system prompt for this run")
+	systemFileFlag := fs.String("system-file", "", "read the system prompt from this file (wins over -system)")
+	maxTurnsFlag := fs.Int("max-turns", 0, "cap the tool-call loop at N rounds (0 = uncapped); a capped run exits non-zero")
+	timeoutFlag := fs.Duration("timeout", 0, "wall-clock cap on the whole run (e.g. 30s, 5m); 0 = no timeout")
+	quietFlag := fs.Bool("quiet", false, "suppress the stderr tool/session notes (clean stdout for -format json piping)")
+	noSessionFlag := fs.Bool("no-session", false, "run without persisting a session (one-off jobs don't clutter whip sessions)")
 	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, "usage: whip run [--format text|json] [-m model] [-p provider] \"prompt\"")
+		fmt.Fprintln(os.Stderr, "usage: whip run [--format text|json] [-m model] [-p provider] [-resume id] [-system text | -system-file path] [-max-turns N] [-timeout dur] [-quiet] [-no-session] \"prompt\"")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -84,7 +92,22 @@ func runCLI(args []string) error {
 
 	client := llm.New(prov.BaseURL, key)
 	client.MaxRetries = cfg.MaxRetries
-	ag := agent.New(client, apiID, mdl.MaxTokens, systemPrompt())
+
+	// System prompt: -system-file wins over -system (a file is the deliberate
+	// choice; a stray -system alongside it is almost certainly stale).
+	sys := systemPrompt()
+	if *systemFlag != "" {
+		sys = *systemFlag
+	}
+	if *systemFileFlag != "" {
+		data, err := os.ReadFile(*systemFileFlag)
+		if err != nil {
+			return fmt.Errorf("-system-file: %w", err)
+		}
+		sys = string(data)
+	}
+
+	ag := agent.New(client, apiID, mdl.MaxTokens, sys)
 	ag.ModelName, ag.Provider = modelName, provName
 	// Headless runs have no one to answer a consent prompt: computer_exec
 	// stays disabled (no interactive approver is ever installed).
@@ -94,30 +117,51 @@ func runCLI(args []string) error {
 	if ag.Effort == "" {
 		ag.Effort = "medium"
 	}
+	ag.MaxTurns = *maxTurnsFlag
 
-	// Land the turn in the session store like a TUI turn (resumable with
-	// `whip --resume <id>`), without requiring a TTY or the trust prompt.
-	// The store is best-effort: a run never fails over session persistence.
+	// Session: resume an existing one, or create a fresh one — unless
+	// -no-session (a one-off cron job shouldn't clutter whip sessions).
 	var store *session.Store
 	var sessionID string
-	if dir, derr := config.Dir(); derr == nil {
-		if st, serr := session.Open(dir + "/sessions.db"); serr == nil {
-			store = st
-			defer func() { _ = st.Close() }()
-			if cwd, cerr := os.Getwd(); cerr == nil {
-				if id, ierr := st.Create(cwd, modelName, provName); ierr == nil {
-					sessionID = id
-				}
+	if !*noSessionFlag {
+		if dir, derr := config.Dir(); derr == nil {
+			if st, serr := session.Open(dir + "/sessions.db"); serr == nil {
+				store = st
+				defer func() { _ = st.Close() }()
+			}
+		}
+	}
+	if store != nil {
+		if *resumeFlag != "" {
+			meta, msgs, lerr := store.Load(*resumeFlag)
+			if lerr != nil {
+				return fmt.Errorf("-resume: %w", lerr)
+			}
+			sessionID = meta.ID
+			ag.Messages = append(ag.Messages[:1], msgs[1:]...) // keep our system prompt, replay the rest
+		} else if cwd, cerr := os.Getwd(); cerr == nil {
+			if id, ierr := store.Create(cwd, modelName, provName); ierr == nil {
+				sessionID = id
 			}
 		}
 	}
 
-	// ctrl+c cancels the turn rather than orphaning an in-flight request.
+	// ctrl+c cancels the turn; -timeout caps the whole run.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	if *timeoutFlag > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, *timeoutFlag)
+		defer cancel()
+	}
 
 	ev := agent.Events{}
 	var emit func(any) // set only for --format json
+	note := func(format string, a ...any) {
+		if !*quietFlag {
+			fmt.Fprintf(os.Stderr, format+"\n", a...)
+		}
+	}
 	if *format == "json" {
 		enc := json.NewEncoder(os.Stdout)
 		emit = func(v any) {
@@ -134,10 +178,13 @@ func runCLI(args []string) error {
 		}
 	} else {
 		ev.OnText = func(d string) { fmt.Fprint(os.Stdout, d) }
-		ev.OnToolStart = func(_, name, args string) { fmt.Fprintf(os.Stderr, "⚒ %s\n", name) }
+		ev.OnToolStart = func(_, name, args string) { note("⚒ %s", name) }
 	}
 
 	final, err := ag.Turn(ctx, prompt, ev)
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		err = fmt.Errorf("run timed out after %s", *timeoutFlag)
+	}
 	if emit != nil {
 		if err != nil {
 			emit(map[string]string{"type": "error", "error": err.Error()})
@@ -149,11 +196,13 @@ func runCLI(args []string) error {
 	}
 
 	// Best-effort persistence (the TUI's persist does the same each turn).
+	// Save from index 0: Load re-derives the system-prompt slot, so a resumed
+	// conversation must not skip it (saving from 1 shifts everything off).
 	if store != nil && sessionID != "" {
-		if serr := store.Save(sessionID, 1, ag.MessagesSnapshot(), modelName, provName); serr != nil {
+		if serr := store.Save(sessionID, 0, ag.MessagesSnapshot(), modelName, provName); serr != nil {
 			config.LogEvent("session.save", "run FAILED id="+sessionID+": "+serr.Error())
 		}
-		fmt.Fprintf(os.Stderr, "session %s — resume with: whip --resume %s\n", sessionID, sessionID)
+		note("session %s — resume with: whip run -resume %s \"…\" · or interactively: whip --resume %s", sessionID, sessionID, sessionID)
 	}
 	return err
 }
