@@ -48,6 +48,7 @@ linters:
     - asciicheck # non-ASCII identifiers (homoglyph attacks)
     - bodyclose # unclosed http.Response bodies (connection leaks)
     - noctx # exec.Command / http calls without context.Context
+    - fatcontext # context.WithValue/WithCancel inside loops (unbounded chain, leak)
     - rowserrcheck # unchecked sql.Rows.Err() after iteration
     - sqlclosecheck # unclosed sql.Rows / sql.Stmt
     # --- tests (the repo's suite is large and runs with -race -shuffle=on) ---
@@ -84,7 +85,6 @@ linters:
     - unparam # 13 hits on interface-satisfying/impl params — real false positives
     - forcetypeassert # hits are test-only (tests may panic on bad shape) — see exclusions
     - containedctx # chromedp backend intentionally holds its conn-scoped ctx
-    - fatcontext # no real hits here; ctx-in-loop is not a pattern this code uses
     - gocognit # redundant with gocyclo
     - maintidx # maintainability-index scoring — too opaque to act on
     - tagalign # struct-tag column alignment — pure cosmetics
