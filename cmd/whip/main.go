@@ -80,6 +80,15 @@ func main() {
 		return
 	}
 
+	// `whip update` — re-run the install script to get the latest release.
+	if flag.NArg() > 0 && flag.Arg(0) == "update" {
+		if err := updateCLI(); err != nil {
+			fmt.Fprintln(os.Stderr, "whip:", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	cfg, err := config.Load()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "whip:", err)

@@ -45,6 +45,9 @@ go install github.com/context-labs/whip/cmd/whip@latest
 Then `whip` and you're in. Defaults to inference.net models — any
 OpenAI-compatible endpoint works as a provider.
 
+To update to the latest release later, run `whip update` — it re-runs the
+install script above.
+
 ## First things to try
 
 ```
