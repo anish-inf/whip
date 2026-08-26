@@ -35,7 +35,7 @@ func TestCommandRuleArity(t *testing.T) {
 // The full gate path: an uncovered command blocks on the dialog; "allow
 // always" installs the arity rule and covers the next call without asking.
 func TestPermissionGateFlow(t *testing.T) {
-	t.Setenv("LOOPY_HOME", t.TempDir())
+	t.Setenv("WHIP_HOME", t.TempDir())
 	m := compactCmdModel()
 	m.perms = permRules{}
 

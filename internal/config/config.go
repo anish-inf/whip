@@ -127,6 +127,7 @@ type Config struct {
 	Theme           string              `json:"theme,omitempty"`           // "light", "dark", or "" (auto-detect at startup)
 	Mouse           *bool               `json:"mouse,omitempty"`           // false disables capture so native terminal selection works
 	Thinking        *bool               `json:"thinking,omitempty"`        // nil defaults to on; false hides reasoning tokens (ctrl+o)
+	CollapsePaste   *bool               `json:"collapsePaste,omitempty"`   // nil/false: pastes land verbatim; true collapses ≥3-line pastes into a [Pasted ~N lines] placeholder
 	GoalMaxRounds   int                 `json:"goalMaxRounds,omitempty"`   // global goal-loop round cap; 0 = DefaultGoalMaxRounds; projects.json may override per folder
 	MaxRetries      int                 `json:"maxRetries,omitempty"`      // attempts per provider request on transient failures (429/5xx/network); 0 = llm.DefaultMaxAttempts, 1 = no retries
 	Providers       map[string]Provider `json:"providers"`

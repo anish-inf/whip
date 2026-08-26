@@ -124,7 +124,7 @@ func Run(ctx context.Context, opts Options) Result {
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, userShell(), "-c", opts.Command)
-	cmd.Env = os.Environ()
+	cmd.Env = append(os.Environ(), ChildMarkers...)
 
 	if opts.Interactive {
 		return runInteractive(ctx, cmd, opts)

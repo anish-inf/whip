@@ -82,8 +82,16 @@ func main() {
 	}
 
 	// `whip browser ...` — browser tooling (install the drive-my-tab extension).
-	if flag.NArg() > 0 && flag.Arg(0) == "browser" {
-		if err := browserCLI(flag.Args()[1:]); err != nil {
+	// `whip sessions` — list stored sessions (the scriptable companion to run).
+	if flag.NArg() > 0 && flag.Arg(0) == "sessions" {
+		if err := sessionsCLI(); err != nil {
+			fmt.Fprintln(os.Stderr, "whip:", err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	if flag.NArg() > 0 && flag.Arg(0) == "browser" {		if err := browserCLI(flag.Args()[1:]); err != nil {
 			fmt.Fprintln(os.Stderr, "whip:", err)
 			os.Exit(1)
 		}

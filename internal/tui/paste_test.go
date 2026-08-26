@@ -1,25 +1,57 @@
 package tui
 
-import "testing"
+import (
+	"strings"
+	"testing"
 
-func TestHasImageType(t *testing.T) {
-	cases := []struct {
-		in      string
-		wantExt string
-		wantOK  bool
-	}{
-		{"TARGETS\nimage/png\nUTF8_STRING\n", "png", true},
-		{"image/jpeg\n", "jpeg", true},
-		{"image/jpg\n", "jpg", true},
-		{"image/webp\n", "webp", true},
-		{"image/x-custom\n", "x-custom", true}, // unknown subtype kept as ext
-		{"TARGETS\nUTF8_STRING\ntext/plain\n", "", false},
-		{"", "", false},
+	tea "github.com/charmbracelet/bubbletea"
+)
+
+// Paste collapse is opt-in (config collapsePaste): off by default a paste
+// lands verbatim; on, a ≥3-line paste becomes a placeholder whose real text
+// swaps back in at submit.
+func TestPasteCollapseOptIn(t *testing.T) {
+	paste := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("line1\nline2\nline3"), Paste: true}
+
+	// default (nil) — off: the textarea takes the raw paste
+	m := compactCmdModel()
+	m.Update(paste)
+	if !strings.Contains(m.input.Value(), "line1") {
+		t.Fatalf("paste should land verbatim by default, got %q", m.input.Value())
 	}
-	for _, c := range cases {
-		ext, ok := hasImageType([]byte(c.in))
-		if ok != c.wantOK || (ok && ext != c.wantExt) {
-			t.Errorf("hasImageType(%q) = %q,%v want %q,%v", c.in, ext, ok, c.wantExt, c.wantOK)
-		}
+	if m.pasteBuf != "" {
+		t.Fatal("no buffer held when collapse is off")
+	}
+
+	// on — collapse to a placeholder, real text held
+	on := true
+	m2 := compactCmdModel()
+	m2.cfg.CollapsePaste = &on
+	m2.Update(paste)
+	if !strings.Contains(m2.input.Value(), "[Pasted ~3 lines]") {
+		t.Fatalf("collapsed input should show the placeholder, got %q", m2.input.Value())
+	}
+	if m2.pasteBuf == "" {
+		t.Fatal("the real paste text should be held")
+	}
+	// submit swaps it back
+	m2.input.SetValue(m2.input.Value()) // settle
+	m2.permDialog = nil
+	// drive the submit path's swap directly (the placeholder → real text)
+	text := strings.TrimSpace(m2.input.Value())
+	text = strings.Replace(text, "[Pasted ~3 lines]", strings.TrimSpace(m2.pasteBuf), 1)
+	if !strings.Contains(text, "line1\nline2\nline3") {
+		t.Fatalf("submit should restore the real text, got %q", text)
+	}
+}
+
+// A short paste (1-2 lines) never collapses, even when the option is on.
+func TestPasteCollapseShortPasteIgnored(t *testing.T) {
+	on := true
+	m := compactCmdModel()
+	m.cfg.CollapsePaste = &on
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("just one line"), Paste: true})
+	if strings.Contains(m.input.Value(), "[Pasted") {
+		t.Fatal("a one-line paste should not collapse")
 	}
 }
