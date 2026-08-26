@@ -158,7 +158,11 @@ func TestPromptCancelledMidTurn(t *testing.T) {
 	}
 }
 
-func TestPromptsQueueWhileBusy(t *testing.T) {
+// A prompt arriving mid-turn is refused with a JSON-RPC error; the running
+// turn is unaffected and the session takes prompts again once it ends.
+func TestPromptWhileBusyErrors(t *testing.T) {
+	// No defer close(release): we close it mid-test; on failure the script
+	// server's r.Context().Done() path unblocks the handler at cleanup.
 	release := make(chan struct{})
 	srv := scriptServer(t, []step{
 		{text: "first", block: release},
@@ -168,64 +172,41 @@ func TestPromptsQueueWhileBusy(t *testing.T) {
 	f.initialize(t)
 	id := f.newSession(t, t.TempDir())
 
-	var wg sync.WaitGroup
-	results := make([]string, 2)
-	wg.Add(1)
+	done := make(chan acp.PromptResponse, 1)
 	go func() {
-		defer wg.Done()
 		resp, err := f.prompt(t, id, "one")
 		if err != nil {
 			t.Errorf("prompt one: %v", err)
-			return
 		}
-		results[0] = string(resp.StopReason)
+		done <- resp
 	}()
 
-	// Prompt 2 goes out only once turn 1 is provably running (its first chunk
-	// arrived), so it deterministically queues behind the turn token.
+	// Turn 1 provably running (first chunk arrived) — prompt 2 must error.
 	f.client.waitFor(t, func(n acp.SessionNotification) bool {
 		return n.Update.AgentMessageChunk != nil
 	}, "first chunk")
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		resp, err := f.prompt(t, id, "two")
-		if err != nil {
-			t.Errorf("prompt two: %v", err)
-			return
-		}
-		results[1] = string(resp.StopReason)
-	}()
+	if _, err := f.prompt(t, id, "two"); err == nil {
+		t.Fatal("busy session accepted a second prompt")
+	} else if !strings.Contains(err.Error(), "busy") {
+		t.Errorf("error = %v, want a 'session busy' message", err)
+	}
+
+	// The running turn completes normally and the session un-busies.
 	close(release)
-
-	wg.Wait()
-
-	if results[0] != string(acp.StopReasonEndTurn) || results[1] != string(acp.StopReasonEndTurn) {
-		t.Errorf("results = %v", results)
-	}
-	// Both messages must have landed in the same conversation, in order.
-	s := f.bridge.getSession(id)
-	msgs := s.ag.MessagesSnapshot()
-	var users []string
-	for _, m := range msgs {
-		if m.Role == "user" {
-			users = append(users, m.Content)
+	select {
+	case resp := <-done:
+		if resp.StopReason != acp.StopReasonEndTurn {
+			t.Errorf("turn 1 stopReason = %v, want end_turn", resp.StopReason)
 		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("turn 1 never completed")
 	}
-	if len(users) != 2 || users[0] != "one" || users[1] != "two" {
-		t.Errorf("user messages = %v, want [one two]", users)
+	resp, err := f.prompt(t, id, "two")
+	if err != nil {
+		t.Fatalf("session did not recover after busy turn: %v", err)
 	}
-	// Replies streamed in turn order too: "first" chunks precede "second".
-	var texts []string
-	for _, n := range f.client.snapshot() {
-		if c := n.Update.AgentMessageChunk; c != nil && c.Content.Text != nil {
-			texts = append(texts, c.Content.Text.Text)
-		}
-	}
-	joined := strings.Join(texts, "")
-	if !strings.Contains(joined, "first") || !strings.Contains(joined, "second") ||
-		strings.Index(joined, "first") > strings.Index(joined, "second") {
-		t.Errorf("streamed order = %q", joined)
+	if resp.StopReason != acp.StopReasonEndTurn {
+		t.Errorf("turn 2 stopReason = %v", resp.StopReason)
 	}
 }
 
@@ -239,6 +220,10 @@ func TestPromptUnknownSession(t *testing.T) {
 	}
 }
 
+// An idle session/cancel must not poison the next prompt. Asserted at the
+// wire level in TestWirePromptAfterIdleCancel — the SDK's client-side Prompt
+// auto-sends session/cancel and substitutes stopReason when the request ctx
+// is dead, so this behavior can't be pinned through the SDK client.
 func TestCancelIsSafeWhenIdle(t *testing.T) {
 	srv := scriptServer(t, []step{{text: "ok"}})
 	f := newFixture(t, nil, nil, factoryFor(srv, nil))
@@ -247,10 +232,9 @@ func TestCancelIsSafeWhenIdle(t *testing.T) {
 	if err := f.conn.Cancel(context.Background(), acp.CancelNotification{SessionId: id}); err != nil {
 		t.Fatalf("idle cancel: %v", err)
 	}
-	// session still usable afterwards
-	resp, err := f.prompt(t, id, "hello")
-	if err != nil || resp.StopReason != acp.StopReasonEndTurn {
-		t.Errorf("prompt after idle cancel: %v %v", resp, err)
+	// Cancel on an unknown session is also a no-op (not an error).
+	if err := f.conn.Cancel(context.Background(), acp.CancelNotification{SessionId: "nope"}); err != nil {
+		t.Fatalf("unknown-session cancel: %v", err)
 	}
 }
 

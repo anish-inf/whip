@@ -77,14 +77,13 @@ func NewBridge(version string, newAgent Factory, store *session.Store, vision bo
 func (b *Bridge) SetAgentConnection(conn *acp.AgentSideConnection) { b.conn = conn }
 
 // acpSession is one editor-facing session: a live agent loop, its SQLite
-// backing row, and the turn queue.
+// backing row, and the turn token.
 //
 // Concurrency (docs/concurrency.md): turnCh is a 1-capacity channel token —
-// send acquires the turn slot, receive releases. Prompt handlers that arrive
-// while a turn runs block on the send, which FIFOs them in arrival order.
-// The turn goroutine owns ag.Messages and storeFrom while it holds the
-// token. cancel is safe to call any time; it interrupts the running turn
-// without draining queued prompts.
+// send acquires the turn slot, receive releases. A Prompt that arrives while
+// the token is held gets a "session busy" error (no queue). The turn
+// goroutine owns ag.Messages and storeFrom while it holds the token. cancel
+// is safe to call any time; it interrupts the running turn.
 type acpSession struct {
 	id  acp.SessionId
 	ag  *agent.Agent
@@ -372,44 +371,33 @@ func (b *Bridge) SetSessionMode(_ context.Context, params acp.SetSessionModeRequ
 
 // --- prompt turn ----------------------------------------------------------
 
-// Prompt runs one turn; prompts arriving while a turn runs queue FIFO on the
-// session's turn token and respond when their own turn ends.
+// Prompt runs one turn. One turn at a time per session: a prompt arriving
+// mid-turn gets a JSON-RPC error — ACP clients serialize turns (Zed waits
+// for the prompt response before sending the next), and queueing prompts
+// nobody is watching invites zombie work.
 func (b *Bridge) Prompt(ctx context.Context, params acp.PromptRequest) (acp.PromptResponse, error) {
 	s := b.getSession(params.SessionId)
 	if s == nil {
 		return acp.PromptResponse{}, acp.NewInternalError(fmt.Sprintf("unknown session %q", params.SessionId))
 	}
 
-	// Acquire the turn token; blocks (FIFO) behind a running turn. ctx is the
-	// request's own context — the SDK cancels it on $/cancel_request.
-	// Non-blocking probe first so we know whether we queued: a prompt whose
-	// request ctx died WHILE queued is zombie work nobody reads — skip it.
-	// (A prompt that never queued but carries a dead ctx is the SDK's stale
-	// session/cancel marker — an idle cancel parks in the SDK's per-session
-	// map and tags the NEXT request; that's fresh work and must run, because
-	// the turn itself uses the decoupled turnCtx and stays unaffected.)
-	queued := false
+	// Non-blocking acquire of the turn token (1-cap channel, filelocks
+	// idiom): busy = error, don't queue.
 	select {
 	case s.turnCh <- struct{}{}:
 	default:
-		queued = true
-		select {
-		case s.turnCh <- struct{}{}:
-		case <-ctx.Done():
-			return acp.PromptResponse{}, acp.NewRequestCancelled(ctx.Err().Error())
-		}
+		return acp.PromptResponse{}, acp.NewInternalError("session busy: a prompt turn is already running")
 	}
 	defer func() { <-s.turnCh }()
-	if queued && ctx.Err() != nil {
-		return acp.PromptResponse{}, acp.NewRequestCancelled(ctx.Err().Error())
-	}
 
 	text, parts := promptFromBlocks(params.Prompt, b.vision)
 
 	// The turn's lifetime is decoupled from the request ctx (the SDK cancels
-	// that ctx when the next prompt queues — see above). Cancellation flows
-	// through session/cancel → Cancel() → s.cancel instead; CloseAll covers
-	// client disconnect. turnCtx dies with the deferred cleanup below.
+	// that ctx when a second prompt arrives for the session — with busy-error
+	// semantics that second prompt is refused, and an idle cancel's parked
+	// marker must not kill fresh work either). Cancellation flows through
+	// session/cancel → Cancel() → s.cancel instead; CloseAll covers client
+	// disconnect. turnCtx dies with the deferred cleanup below.
 	turnCtx, cancel := context.WithCancel(context.Background())
 	s.turnMu.Lock()
 	s.cancel = cancel
@@ -473,7 +461,9 @@ func (b *Bridge) Prompt(ctx context.Context, params acp.PromptRequest) (acp.Prom
 	}
 }
 
-// Cancel interrupts the running turn only; queued prompts stay queued.
+// Cancel interrupts the running turn; with no turn running it's a no-op
+// (and must not poison the next prompt — the SDK parks a cancel marker on
+// the next request's ctx, which the decoupled turnCtx ignores).
 func (b *Bridge) Cancel(_ context.Context, params acp.CancelNotification) error {
 	s := b.getSession(params.SessionId)
 	if s == nil {

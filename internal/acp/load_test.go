@@ -303,27 +303,3 @@ func TestLoadSessionRejectsPrefixID(t *testing.T) {
 		t.Fatal("prefix id accepted — client would address a session it can't find")
 	}
 }
-
-// Regression: an idle session/cancel must not poison the NEXT prompt (the
-// SDK parks the cancel in its per-session map and tags the next request's
-// ctx; the turn runs on the decoupled turnCtx, so the prompt must proceed).
-func TestPromptAfterIdleCancelStillRuns(t *testing.T) {
-	srv := scriptServer(t, []step{{text: "recovered"}})
-	f := newFixture(t, nil, nil, factoryFor(srv, nil))
-	f.initialize(t)
-	id := f.newSession(t, t.TempDir())
-	if err := f.conn.Cancel(context.Background(), acp.CancelNotification{SessionId: id}); err != nil {
-		t.Fatal(err)
-	}
-	resp, err := f.prompt(t, id, "still here?")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resp.StopReason != acp.StopReasonEndTurn {
-		t.Errorf("stopReason = %v, want end_turn", resp.StopReason)
-	}
-	f.client.waitFor(t, func(n acp.SessionNotification) bool {
-		c := n.Update.AgentMessageChunk
-		return c != nil && c.Content.Text != nil && c.Content.Text.Text == "recovered"
-	}, "agent chunk after idle cancel")
-}

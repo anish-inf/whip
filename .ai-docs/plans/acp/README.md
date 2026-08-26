@@ -131,15 +131,11 @@ startup; extract `newAgent(cfg, model, provider)` rather than duplicating).
     `resource` text → fenced block with the uri as caption; blob →
     placeholder note; `image` → `llm.ImagePart` (mimeType + raw base64) when
     the model has vision, else a `[image: <mimeType>]` text placeholder.
-  - **Prompt-while-busy queues** (sign-off decision): prompts arriving during
-    a turn park on the session's FIFO until the in-flight turn ends
-    (including turns ended by cancel), then run in order. `session/cancel`
-    cancels the *running* turn only and does not drain the queue. The ACP
-    response for a queued prompt is sent when *that* prompt's turn ends —
-    the SDK multiplexes concurrent in-flight requests, so parked `Prompt`
-    handlers are fine. One pending queue per session (unbounded slice +
-    cond/broadcast channel; in practice clients rarely queue more than a
-    couple).
+  - **Prompt-while-busy errors** (built as FIFO queue per sign-off, then cut
+    on follow-up request): a prompt arriving mid-turn gets a JSON-RPC
+    "session busy" error. ACP clients serialize turns; queued prompts invite
+    zombie work nobody reads. `session/cancel` interrupts the running turn;
+    an idle cancel is a no-op and doesn't poison the next prompt.
   - Register `ctx, cancel` on the session; run `ag.TurnParts` (the new
     export); map outcome: nil → `end_turn`; `ctx.Canceled` → `cancelled`
     (**never** an error response — spec MUST); other error → JSON-RPC error.
@@ -181,17 +177,16 @@ startup; extract `newAgent(cfg, model, provider)` rather than duplicating).
 ### 4. Concurrency (per docs/concurrency.md)
 
 - One `acpSession` struct per session: `{ag *agent.Agent, storeFrom int,
-  turnCancel context.CancelFunc, turn chan struct{}, queue []queuedPrompt}`.
-  `turn` is a 1-capacity channel token (the filelocks idiom): `Prompt`
-  enqueue-or-acquires, runs its turn, releases, and the next queued prompt
-  acquires. FIFO fair by channel send order.
+  cancel context.CancelFunc, turnCh chan struct{}}`. `turnCh` is a
+  1-capacity channel token (the filelocks idiom): `Prompt` acquires
+  non-blocking (busy = "session busy" error), runs its turn, releases.
 - The SDK dispatches inbound requests on goroutines; all `SessionUpdate`
   calls go through the SDK's single writer (no locks on our side). Our own
-  shared state is the session map (mutex) + per-session turn token/queue.
-- `session/cancel` must work *while* `Prompt` blocks on `Turn` (or parks in
-  the queue) — the SDK guarantees dispatch-during-prompt; the test suite
-  must prove both. Cancel hits the running turn only; queued prompts stay
-  queued.
+  shared state is the session map (mutex) + per-session turn token.
+- `session/cancel` must work *while* `Prompt` blocks on `Turn` — the SDK
+  guarantees dispatch-during-prompt; the test suite proves it. Cancel hits
+  the running turn; an idle cancel is a no-op (pinned at the wire level —
+  the SDK's client wrapper masks it).
 
 ## Test plan
 
@@ -254,10 +249,15 @@ startup; extract `newAgent(cfg, model, provider)` rather than duplicating).
 
 - **Turn ctx is decoupled from the request ctx** (`context.Background()` +
   explicit `s.cancel`): the SDK's `AgentSideConnection` cancels a session's
-  in-flight prompt when a second prompt arrives, which would have killed
-  queued predecessors. Cancellation flows through `session/cancel` →
-  `Bridge.Cancel`; `CloseAll` covers client disconnect. This also fixed the
-  "idle cancel poisons next prompt" interaction.
+  in-flight prompt ctx when a second prompt arrives, and its client-side
+  `Prompt` auto-sends `session/cancel` + substitutes the stop reason when
+  the request ctx dies. Cancellation flows through `session/cancel` →
+  `Bridge.Cancel`; `CloseAll` covers client disconnect. The idle-cancel
+  no-op behavior is pinned at the wire level (`TestWirePromptAfterIdleCancel`)
+  because the SDK client wrapper can't observe it faithfully.
+- **Queueing cut after sign-off**: prompt-while-busy was FIFO-queued at your
+  request, then reverted to busy-error on your follow-up. The turn-token
+  channel stayed; the queue went.
 - **Gate serialization**: `tools.Gate` is package-global, so ask-mode turns
   serialize bridge-wide on `gateMu` rather than risk cross-session
   mislabeled prompts.

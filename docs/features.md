@@ -653,16 +653,15 @@ Wire types, framing, and per-session cancel plumbing come from
   notifications. Stop reasons: `end_turn` normally, `cancelled` on
   `session/cancel` (never an error response, per spec), `max_tokens` when a
   context-limit error survives the compaction retry.
-- **Prompt queueing** — prompts arriving mid-turn park FIFO on a 1-capacity
-  channel token (the filelocks idiom) and respond when their own turn ends.
-  The turn runs on a ctx decoupled from the request ctx because the SDK
-  auto-cancels a session's in-flight prompt when a second prompt arrives;
-  cancellation flows through `session/cancel` → `Bridge.Cancel` instead. A
-  prompt whose request ctx died *while queued* is skipped as zombie work; an
-  idle-session cancel (which the SDK parks against the next request's ctx)
-  is correctly a no-op. `session/close` and process teardown
-  (`Bridge.CloseAll` on conn EOF/signal) cancel running turns and close
-  per-session MCP managers before `bashrun.KillAll()`.
+- **One turn at a time** — a prompt arriving mid-turn gets a JSON-RPC
+  "session busy" error (ACP clients serialize turns; queueing prompts nobody
+  is watching invites zombie work). The turn runs on a ctx decoupled from
+  the request ctx because the SDK auto-cancels a session's in-flight prompt
+  when a second prompt arrives; cancellation flows through `session/cancel`
+  → `Bridge.Cancel` instead, and an idle-session cancel (which the SDK parks
+  against the next request's ctx) is a no-op. `session/close` and process
+  teardown (`Bridge.CloseAll` on conn EOF/signal) cancel running turns and
+  close per-session MCP managers before `bashrun.KillAll()`.
 - **Persistence** — turns save into the same SQLite store as the TUI
   (`storeFrom` starts at 1: the system prompt is never persisted), so an ACP
   session is resumable with `whip --resume <id>` and appears in
@@ -690,8 +689,8 @@ Tests: `internal/acp/translate_test.go` (content-block conversion, tool
 kind/title/locations, diff cards, replay ordering), `bridge_test.go` +
 `bridge_lifecycle_test.go` (in-memory client over pipes + scripted httptest
 provider: capabilities, streaming order, cancel mid-turn → cancelled not
-error, FIFO queueing, unknown session, idle-cancel no-op + next-prompt
-recovery, plan updates, context-limit → max_tokens),
+error, prompt-while-busy → "session busy" error + recovery, unknown session,
+idle-cancel no-op, plan updates, context-limit → max_tokens),
 `permission_test.go` (allow-once/reject/always-covers-repeats, auto mode
 never prompts, unknown mode, cancelled outcome fails closed),
 `load_test.go` (persistence incremental + system-prompt exclusion, replay
