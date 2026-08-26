@@ -210,7 +210,14 @@ func TestReverseRange(t *testing.T) {
 	}
 	styled := "\x1b[31mhello\x1b[0m world"
 	got := reverseRange(styled, 6, 11)
-	if !strings.Contains(got, "\x1b[31mhello\x1b[0m ") || !strings.Contains(got, "\x1b[7mworld\x1b[27m") {
+	if !strings.Contains(got, "\x1b[31mhello\x1b[0m") || !strings.Contains(got, "\x1b[7mworld\x1b[27m") {
 		t.Fatalf("styled line mangled: %q", got)
+	}
+	// an SGR reset INSIDE the range cancels reverse video — it must be
+	// re-asserted or the highlight visibly dies at the reset (glamour-styled
+	// lines reset after every chunk, cutting the highlight mid-row)
+	got = reverseRange("ab\x1b[0mcd", 0, 4)
+	if !strings.Contains(got, "\x1b[0m\x1b[7mcd") {
+		t.Fatalf("reverse video must be re-asserted after a reset: %q", got)
 	}
 }

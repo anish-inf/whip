@@ -187,6 +187,13 @@ func reverseRange(line string, start, end int) string {
 				j++
 			}
 			b.WriteString(line[i:j])
+			if on {
+				// styled lines carry SGR resets mid-text (glamour styles text
+				// in chunks, each ending with \x1b[0m) and a reset cancels
+				// reverse video too — re-assert it or the highlight visibly
+				// dies at the first reset inside the range.
+				b.WriteString("\x1b[7m")
+			}
 			i = j
 			continue
 		}
