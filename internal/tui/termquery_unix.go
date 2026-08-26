@@ -26,14 +26,7 @@ func queryTerminalBackground(tty *os.File, inTmux bool) (light bool, ok bool) {
 	if !isForegroundFd(fd) {
 		return false, false
 	}
-	// query the background color (OSC 11), then a cursor-position report (CSI
-	// 6n) as a guaranteed terminator so a terminal that ignores OSC 11 still
-	// unblocks the read.
-	query := "\x1b]11;?\x1b\\" + "\x1b[6n"
-	if inTmux {
-		// DCS passthrough: wrap the query, doubling every ESC in the payload.
-		query = "\x1bPtmux;" + strings.ReplaceAll(query, "\x1b", "\x1b\x1b") + "\x1b\\"
-	}
+	query := bgQuery(inTmux)
 
 	// put the tty in raw-ish mode (no echo, non-canonical) for the query
 	old, err := unix.IoctlGetTermios(fd, ioctlReadTermios)
@@ -42,6 +35,12 @@ func queryTerminalBackground(tty *os.File, inTmux bool) (light bool, ok bool) {
 	}
 	raw := *old
 	raw.Lflag &^= unix.ECHO | unix.ICANON
+	// VMIN=0 + VTIME=1 (100ms): read returns 0 bytes when the terminal never
+	// replies. os.File.SetReadDeadline does NOT work on /dev/tty (not in the
+	// runtime poller on darwin), so without this the ReadByte below blocks
+	// forever and whip hangs at startup (e.g. tmux with allow-passthrough off).
+	raw.Cc[unix.VMIN] = 0
+	raw.Cc[unix.VTIME] = 1
 	if err := unix.IoctlSetTermios(fd, ioctlWriteTermios, &raw); err != nil {
 		return false, false
 	}
@@ -82,6 +81,25 @@ func queryTerminalBackground(tty *os.File, inTmux bool) (light bool, ok bool) {
 		}
 	}
 	return false, false
+}
+
+// bgQuery builds the background-color query bytes: an OSC 11 query, then a
+// cursor-position report (CSI 6n) as a guaranteed terminator so a terminal
+// that ignores OSC 11 still unblocks the read. Inside tmux the OSC 11 is sent
+// TWICE: bare — tmux ≥3.4 answers it itself with the client terminal's real
+// background, no config needed — and DCS-passthrough-wrapped (every ESC in
+// the payload doubled) so the outer terminal answers directly where tmux
+// doesn't but `allow-passthrough on` is set. Whichever reply arrives first
+// wins; both describe the real terminal. The 6n stays OUTSIDE the wrapper:
+// tmux always answers CPR for the pane, so the terminator never depends on
+// passthrough.
+func bgQuery(inTmux bool) string {
+	const osc11 = "\x1b]11;?\x1b\\"
+	q := osc11
+	if inTmux {
+		q += "\x1bPtmux;" + strings.ReplaceAll(osc11, "\x1b", "\x1b\x1b") + "\x1b\\"
+	}
+	return q + "\x1b[6n"
 }
 
 // parseOSCBg parses an OSC 11 payload ("rgb:rrrr/gggg/bbbb" or "#rrggbb") and

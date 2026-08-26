@@ -157,9 +157,13 @@ type model struct {
 	goal       string // active /goal; the loop continues until GOAL_MET
 	goalRounds int    // continuation turns spent on the current goal
 
-	mouseOn      bool   // runtime mouse-capture state (toggle with /mouse)
-	themeHow     string // how auto theme detection resolved (env var, OSC query, …) — captured at startup/theme change for /report; never re-queried
-	compactModel string // config model name for compaction summaries; "" = the built-in default
+	mouseOn      bool       // runtime mouse-capture state (toggle with /mouse)
+	sel          *selection // in-flight/last drag selection over the transcript
+	vpLead       int        // top blank rows viewportView last dropped (selection row mapping)
+	viewTop      int        // screen row of the view's first line (View tracks it; mouse Y is absolute)
+	viewH        int        // height of the last rendered view
+	themeHow     string     // how auto theme detection resolved (env var, OSC query, …) — captured at startup/theme change for /report; never re-queried
+	compactModel string     // config model name for compaction summaries; "" = the built-in default
 	compactProv  string
 	effortX      int                       // screen column where the clickable ⚡ effort control starts
 	catalogs     map[string]config.Catalog // provider model lists (capabilities)
@@ -245,12 +249,14 @@ func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string) (s
 		ag.Effort = "medium"
 	}
 	// Mouse capture ON by default so the wheel scrolls the transcript viewport
-	// and ⚡/tool clicks work — but only wheel+click reporting (?1000), NOT
-	// cell-motion (?1002). With capture off, tmux's WheelUpPane binding sees
-	// mouse_any_flag=0 and runs 'copy-mode -e', scrolling tmux's own scrollback
-	// instead of the transcript. We don't report motion, so drags aren't sent
-	// to whip; the tmux drag override (applyTmuxMouseFix) routes MouseDrag1Pane
-	// to copy-mode so plain drag-to-copy keeps working. Explicit config wins.
+	// and ⚡/tool clicks work — with button-motion reporting (?1002) so a left
+	// drag becomes whip's own selection (select.go): enabling click reporting
+	// alone makes most terminals (Ghostty, kitty) suppress their native
+	// drag-selection without sending the drag to anyone. With capture off,
+	// tmux's WheelUpPane binding sees mouse_any_flag=0 and runs 'copy-mode -e',
+	// scrolling tmux's own scrollback instead of the transcript. In tmux the
+	// drag never reaches whip, so applyTmuxMouseFix routes MouseDrag1Pane to
+	// copy-mode for drag-to-copy there. Explicit config wins.
 	mouseOn := true
 	if cfg.Mouse != nil {
 		mouseOn = *cfg.Mouse
@@ -339,10 +345,11 @@ func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string) (s
 
 	// Inline rendering (no alt-screen): the transcript lives in the normal
 	// terminal scrollback, so terminal scrollback owns history. Mouse capture
-	// is ON but wheel+click only (?1000, no motion ?1002): the wheel scrolls
-	// the viewport (capture off → tmux eats it into copy-mode), ⚡ clicks work,
-	// and a plain drag selects/copies natively (no motion reporting means the
-	// terminal/tmux keeps drag-selection; we never see the drag bytes).
+	// is ON with click+wheel+button-motion (?1000/?1002): the wheel scrolls
+	// the viewport (capture off → tmux eats it into copy-mode), ⚡ clicks
+	// work, and a left drag paints whip's own selection and copies on release
+	// (select.go) — terminals hand the drag to the app once any mouse mode is
+	// on, so native selection isn't available anyway.
 	//
 	// We do NOT use tea.WithMouseCellMotion + an output filter: piping the
 	// program output through a non-TTY makes bubbletea skip terminal-size
@@ -350,6 +357,13 @@ func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string) (s
 	// 0 and the whole layout collapses). Instead we keep the real TTY as the
 	// output and enable click/wheel reporting directly on it.
 	opts := []tea.ProgramOption{}
+	// Bottom-anchor the inline view: move the cursor to the terminal's last
+	// row before bubbletea's first paint, so the view's screen position is
+	// knowable (viewTop = height - viewH). Without this the view starts
+	// wherever the shell prompt left the cursor, and mouse events — which are
+	// ABSOLUTE screen coordinates — map a few rows off (drag-select landing
+	// two lines above the pointer).
+	fmt.Fprint(os.Stdout, "\x1b[9999;1H")
 	if m.mouseOn {
 		enableClickWheelMouse(os.Stdout)
 		applyTmuxMouseFix()
@@ -454,25 +468,35 @@ func (m *model) startupReport() {
 	}
 }
 
-// enableClickWheelMouse turns on click+wheel mouse reporting (?1000) with SGR
-// coordinates (?1006), WITHOUT motion reporting (?1002/?1003). Writing directly
-// to the real TTY keeps bubbletea's output a terminal so terminal-size detection
-// still works (unlike piping output through an os.Pipe). With ?1000 the wheel
-// and clicks reach whip, but drags are not reported, so the terminal/tmux keeps
-// native drag-selection for copy.
+// enableClickWheelMouse turns on mouse reporting with SGR coordinates
+// (?1006): click+wheel (?1000) plus button-event motion (?1002) so a held
+// left-drag reports motion events — whip turns those into its own selection
+// (select.go), because enabling ?1000 alone makes most terminals hand the drag
+// to the app WITHOUT starting a native selection (Ghostty, kitty), leaving
+// capture-on users with no drag-to-copy at all. Writing directly to the real
+// TTY keeps bubbletea's output a terminal so terminal-size detection still
+// works (unlike piping output through an os.Pipe). ?1002 (not ?1003) means
+// motion bytes only flow while a button is held — passive moves stay silent.
+//
+// ?1002 alone — NOT ?1000 as well: terminals keep ONE mouse-tracking mode, so
+// writing ?1000h after ?1002h silently downgrades tracking to click-only and
+// drags stop reporting motion (no highlight, no copy). ?1002 is a superset of
+// ?1000 (press/release/wheel all still report).
 func enableClickWheelMouse(w *os.File) {
-	fmt.Fprint(w, "\x1b[?1006h\x1b[?1000h")
+	fmt.Fprint(w, "\x1b[?1006h\x1b[?1002h")
 }
 
-// disableClickWheelMouse releases the mouse reporting enableClickWheelMouse set.
+// disableClickWheelMouse releases the mouse reporting enableClickWheelMouse
+// set, plus ?1000 defensively (an older whip or a downgrade may have left it).
 func disableClickWheelMouse(w *os.File) {
-	fmt.Fprint(w, "\x1b[?1000l\x1b[?1006l")
+	fmt.Fprint(w, "\x1b[?1002l\x1b[?1000l\x1b[?1006l")
 }
 
 // applyTmuxMouseFix makes plain drag-to-copy work inside tmux while whip
 // captures the mouse for wheel/clicks. tmux's default MouseDrag1Pane binding
-// checks mouse_any_flag (set by our ?1000) and forwards the drag to the app,
-// which ignores it — so no highlight ever starts. Rebinding it to copy-mode -M
+// checks mouse_any_flag (set by our ?1000/?1002) and forwards the drag to the
+// app — but tmux itself never forwards drag bytes from a terminal, so whip's
+// own selection (select.go) can't see them. Rebinding it to copy-mode -M
 // (only when the pane isn't already in a mode and isn't full mouse-tracking)
 // makes the drag open tmux copy-mode selection instead, restoring drag-to-copy.
 // Wheel still reaches whip: WheelUpPane stays bound to send -M. No-op outside
@@ -1033,8 +1057,13 @@ func (m *model) refreshVP() {
 	line := 0
 	for i := range m.blocks {
 		if i > 0 {
-			b.WriteString("\n\n") // blank line between blocks
-			line += 2
+			// "\n\n" ends the previous block's last line and leaves ONE blank
+			// row between blocks, so the row counter advances by 1 — adding 2
+			// here would drift every later block's y0/y1 one row low per
+			// separator (the click-mapping math only worked because it shared
+			// the drift).
+			b.WriteString("\n\n")
+			line++
 		}
 		r := m.blocks[i].renderAt(width)
 		m.blocks[i].y0 = line
@@ -1062,32 +1091,39 @@ func (m *model) contentPad() int {
 	return max(m.vp.Height-h, 0)
 }
 
-// viewportView renders the transcript viewport and drops the dead rows at its
-// bottom. The viewport always renders its full allocated height (lipgloss
-// Height pads it out), and the content is bottom-anchored — padding goes on
-// top — so when the transcript is shorter than the viewport the unused rows
-// would otherwise render as a gap between the last message and the input box.
+// viewportView renders the transcript viewport and drops the dead pad rows.
+// The viewport content is `contentPad` blank lines followed by the blocks;
+// SetContent bottom-anchors it, so at the bottom the view's row 0 is the
+// first pad row. We paint the selection highlight in content space FIRST
+// (content row r = view row r + contentPad - YOffset), then drop pad rows by
+// COUNT — never by "looks blank", because a highlighted blank row reads as
+// non-blank and would change the drop count mid-drag (that's what made the
+// transcript jump). Dropping exactly the pad keeps screen rows stable whether
+// or not a selection is active.
 func (m *model) viewportView() string {
 	s := sanitizeView(m.vp.View())
+	if m.sel != nil {
+		s = m.highlightSelection(s) // content space, pre-trim
+	}
 	lines := strings.Split(s, "\n")
+	// Drop leading pad rows by count: the content starts after the pad, but
+	// the view is scrolled (YOffset) and bottom-anchored, so the number of pad
+	// rows actually visible at the top is pad - YOffset (clamped).
+	drop := max(min(m.contentPad()-m.vp.YOffset, len(lines)), 0)
+	// Only drop rows that are actually blank — if the selection highlight
+	// painted a pad row, that row is content now, stop before it.
+	first := 0
+	for first < drop && strings.TrimSpace(ansi.Strip(lines[first])) == "" {
+		first++
+	}
+	m.vpLead = first // selection maps screen rows through the dropped pad
+	lines = lines[first:]
+	// Drop trailing dead rows (the viewport pads to its full height).
 	last := len(lines) - 1
 	for last >= 0 && strings.TrimSpace(ansi.Strip(lines[last])) == "" {
 		last--
 	}
-	lines = lines[:last+1]
-	// Also drop the top padding rows so the transcript bottom-anchors: when
-	// the input box grows (ctrl+j), the tail of the buffer — input rows,
-	// status line — must stay on the SAME screen rows. bubbletea's inline
-	// renderer skips re-painting a row whose text matches the previous frame,
-	// and that cache is only correct for rows that never shift; padding on
-	// top makes the whole transcript shift, but the interactive tail stays
-	// put (its own height didn't change), so a blank pad row can no longer
-	// alias onto an input row and eat its content.
-	first := 0
-	for first < len(lines) && strings.TrimSpace(ansi.Strip(lines[first])) == "" {
-		first++
-	}
-	return strings.Join(lines[first:], "\n")
+	return strings.Join(lines[:last+1], "\n")
 }
 
 func (m *model) Init() tea.Cmd {
@@ -1154,58 +1190,78 @@ func detectColorScheme() string {
 		setScheme(false)
 		return "WHIP_THEME"
 	}
-	if v := os.Getenv("COLORFGBG"); v != "" {
-		if i := strings.LastIndex(v, ";"); i >= 0 {
-			var bg int
-			if _, err := fmt.Sscanf(v[i+1:], "%d", &bg); err == nil {
-				// standard palette: 0-6 dark, 7+ light (15 = white)
-				setScheme(bg == 7 || bg >= 8)
-				return "COLORFGBG"
-			}
-		}
-	}
-	// Query the terminal directly whenever we have one. termenv's query refuses
-	// to run inside tmux/screen (TERM=screen*/tmux*) and silently assumes a dark
+	// Query the terminal directly whenever we have one — the OSC 11 reply is
+	// the terminal's REAL background, so it outranks COLORFGBG (which can be
+	// stale: inherited from an outer shell/terminal with a different bg).
+	// termenv's query refuses to run inside tmux/screen (its termStatusReport
+	// short-circuits on TERM=screen*/tmux*) and silently assumes a dark
 	// background — wrong for a tmux user on a light terminal. queryTerminal-
 	// Background reaches the REAL terminal via DCS passthrough inside tmux, and
 	// via a plain OSC 11 query otherwise, so use it first and keep termenv only
 	// as a fallback for terminals it can query directly.
-	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
-	if err != nil {
-		SetUnknownTheme()
-		return "undetermined (no tty) — neutral default"
-	}
-	defer tty.Close()
 	inTmux := os.Getenv("TMUX") != "" ||
 		strings.HasPrefix(os.Getenv("TERM"), "screen") ||
 		strings.HasPrefix(os.Getenv("TERM"), "tmux")
-	if light, ok := queryTerminalBackground(tty, inTmux); ok {
-		setScheme(light)
-		if inTmux {
-			return "terminal query (via tmux passthrough)"
+	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
+	if err == nil {
+		if light, ok := queryTerminalBackground(tty, inTmux); ok {
+			tty.Close()
+			setScheme(light)
+			if inTmux {
+				return "terminal query (inside tmux)"
+			}
+			return "terminal query"
 		}
-		return "terminal query"
+		// fallback: termenv's own query — but NEVER inside tmux/screen, where
+		// termenv can't reach the real terminal (its termStatusReport
+		// short-circuits on TERM=screen*/tmux*) and silently ASSUMES DARK.
+		// That guess rendered the dark palette on light terminals (washed-out
+		// gray text on white) whenever the tmux query got no reply.
+		if !inTmux {
+			type result struct{ light bool }
+			done := make(chan result, 1)
+			go func() {
+				o := termenv.NewOutput(tty)
+				done <- result{light: !o.HasDarkBackground()}
+			}()
+			select {
+			case r := <-done:
+				tty.Close()
+				setScheme(r.light)
+				return "terminal query"
+			case <-time.After(300 * time.Millisecond):
+			}
+		}
+		tty.Close()
 	}
-	// fallback: termenv's own query (non-tmux terminals it can reach)
-	type result struct{ light bool }
-	done := make(chan result, 1)
-	go func() {
-		o := termenv.NewOutput(tty)
-		done <- result{light: !o.HasDarkBackground()}
-	}()
-	select {
-	case r := <-done:
-		setScheme(r.light)
-		return "terminal query"
-	case <-time.After(300 * time.Millisecond):
+	light, ok, how := fallbackScheme(inTmux, os.Getenv("COLORFGBG"))
+	if ok {
+		setScheme(light)
+	} else {
 		// No reliable signal: don't force a dark guess. Neutral default keeps
 		// text at the terminal's own colors instead of inverting contrast.
 		SetUnknownTheme()
-		if inTmux {
-			return "undetermined (tmux needs: set -g allow-passthrough on) — neutral default"
-		}
-		return "undetermined (query timed out) — neutral default"
 	}
+	return how
+}
+
+// fallbackScheme decides the color scheme when no terminal query succeeded:
+// COLORFGBG (set by many terminals; last field is the bg color index) when
+// parseable, otherwise not-ok — the caller falls back to the neutral theme.
+// Pure so the no-query-reply behavior is unit-testable: inside tmux the ONLY
+// acceptable outcomes are COLORFGBG or neutral, never a dark assumption.
+func fallbackScheme(inTmux bool, colorfgbg string) (light, ok bool, how string) {
+	if i := strings.LastIndex(colorfgbg, ";"); i >= 0 {
+		var bg int
+		if _, err := fmt.Sscanf(colorfgbg[i+1:], "%d", &bg); err == nil {
+			// standard palette: 0-6 dark, 7+ light (15 = white)
+			return bg == 7 || bg >= 8, true, "COLORFGBG (query failed)"
+		}
+	}
+	if inTmux {
+		return false, false, "undetermined (tmux gave no reply — needs tmux ≥3.4 or `set -g allow-passthrough on`) — neutral default"
+	}
+	return false, false, "undetermined (query timed out) — neutral default"
 }
 
 // inputContentHeight returns the number of lines the input needs to show its
@@ -1308,9 +1364,16 @@ func (m *model) layout() {
 // dockTop returns the screen row of the first TASK row in the dock: the dock
 // renders as the last dockRows rows above the input box and bottom pad, but
 // dockSkip non-task rows (the focused hint) sit on top of the task rows.
-// layout() keeps both in sync with what View renders.
+// layout() keeps both in sync with what View renders. The row is an absolute
+// screen row: counted up from the view's bottom (viewTop+viewH), which equals
+// the terminal bottom while the view is bottom-anchored but stays correct
+// when a shrunk view floats above it.
 func (m *model) dockTop() int {
-	return m.height - 2 - m.input.Height() - m.dockRows + m.dockSkip
+	bottom := m.height
+	if m.viewH > 0 {
+		bottom = m.viewTop + m.viewH
+	}
+	return bottom - 2 - m.input.Height() - m.dockRows + m.dockSkip
 }
 
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -1331,6 +1394,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		resized := msg.Width != m.width // width change → re-wrap the whole transcript
 		m.width, m.height = msg.Width, msg.Height
+		// re-anchor the view position: after a resize (and on the first size
+		// at startup) assume the view sits at the bottom — the next View()
+		// computes viewTop = height - viewH from this sentinel.
+		m.viewTop = 1 << 30
 		m.input.SetWidth(msg.Width - 2)
 		if resized {
 			m.refreshVP() // every block re-renders at the new width (floored at minRenderWidth)
@@ -1338,6 +1405,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
+		m.sel = nil // any keypress clears a finished selection highlight
 		return m.key(msg)
 
 	case tea.MouseMsg:
@@ -1347,9 +1415,13 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Shift {
 			return m, nil
 		}
+		if m.handleMouseSelect(msg) {
+			return m, nil
+		}
 		// clicking the ⚡ control in the header cycles reasoning effort
+		// (mouse Y is an absolute screen row; the header is the view's top row)
 		if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft &&
-			msg.Y == 0 && msg.X >= m.effortX {
+			msg.Y == m.viewTop && msg.X >= m.effortX {
 			m.setEffort(nextEffort(m.effortsFor(), m.agent.Effort))
 			return m, nil
 		}
@@ -1390,21 +1462,13 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, nil
 				}
 			}
-			// click on a collapsed tool result expands it (and vice versa)
+			// click on a collapsed tool result expands it (and vice versa).
+			// Presses inside the block range were consumed by handleMouseSelect
+			// (selection); this path is for anything that fell through.
 			if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft &&
-				msg.Y > 1 && m.palette == nil {
-				row := m.vp.YOffset + msg.Y - 2 // viewport starts 2 rows below the header
-				if pad := m.contentPad(); row < pad {
-					row = -1 // top padding: above the first block
-				} else {
-					row -= pad
-				}
-				for i := range m.blocks {
-					if row >= m.blocks[i].y0 && row <= m.blocks[i].y1 && m.blocks[i].toggle() {
-						m.refreshVP()
-						return m, nil
-					}
-				}
+				msg.Y-m.viewTop > 1 && m.palette == nil {
+				m.clickAt(msg.X, msg.Y)
+				return m, nil
 			}
 			var cmd tea.Cmd
 			m.vp, cmd = m.vp.Update(msg)
@@ -3258,7 +3322,24 @@ func (m *model) currentView() string {
 	return wrap(s, m.width) // streamed mid-flight: plain text; markdown renders on flush
 }
 
+// View renders the frame and tracks WHERE it sits on the screen. Mouse events
+// arrive in absolute screen coordinates, so every click/drag mapping needs the
+// view's top row. The inline view starts bottom-anchored (Run moves the cursor
+// to the last row before the first paint); bubbletea's renderer scrolls the
+// top UP when the view grows past the bottom and keeps it FIXED when the view
+// shrinks — so the top row only ever decreases between resizes:
+// viewTop = min(viewTop, height - viewH). A resize resets the sentinel
+// (WindowSizeMsg handler) and the next render re-anchors to the bottom.
 func (m *model) View() string {
+	v := m.viewBody()
+	if m.height > 0 {
+		m.viewH = lipgloss.Height(v)
+		m.viewTop = max(min(m.viewTop, m.height-m.viewH), 0)
+	}
+	return v
+}
+
+func (m *model) viewBody() string {
 	var b strings.Builder
 	left := fmt.Sprintf(" whip · %s @ %s · %s", m.modelName, m.provName, cwd())
 	if m.goal != "" {
@@ -3313,7 +3394,7 @@ func (m *model) View() string {
 	// and the /help command. The bottom hint covers the busy/interactive states.
 	tips := "`ctrl+p` commands"
 	b.WriteString(dimStyle.Render(tips) + "\n\n")
-	b.WriteString(m.viewportView() + "\n")
+	b.WriteString(m.viewportView() + "\n") // selection highlight paints inside
 	if m.curThink != "" {
 		b.WriteString("\n" + m.thinkView() + "\n")
 	}

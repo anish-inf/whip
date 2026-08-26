@@ -37,11 +37,13 @@ func TestToolExpand(t *testing.T) {
 		t.Fatal("second ctrl+e should collapse")
 	}
 
-	// click on the block row expands it
+	// click on the block row expands it (press consumed by selection; the
+	// release replays it as a click)
 	m.refreshVP()
-	y0 := m.blocks[0].y0 + m.contentPad()
-	screenY := y0 - m.vp.YOffset + 2
+	screenY := blockRowY(m, m.blocks[0].y0) // content starts at screen row 3
 	tm, _ = m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: 5, Y: screenY})
+	m = tm.(*model)
+	tm, _ = m.Update(tea.MouseMsg{Action: tea.MouseActionRelease, Button: tea.MouseButtonLeft, X: 5, Y: screenY})
 	m = tm.(*model)
 	if !m.blocks[0].expanded {
 		t.Fatalf("click at screen Y=%d should expand the tool block", screenY)
