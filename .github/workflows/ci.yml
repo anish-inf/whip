@@ -3,6 +3,12 @@ name: ci
 # PR health gate: format, vet, lint, tests, build, dependency hygiene.
 # Mirrors `task check` (the pre-commit hook) plus the release workflow's
 # Swift driver build, so a PR can't break the next tag's release.
+#
+# The work is split across jobs that run on separate runners, so wall-clock is
+# the slowest job rather than the sum of every step. `go` is a required status
+# check (repo ruleset), so it stays — as the gate that fails unless all three
+# parallel jobs succeeded. Add a new job to `go`'s `needs` when you add one,
+# or its failures won't block a merge.
 on:
   pull_request:
   push:
@@ -18,7 +24,7 @@ permissions:
   contents: read
 
 jobs:
-  go:
+  lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -34,6 +40,8 @@ jobs:
             echo "needs gofmt -s:"; echo "$unformatted"; exit 1
           fi
 
+      # Kept alongside golangci-lint's govet: the two run overlapping but not
+      # identical analyzer sets, and here it costs no extra wall-clock.
       - name: go vet
         run: go vet ./...
 
@@ -44,6 +52,20 @@ jobs:
           # Go 1.27 export data. Bump deliberately alongside the Go toolchain.
           # The enabled linters live in .golangci.yml (repo source of truth).
           version: v2.13.1
+
+      - name: go mod tidy is a no-op
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum || { echo "run \`go mod tidy\` and commit"; exit 1; }
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
 
       # internal/browser e2e tests need a Chromium sandbox and internal/tui
       # tests need a tty — neither exists on hosted runners. Same portable
@@ -58,7 +80,7 @@ jobs:
             -coverprofile=cover.out -coverpkg="$(echo $PKGS | tr ' ' ',')" $PKGS
 
       # Self-contained coverage floor — no external service or token, so it
-      # works identically on fork PRs. Baseline today is ~93.7%; the gate fails
+      # works identically on fork PRs. Baseline today is ~93.6%; the gate fails
       # if total statement coverage drops below the floor. Ratchet the floor up
       # over time as coverage improves (don't lower it).
       - name: coverage floor (90%)
@@ -67,17 +89,47 @@ jobs:
           echo "total coverage: ${total}%"
           awk -v t="$total" -v floor=90 'BEGIN { if (t+0 < floor) { printf "coverage %.1f%% is below the %d%% floor\n", t, floor; exit 1 } }'
 
-      - name: go mod tidy is a no-op
-        run: |
-          go mod tidy
-          git diff --exit-code go.mod go.sum || { echo "run \`go mod tidy\` and commit"; exit 1; }
+  # Each GOOS/GOARCH compiles its own copy of the standard library and shares
+  # no build cache with the others, and `go build` already saturates a
+  # runner's cores on one target — so the four get a runner each rather than
+  # taking turns. `needs: [build]` waits for every leg.
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [linux/amd64, linux/arm64, darwin/amd64, darwin/arm64]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
 
-      - name: Cross-compile check (release targets)
+      - name: Cross-compile check (${{ matrix.target }})
+        env:
+          TARGET: ${{ matrix.target }}
         run: |
-          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
-            GOOS=${target%/*} GOARCH=${target#*/} CGO_ENABLED=0 \
-              go build -trimpath -o /dev/null ./cmd/whip || exit 1
-          done
+          GOOS=${TARGET%/*} GOARCH=${TARGET#*/} CGO_ENABLED=0 \
+            go build -trimpath -o /dev/null ./cmd/whip
+
+  # `go` is a required status check in the repo's ruleset, so the name has to
+  # survive the split. It is now the aggregate gate: green only when lint,
+  # test and build all passed. if: always() so a failed dependency reports as
+  # a failure here rather than a skip.
+  go:
+    needs: [lint, test, build]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: require every gate to have passed
+        run: |
+          echo "lint=${{ needs.lint.result }}"
+          echo "test=${{ needs.test.result }}"
+          echo "build=${{ needs.build.result }}"
+          [ "${{ needs.lint.result }}" = success ] || exit 1
+          [ "${{ needs.test.result }}" = success ] || exit 1
+          [ "${{ needs.build.result }}" = success ] || exit 1
 
   # The release pipeline builds the computer-use Swift driver on macOS and
   # go:embeds it — build it here too so a driver-breaking change fails the
