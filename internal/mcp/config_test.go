@@ -290,6 +290,20 @@ func TestLoadMergedFilteredPolicy(t *testing.T) {
 	if len(def.Merged) != 4 || len(def.Blocked) != 0 {
 		t.Errorf("nil policy must import everything, got merged=%v blocked=%v", def.Merged, def.Blocked)
 	}
+
+	// Every discovered entry carries the file it came from, so a failed
+	// server can point at the config to fix.
+	for name, want := range map[string]string{
+		"proj":      filepath.Join(dir, ".mcp.json"),
+		"node_repl": codexFile,
+	} {
+		if got := def.Merged[name].Source; got != want {
+			t.Errorf("Merged[%q].Source = %q, want %q", name, got, want)
+		}
+	}
+	if got := f.Blocked["ghost"].Source; got != filepath.Join(dir, ".mcp.json") {
+		t.Errorf("Blocked[ghost].Source = %q", got)
+	}
 }
 
 // TestManagerFromBlockedDiscovery pins the original failure scenario end to
@@ -321,6 +335,30 @@ func TestManagerFromBlockedDiscovery(t *testing.T) {
 	blocked := mgr.Blocked()
 	if len(blocked) != 1 || blocked[0].Status != StatusDisabled || blocked[0].Note == "" {
 		t.Errorf("blocked snapshot: %+v", blocked)
+	}
+	if blocked[0].Source != codexFile {
+		t.Errorf("blocked row should point at its source file, got %q", blocked[0].Source)
+	}
+}
+
+// TestManagerStatusSource pins the end-to-end handoff: the file a server was
+// discovered from survives NewManager and shows up in the Statuses snapshot,
+// so the /mcp failure row can name the config to fix.
+func TestManagerStatusSource(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte(
+		`{"mcpServers": {"proj": {"command": "proj-srv"}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	codexFile := filepath.Join(dir, "codex.toml") // absent: keeps the real ~/.codex out
+	orig := CodexPath
+	CodexPath = func() string { return codexFile }
+	defer func() { CodexPath = orig }()
+	f := LoadMergedFiltered(dir, nil, ImportPolicyFrom(nil))
+	mgr := NewManager(f.Merged)
+	sts := mgr.Statuses()
+	if len(sts) != 1 || sts[0].Source != filepath.Join(dir, ".mcp.json") {
+		t.Errorf("status source: %+v", sts)
 	}
 }
 

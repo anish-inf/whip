@@ -38,6 +38,12 @@ type ServerConfig struct {
 	Note           string `json:"note,omitempty"`           // surfaced in /mcp status (e.g. unsupported import)
 	StartupTimeout int    `json:"startupTimeout,omitempty"` // seconds to connect + list tools (default 30)
 	ToolTimeout    int    `json:"toolTimeout,omitempty"`    // seconds per tool call (default 60)
+
+	// Source is the config file this server came from (".mcp.json",
+	// "~/.codex/config.toml", "~/.whip/config.json"). Set by discovery for
+	// display (a failed server should point at the file to fix); never
+	// persisted.
+	Source string `json:"-"`
 }
 
 // Remote reports whether the server connects over HTTP rather than stdio.
@@ -209,7 +215,9 @@ func (p ImportSourcePolicy) Admits(name string) bool {
 // list) instead of vanishing silently. Blocked never shadows a whip entry of
 // the same name. Sources attributes every discovered name (merged or
 // blocked) to the file that contributes/would contribute it ("whip",
-// ".mcp.json", or "codex") — codex wins over claude, whip over both.
+// ".mcp.json", or "codex") — codex wins over claude, whip over both. Each
+// merged/blocked ServerConfig also carries its Source file path so a failed
+// server can point at the file to fix.
 type Filtered struct {
 	Merged  map[string]ServerConfig
 	Blocked map[string]ServerConfig
@@ -217,19 +225,32 @@ type Filtered struct {
 	Errs    map[string]error
 }
 
+// setSource stamps every entry of src with the file it was discovered from.
+func setSource(src map[string]ServerConfig, path string) {
+	for name, c := range src {
+		c.Source = path
+		src[name] = c
+	}
+}
+
 // LoadMergedFiltered discovers server configs like LoadMerged, then applies
 // the import policy: filtered-out claude/codex entries land in Blocked as
 // disabled+noted copies. whipCfg entries always pass through.
 func LoadMergedFiltered(cwd string, whipCfg map[string]ServerConfig, policy ImportPolicy) Filtered {
 	errs := map[string]error{}
-	claude, err := LoadClaude(filepath.Join(cwd, ".mcp.json"))
+	claudePath := filepath.Join(cwd, ".mcp.json")
+	claude, err := LoadClaude(claudePath)
 	if err != nil && !os.IsNotExist(err) {
 		errs[".mcp.json"] = err
 	}
-	codex, err := LoadCodex(CodexPath())
+	codexPath := CodexPath()
+	codex, err := LoadCodex(codexPath)
 	if err != nil && !os.IsNotExist(err) {
-		errs[CodexPath()] = err
+		errs[codexPath] = err
 	}
+	setSource(claude, claudePath)
+	setSource(codex, codexPath)
+	setSource(whipCfg, whipConfigPath())
 	blocked := map[string]ServerConfig{}
 	split := func(src map[string]ServerConfig, p ImportSourcePolicy) map[string]ServerConfig {
 		kept := make(map[string]ServerConfig, len(src))
@@ -285,6 +306,17 @@ func LoadMerged(cwd string, whipCfg map[string]ServerConfig) (map[string]ServerC
 // CodexPath is the codex CLI's config file location (~/.codex/config.toml).
 // A variable so tests can point it at fixtures.
 var CodexPath = defaultCodexPath
+
+// whipConfigPath is whip's own config file location (~/.whip/config.json) —
+// the source of any server from the config's "mcp" block. Best-effort: ""
+// when the home dir isn't resolvable.
+func whipConfigPath() string {
+	dir, err := config.Dir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(dir, "config.json")
+}
 
 // FromConfigMap converts whip's config-file MCP block (identical field
 // shape, defined in internal/config to keep that package a leaf) into

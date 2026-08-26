@@ -170,6 +170,9 @@ func mcpTestCLI(name string) error {
 		if res.Note != "" {
 			fmt.Println("  note:", res.Note)
 		}
+		if res.Source != "" {
+			fmt.Println("  config:", res.Source)
+		}
 		return fmt.Errorf("server %q failed", name)
 	}
 }
