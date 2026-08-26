@@ -25,7 +25,7 @@ func TestBrowserExecE2E(t *testing.T) {
 		t.Skip("no chromium on this box")
 	}
 	if _, err := os.Stat("/tmp/chromelibs/usr/lib/x86_64-linux-gnu"); err == nil {
-		os.Setenv("LD_LIBRARY_PATH", "/tmp/chromelibs/usr/lib/x86_64-linux-gnu:"+os.Getenv("LD_LIBRARY_PATH"))
+		t.Setenv("LD_LIBRARY_PATH", "/tmp/chromelibs/usr/lib/x86_64-linux-gnu:"+os.Getenv("LD_LIBRARY_PATH"))
 	}
 	t.Setenv("ROD_BROWSER_BIN", bin)
 

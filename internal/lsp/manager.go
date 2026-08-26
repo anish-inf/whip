@@ -307,7 +307,7 @@ func (m *Manager) clientFor(ctx context.Context, abs string) (*clientState, erro
 	}
 	m.mu.Unlock()
 	if name == "" || spec.Disabled || len(spec.Command) == 0 {
-		return nil, nil
+		return nil, nil //nolint:nilnil // nil client = no server for this file (or disabled); caller treats that as "no LSP available", not an error
 	}
 	root := findRoot(filepath.Dir(abs), spec.RootMarkers)
 	if m.keyer != nil {

@@ -48,7 +48,7 @@ func chromiumPath(t *testing.T) string {
 	// Unpacked Ubuntu debs for Chrome's shared libs (no sudo on this box).
 	libs := "/tmp/chromelibs/usr/lib/x86_64-linux-gnu"
 	if _, err := os.Stat(libs); err == nil {
-		os.Setenv("LD_LIBRARY_PATH", libs+":"+os.Getenv("LD_LIBRARY_PATH"))
+		t.Setenv("LD_LIBRARY_PATH", libs+":"+os.Getenv("LD_LIBRARY_PATH"))
 	}
 	home, _ := os.UserHomeDir()
 	for _, c := range chromiumCandidates {

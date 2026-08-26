@@ -63,6 +63,7 @@ func goBin(t *testing.T) string {
 }
 
 func runGo(t *testing.T, dir string, args ...string) (string, error) {
+	t.Helper()
 	return runCmd(dir, goBin(t), args...)
 }
 

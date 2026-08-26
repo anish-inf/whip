@@ -52,6 +52,7 @@ func (f *fakeExtClient) send(t *testing.T, s string) {
 // answerLoop answers every CDP request the relay forwards, faking a page at
 // https://example.com/. Runs in a goroutine until the socket closes.
 func (f *fakeExtClient) answerLoop(t *testing.T) {
+	t.Helper()
 	for {
 		msg, err := wsutil.ReadServerText(f)
 		if err != nil {

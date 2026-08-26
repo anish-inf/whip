@@ -146,7 +146,7 @@ func ChromeFindTab(urlPart string) (*ChromeTab, error) {
 			return &t, nil
 		}
 	}
-	return nil, nil
+	return nil, nil //nolint:nilnil // nil tab = no match; callers handle "not found" as a nil tab with nil error
 }
 
 // ChromeState is the JSON shape the model gets from `chrome_state()`.

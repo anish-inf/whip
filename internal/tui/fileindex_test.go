@@ -101,9 +101,7 @@ func TestExpandMentionsFuzzy(t *testing.T) {
 	write(t, dir, "docs/roadmap.md")
 
 	// resolveMentionPath stats against the real cwd, so run from the fixture
-	oldWd, _ := os.Getwd()
-	os.Chdir(dir)
-	defer os.Chdir(oldWd)
+	t.Chdir(dir)
 
 	out := expandMentions("see @roadmap")
 	abs := filepath.Join(dir, "docs", "roadmap.md")

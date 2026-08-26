@@ -478,7 +478,7 @@ func (b *Browser) pendingDialog(ctx context.Context) (*Dialog, error) {
 	// a background reader; v1 surfaces dialogs only through HandleDialog when
 	// an action hangs on one. Generalize to an event buffer if agents trip
 	// on unexpected alerts.
-	return nil, nil
+	return nil, nil //nolint:nilnil // nil dialog = none pending; Info's `err == nil && d != nil` check relies on that contract
 }
 
 // HandleDialog accepts or dismisses the next pending native dialog,

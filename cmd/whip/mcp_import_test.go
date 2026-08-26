@@ -43,14 +43,7 @@ func importFixture(t *testing.T, mcpImport string) (wd string) {
 // chdir switches the process into dir for the test (discovery is cwd-based).
 func chdir(t *testing.T, dir string) {
 	t.Helper()
-	orig, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chdir(dir); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.Chdir(orig) })
+	t.Chdir(dir)
 }
 
 // captureStdout runs fn with os.Stdout redirected and returns what it printed.

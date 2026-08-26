@@ -547,6 +547,9 @@ func (s *Store) Snapshots(id string) map[int]string {
 			out[seq] = ref
 		}
 	}
+	if rows.Err() != nil {
+		return nil
+	}
 	return out
 }
 
@@ -585,6 +588,9 @@ func (s *Store) Schedules(sessionID string) []Schedule {
 		sc.Anchor, _ = time.Parse(time.RFC3339, anchor)
 		sc.LastFire, _ = time.Parse(time.RFC3339, lastFire)
 		out = append(out, sc)
+	}
+	if rows.Err() != nil {
+		return nil
 	}
 	return out
 }
@@ -639,6 +645,9 @@ func (s *Store) Compactions(id string) []Compaction {
 			out = append(out, c)
 		}
 	}
+	if rows.Err() != nil {
+		return nil
+	}
 	return out
 }
 
@@ -667,6 +676,9 @@ func (s *Store) RawMessages(id string) []llm.Message {
 		if json.Unmarshal([]byte(data), &m) == nil {
 			msgs = append(msgs, m)
 		}
+	}
+	if rows.Err() != nil {
+		return nil
 	}
 	return msgs
 }
