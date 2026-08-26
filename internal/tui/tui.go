@@ -234,6 +234,20 @@ func newInput() textarea.Model {
 	return ti
 }
 
+// tuiRunning gates the raw tty query to BEFORE bubbletea starts; bgCache
+// carries the startup answer to runtime re-detections. Both are only touched
+// from the main goroutine (Run pre-tea, then Update inside the event loop).
+//
+// This block must stay ABOVE Run: ineffassign (the golangci-lint gate)
+// decides a package-level write is effectual from the first function in file
+// order that reads the var, and Run's `tuiRunning = true` precedes the read
+// in detectColorScheme — declared below Run, the write is misreported as
+// ineffectual.
+var (
+	tuiRunning bool
+	bgCache    bgResult
+)
+
 // Run starts the interactive session. It returns the id of the session that
 // was active on exit ("" if nothing was said).
 func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string, cautious bool) (string, error) {
@@ -1244,14 +1258,7 @@ func cwd() string {
 // human-readable note naming the source of the decision (shown by /theme auto
 // so a wrong pick is diagnosable).
 //
-// tuiRunning gates the raw tty query to BEFORE bubbletea starts; bgCache
-// carries the startup answer to runtime re-detections. Both are only touched
-// from the main goroutine (Run pre-tea, then Update inside the event loop).
-var (
-	tuiRunning bool
-	bgCache    bgResult
-)
-
+// tuiRunning and bgCache are declared above Run (see the note there).
 type bgResult struct{ light, valid bool }
 
 // inTmuxEnv reports whether whip runs inside tmux/screen, where the terminal
