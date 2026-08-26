@@ -43,8 +43,8 @@ func LogEvent(op, detail string) {
 	if err != nil {
 		return
 	}
-	defer f.Close()
-	fmt.Fprintf(f, "%s %-16s pid=%d %s\n", time.Now().UTC().Format(time.RFC3339), op, os.Getpid(), detail)
+	_, _ = fmt.Fprintf(f, "%s %-16s pid=%d %s\n", time.Now().UTC().Format(time.RFC3339), op, os.Getpid(), detail)
+	_ = f.Close() // best-effort log; close error acknowledged, not actionable
 }
 
 // logf is the printf-style convenience form.

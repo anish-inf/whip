@@ -114,11 +114,14 @@ func parseOSCBg(payload string) bool {
 		}
 		// components are 1–4 hex digits; normalize to 8-bit
 		comp := func(s string) int {
-			v, err := strconv.ParseUint(strings.TrimRight(s, "\x07"), 16, 32)
+			s = strings.TrimRight(s, "\x07")
+			// 4 hex digits max => v <= 0xffff, so the int conversion can't
+			// overflow; the ParseUint bitSize stays 16 to prove it.
+			v, err := strconv.ParseUint(s, 16, 16)
 			if err != nil {
 				return 0
 			}
-			maxVal := (1 << (4 * uint(len(strings.TrimRight(s, "\x07"))))) - 1
+			maxVal := (1 << (4 * uint(len(s)))) - 1
 			if maxVal <= 0 {
 				return 0
 			}

@@ -206,8 +206,20 @@ func runPiped(ctx context.Context, cmd *exec.Cmd) Result {
 	}()
 
 	waitErr := cmd.Wait()
-	// The process exited. Close our read ends so the drain goroutines see EOF
-	// even if a detached grandchild still holds the write end open.
+	// The direct child exited; the kernel pipe buffers still hold its last
+	// writes. Give the drain goroutines a beat to read them BEFORE we close —
+	// closing the read end discards unread buffered data, and under load the
+	// drains may not have been scheduled yet (lost output on fast commands).
+	// The timer bounds the wait for the detached-grandchild case, where a
+	// lingering writer means the drains never see EOF on their own.
+	drained := make(chan struct{})
+	go func() { wg.Wait(); close(drained) }()
+	select {
+	case <-drained:
+	case <-time.After(500 * time.Millisecond):
+	}
+	// Close our read ends so any still-blocked drain goroutines see EOF (a
+	// detached grandchild holding the write end must not stall us).
 	_ = stdout.Close()
 	_ = stderr.Close()
 	wg.Wait()

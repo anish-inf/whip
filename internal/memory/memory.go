@@ -124,9 +124,12 @@ func (s Scope) Remember(text string) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
-	_, err = fmt.Fprintf(f, "- [ ] %s\n", text)
-	return err
+	_, werr := fmt.Fprintf(f, "- [ ] %s\n", text)
+	cerr := f.Close() // close flushes; a failed close can mean lost data
+	if werr != nil {
+		return werr
+	}
+	return cerr
 }
 
 // Forget marks entry n done ("- [x]"): a visible strike, not a deletion, so
