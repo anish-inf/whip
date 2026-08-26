@@ -160,7 +160,7 @@ var _ = context.Background
 func TestMCPFirstSettleNote(t *testing.T) {
 	disabled := false
 	m := mcpModel(t, map[string]mcp.ServerConfig{
-		"dead": {Command: []string{"nope-not-a-binary-xyz"}, StartupTimeout: 2},
+		"dead": {Command: []string{"nope-not-a-binary-xyz"}, StartupTimeout: 2, Source: "/proj/.mcp.json"},
 		"off":  {Command: []string{"true"}, Enabled: &disabled},
 	})
 	// OnChange fires from manager connect goroutines; guard the model the
@@ -195,6 +195,9 @@ func TestMCPFirstSettleNote(t *testing.T) {
 	mu.Unlock()
 	if !strings.Contains(text, "mcp: dead failed") || !strings.Contains(text, "/mcp dead reconnect") {
 		t.Errorf("missing failure note:\n%s", text)
+	}
+	if !strings.Contains(text, "(/proj/.mcp.json)") {
+		t.Errorf("failure note should name the config file:\n%s", text)
 	}
 	if !strings.Contains(text, "mcp: off disabled") {
 		t.Errorf("missing disabled note:\n%s", text)

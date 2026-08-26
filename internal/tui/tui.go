@@ -1763,7 +1763,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				case mcp.StatusReady:
 					m.append(dimStyle.Render(fmt.Sprintf("⚡ mcp: %s ready (%d tools)", srv.Name, srv.Tools)))
 				case mcp.StatusFailed:
-					m.append(errStyle.Render(fmt.Sprintf("✗ mcp: %s failed: %s (/mcp %s reconnect)", srv.Name, srv.Err, srv.Name)))
+					line := fmt.Sprintf("✗ mcp: %s failed: %s", srv.Name, srv.Err)
+					if srv.Source != "" {
+						line += " (" + srv.Source + ")"
+					}
+					m.append(errStyle.Render(line + fmt.Sprintf(" (/mcp %s reconnect)", srv.Name)))
 				case mcp.StatusDisabled:
 					m.append(dimStyle.Render(fmt.Sprintf("○ mcp: %s disabled", srv.Name)))
 				}

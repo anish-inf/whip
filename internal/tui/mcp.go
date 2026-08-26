@@ -100,6 +100,9 @@ func (m *model) mcpStatusView() string {
 		case mcp.StatusFailed:
 			icon = "✗"
 			detail = s.Err
+			if s.Source != "" {
+				detail += " (" + s.Source + ")"
+			}
 		case mcp.StatusDisabled:
 			icon = "○"
 			detail = "disabled"
