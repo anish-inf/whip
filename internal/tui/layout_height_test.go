@@ -13,7 +13,7 @@ import (
 func fullModel() *model {
 	m := compactCmdModel()
 	m.Update(mkWinSize(80, 30))
-	for i := 0; i < 60; i++ {
+	for i := range 60 {
 		m.append(strings.Repeat("x", 10) + "-" + string(rune('a'+i%26)))
 	}
 	tm, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(" ")}) // settle layout

@@ -1,7 +1,11 @@
 # golangci-lint config — the CI gate (see .github/workflows/ci.yml).
-# Keeps the default linters' signal while dropping findings this codebase
-# deliberately doesn't chase: errcheck on Close/Print cleanups (checked
-# where the error is actionable) and errcheck in tests (fixture plumbing).
+# Chosen for outside-contributor PRs: correctness, security, and idiomatic-Go
+# linters with low false-positive rates. Opinionated style/complexity linters
+# (funlen, gocyclo, wsl, godot, ...) stay off on purpose — see the comments
+# in the `disable` list below.
+#
+# errcheck keeps the repo's deliberate carve-outs: Close/Print cleanups are
+# checked where the error is actionable, and tests don't check fixture plumbing.
 
 version: "2"
 
@@ -10,11 +14,59 @@ run:
 
 linters:
   enable:
-    - errcheck
-    - govet
-    - ineffassign
-    - staticcheck
-    - unused
+    # --- correctness (default floor) ---
+    - errcheck # unchecked error returns
+    - govet # built-in checker: printf, copylocks, struct tags, unreachable code
+    - ineffassign # assignments never read
+    - staticcheck # deprecated APIs, common mistakes, simplifications
+    - unused # unused variables, functions, types
+    # --- correctness (added) ---
+    - errorlint # errors.Is/As and %w wrapping instead of == / type asserts
+    - nilerr # returns nil after checking err != nil
+    - copyloopvar # unnecessary loop-var copies (Go 1.22+ semantics)
+    - predeclared # shadowing builtins (len, cap, error, ...)
+    - reassign # reassigning another package's package-level vars
+    - usestdlibvars # stdlib constants instead of literal "GET"/200/...
+    - unconvert # unnecessary type conversions
+    - perfsprint # faster alternatives to fmt.Sprintf where trivial
+    - misspell # common English misspellings in comments/identifiers
+    - dupword # duplicated words in comments ("the the")
+    # --- idiomatic modernization (Go 1.22+; go.mod is 1.27) ---
+    - intrange # range-over-int instead of C-style for loops
+    - modernize # min/max, slices/maps/strings helpers, range-over-func
+    - exptostd # golang.org/x/exp helpers that are now in the stdlib
+    # --- security & resources ---
+    - gosec # SAST: weak crypto, path traversal, injection, hardcoded secrets
+    - bidichk # bidi-unicode trojan-source (CVE-2021-42574)
+    - asciicheck # non-ASCII identifiers (homoglyph attacks)
+    - bodyclose # unclosed http.Response bodies (connection leaks)
+    - noctx # exec.Command / http calls without context.Context
+    # --- meta ---
+    - nolintlint # //nolint must name the linter and carry a reason
+
+  # Explicitly OFF, with reasons (skill defaults we deliberately don't adopt).
+  # Linters not listed are simply not enabled.
+  disable:
+    - funlen # function length — style preference, not correctness
+    - gocyclo # complexity thresholds — noisy on parsers/state machines
+    - nestif # nesting depth — subjective
+    - dupl # duplication — high false-positive rate on table tests
+    - goconst # repeated literals — noisy on test fixtures
+    - wsl_v5 # blank-line rules — churn without correctness value
+    - whitespace # trailing blank lines — gofumpt-adjacent style
+    - godot # comment punctuation — docs style, not code health
+    - revive # broad style opinions; staticcheck covers the valuable part
+    - gocritic # opinionated checks with real false-positive rate
+    - testifylint # repo doesn't use testify
+    - paralleltest # forcing t.Parallel — many tests here mutate cwd/env
+    - wrapcheck # forcing %w on every external error — too noisy
+    - err113 # sentinel-error enforcement — too opinionated
+    - mnd # magic numbers — flags obvious constants
+    - varnamelen # Go favors short names
+    - exhaustruct # breaks zero-value idiom
+    - gochecknoglobals # too strict; valid uses exist
+    - gochecknoinits # too strict; valid uses exist
+
   settings:
     errcheck:
       exclude-functions:
@@ -26,8 +78,30 @@ linters:
         - fmt.Fprintf
         - fmt.Fprintln
         - fmt.Sscanf
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+    gosec:
+      excludes:
+        # The Swift driver is embedded via go:embed by design; subprocess is
+        # core to what whip is. Keep the rest of gosec on.
+        - G204 # subprocess launched with variable — whip is a tool runner
   exclusions:
     rules:
-      # Tests: cleanup and fixture plumbing doesn't check every error.
+      # Tests: cleanup and fixture plumbing doesn't check every error, and
+      # tests legitimately use os.Setenv/os.MkdirTemp where t.* equivalents
+      # are awkward; usetesting is on via staticcheck-adjacent checks anyway.
       - path: _test\.go
-        linters: [errcheck]
+        linters: [errcheck, gosec]
+      # internal/browser drives Chromium over a websocket; noctx/bodyclose
+      # false-positive on chromedp/rod plumbing.
+      - path: internal/browser
+        linters: [noctx, bodyclose]
+
+formatters:
+  enable:
+    - gofumpt # superset of gofmt -s; matches `task check`'s gofmt -s gate
+  settings:
+    gofumpt:
+      extra:
+        group-params: true

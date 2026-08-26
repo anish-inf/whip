@@ -55,7 +55,7 @@ func TestPaletteFilter(t *testing.T) {
 		t.Fatalf("filtering drops the Suggested group, got %q", m.palette.items[0].category)
 	}
 	// backspace restores the full list
-	for i := 0; i < 8; i++ {
+	for range 8 {
 		tm, _ := m.paletteKey(tea.KeyMsg{Type: tea.KeyBackspace})
 		m = tm.(*model)
 	}

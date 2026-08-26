@@ -152,8 +152,10 @@ func agHasTool(a *agent.Agent, name string) bool {
 }
 
 // Guard: the SDK import stays used even as the TUI seam evolves.
-var _ = sdkmcp.Tool{}
-var _ = context.Background
+var (
+	_ = sdkmcp.Tool{}
+	_ = context.Background
+)
 
 // TestMCPFirstSettleNote: each server's first settle lands one transcript
 // line; later transitions stay quiet (no flapping noise).
@@ -189,9 +191,11 @@ func TestMCPFirstSettleNote(t *testing.T) {
 	}
 	mu.Lock()
 	text := ""
+	var textSb192 strings.Builder
 	for _, b := range m.blocks {
-		text += b.text + "\n"
+		textSb192.WriteString(b.text + "\n")
 	}
+	text += textSb192.String()
 	mu.Unlock()
 	if !strings.Contains(text, "mcp: dead failed") || !strings.Contains(text, "/mcp dead reconnect") {
 		t.Errorf("missing failure note:\n%s", text)

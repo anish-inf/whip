@@ -12,6 +12,8 @@
 package computer
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"runtime"
@@ -19,7 +21,7 @@ import (
 )
 
 // ErrUnsupportedPlatform gates every backend call on non-macOS.
-var ErrUnsupportedPlatform = fmt.Errorf("computer-use is macOS-only for now (linux/windows backends are follow-ups)")
+var ErrUnsupportedPlatform = errors.New("computer-use is macOS-only for now (linux/windows backends are follow-ups)")
 
 // Available reports whether this platform can drive the desktop.
 func Available() bool { return runtime.GOOS == "darwin" }
@@ -31,7 +33,7 @@ func osascript(script string) (string, error) {
 	if !Available() {
 		return "", ErrUnsupportedPlatform
 	}
-	cmd := exec.Command("osascript", "-e", script)
+	cmd := exec.CommandContext(context.Background(), "osascript", "-e", script)
 	out, err := cmd.CombinedOutput()
 	s := strings.TrimRight(string(out), "\n")
 	if err != nil {

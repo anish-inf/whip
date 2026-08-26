@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"time"
 )
 
@@ -38,10 +39,8 @@ func (c Catalog) SupportsVision(id string) (vision, found bool) {
 			if len(mi.InputModalities) == 0 {
 				return false, false
 			}
-			for _, m := range mi.InputModalities {
-				if m == "image" {
-					return true, true
-				}
+			if slices.Contains(mi.InputModalities, "image") {
+				return true, true
 			}
 			return false, true
 		}
@@ -110,7 +109,7 @@ func LoadCatalogs() map[string]Catalog {
 	if err != nil {
 		return cats
 	}
-	data, err := os.ReadFile(p)
+	data, err := os.ReadFile(p) //nolint:gosec // G304: p comes from catalogPath (whip-owned dir)
 	if err != nil {
 		return cats
 	}

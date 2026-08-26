@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -57,7 +58,7 @@ func infKey() string {
 	if err != nil {
 		return ""
 	}
-	data, err := os.ReadFile(filepath.Join(home, ".inf", "config.json"))
+	data, err := os.ReadFile(filepath.Join(home, ".inf", "config.json")) //nolint:gosec // G304: fixed path under the user's home dir
 	if err != nil {
 		return ""
 	}
@@ -145,10 +146,10 @@ type Config struct {
 	// disable the built-in registry (gopls).
 	LSPServers map[string]LSPServer `json:"lsp,omitempty"`
 	// Browser configures the native browser subsystem (internal/browser).
-	Browser BrowserConfig `json:"browser,omitempty"`
+	Browser BrowserConfig `json:"browser,omitzero"`
 	// Computer configures computer-use (internal/computer): which apps
 	// computer_exec may drive.
-	Computer ComputerConfig `json:"computer,omitempty"`
+	Computer ComputerConfig `json:"computer,omitzero"`
 }
 
 // ComputerConfig gates computer_exec per app (codex's per-bundle-id model).
@@ -234,7 +235,7 @@ type MCPServer struct {
 // far away from the real config.
 func Dir() (string, error) {
 	if d := os.Getenv("WHIP_HOME"); d != "" {
-		return d, os.MkdirAll(d, 0o700)
+		return d, os.MkdirAll(d, 0o700) //nolint:gosec // G703: WHIP_HOME is the user's own env override for the config dir
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -267,7 +268,7 @@ func Load() (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	data, err := os.ReadFile(p)
+	data, err := os.ReadFile(p) //nolint:gosec // G304: p comes from path() (whip-owned config dir)
 	if os.IsNotExist(err) {
 		cfg := Default()
 		logf("config.load", "missing file, writing defaults (%s)", cfg.fingerprint())
@@ -288,7 +289,7 @@ func Load() (*Config, error) {
 	// defaults would silently wipe them.
 	if len(cfg.Providers) == 0 && len(cfg.Models) == 0 {
 		logf("config.load", "CLOBBERED/EMPTY config detected (%d bytes on disk), attempting recovery", len(data))
-		if bak, err := os.ReadFile(p + ".bak"); err == nil {
+		if bak, err := os.ReadFile(p + ".bak"); err == nil { //nolint:gosec // G304: p is the whip-owned config path
 			var restored Config
 			if parseJSONC(bak, &restored) == nil && (len(restored.Providers) > 0 || len(restored.Models) > 0) {
 				logf("config.load", "restored from .bak (%s)", restored.fingerprint())
@@ -322,7 +323,7 @@ func (c *Config) Save() error {
 		return err
 	}
 	if len(c.Providers) == 0 && len(c.Models) == 0 {
-		if existing, err := os.ReadFile(p); err == nil {
+		if existing, err := os.ReadFile(p); err == nil { //nolint:gosec // G304: p is the whip-owned config path
 			var cur Config
 			if parseJSONC(existing, &cur) == nil && (len(cur.Providers) > 0 || len(cur.Models) > 0) {
 				logf("config.save", "REFUSED empty overwrite of healthy config (disk had providers=%d models=%d)", len(cur.Providers), len(cur.Models))
@@ -335,7 +336,7 @@ func (c *Config) Save() error {
 		return err
 	}
 	// log the before/after fingerprint so a bad write is attributable
-	if existing, err := os.ReadFile(p); err == nil && len(existing) > 0 {
+	if existing, err := os.ReadFile(p); err == nil && len(existing) > 0 { //nolint:gosec // G304: p is the whip-owned config path
 		var cur Config
 		if parseJSONC(existing, &cur) == nil {
 			logf("config.save", "before=(%s) after=(%s)", cur.fingerprint(), c.fingerprint())
@@ -343,7 +344,7 @@ func (c *Config) Save() error {
 			logf("config.save", "before=(unparseable, %d bytes) after=(%s)", len(existing), c.fingerprint())
 		}
 		// best-effort backup before replacing
-		_ = os.WriteFile(p+".bak", existing, 0o600)
+		_ = os.WriteFile(p+".bak", existing, 0o600) //nolint:gosec // G703: p is the whip-owned config path
 	} else {
 		logf("config.save", "first write (%s)", c.fingerprint())
 	}
@@ -449,11 +450,8 @@ func (c *Config) resolveFromCatalog(model, provider string) (Model, string, erro
 		Context:   h.mi.ContextLength,
 		MaxOut:    h.mi.MaxCompletionTokens,
 	}
-	for _, mod := range h.mi.InputModalities {
-		if mod == "image" {
-			m.Vision = true
-			break
-		}
+	if slices.Contains(h.mi.InputModalities, "image") {
+		m.Vision = true
 	}
 	return m, h.prov, nil
 }
@@ -474,6 +472,7 @@ func Default() *Config {
 	return &Config{
 		DefaultModel: "kimi-k3-fast",
 		CompactModel: DefaultCompactModel,
+		//nolint:gosec // G101: APIKeyEnv holds env var NAMES, not credentials
 		Providers: map[string]Provider{
 			"inference": {
 				Name:      "Inference.net",

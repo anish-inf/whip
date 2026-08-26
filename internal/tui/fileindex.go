@@ -45,7 +45,7 @@ func refreshFileIndex() {
 	var files []string
 	_ = filepath.WalkDir(wd, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
-			return nil // unreadable entry; keep going
+			return nil //nolint:nilerr // unreadable entry; keep going
 		}
 		if path == wd {
 			return nil
@@ -59,7 +59,7 @@ func refreshFileIndex() {
 		}
 		rel, err := filepath.Rel(wd, path)
 		if err != nil {
-			return nil
+			return nil //nolint:nilerr // path came from walking wd; skip it rather than abort the walk
 		}
 		files = append(files, filepath.ToSlash(rel))
 		return nil

@@ -12,6 +12,7 @@ import (
 	"io"
 	"math/rand/v2"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -455,12 +456,10 @@ func retryable(err error) bool {
 	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return false
 	}
-	var nr nonRetryable
-	if errors.As(err, &nr) {
+	if _, ok := errors.AsType[nonRetryable](err); ok {
 		return false
 	}
-	var he *HTTPError
-	if errors.As(err, &he) {
+	if he, ok := errors.AsType[*HTTPError](err); ok {
 		code, _ := strconv.Atoi(strings.Fields(he.Status)[0])
 		return retryableStatus(code)
 	}
@@ -473,11 +472,8 @@ func retryable(err error) bool {
 // backoff returns the sleep before the next attempt: 1s, 2s, 4s… capped at
 // 20s, plus up to 25% jitter so concurrent sessions don't retry in lockstep.
 func backoff(attempt int) time.Duration {
-	d := time.Second << (attempt - 1)
-	if d > 20*time.Second {
-		d = 20 * time.Second
-	}
-	return d + time.Duration(rand.Int64N(int64(d/4)+1))
+	d := min(time.Second<<(attempt-1), 20*time.Second)
+	return d + time.Duration(rand.Int64N(int64(d/4)+1)) //nolint:gosec // G404: retry jitter, not a security token
 }
 
 // sleep blocks for d or returns ctx's error if the caller cancels first.
@@ -510,8 +506,7 @@ func IsContextLimit(err error) bool {
 	if err == nil {
 		return false
 	}
-	var he *HTTPError
-	if errors.As(err, &he) {
+	if he, ok := errors.AsType[*HTTPError](err); ok {
 		if strings.HasPrefix(he.Status, "400") || strings.HasPrefix(he.Status, "413") {
 			b := strings.ToLower(he.Body)
 			for _, m := range contextLimitMarkers {
@@ -547,12 +542,7 @@ type ModelInfo struct {
 
 // SupportsVision reports whether the model advertises image input.
 func (mi ModelInfo) SupportsVision() bool {
-	for _, m := range mi.InputModalities {
-		if m == "image" {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(mi.InputModalities, "image")
 }
 
 // Pricing is the provider's per-token USD rates as decimal strings
@@ -570,7 +560,7 @@ func (p Pricing) Rates() (in, out, cacheRead float64) {
 	in, _ = strconv.ParseFloat(p.Prompt, 64)
 	out, _ = strconv.ParseFloat(p.Completion, 64)
 	cacheRead, _ = strconv.ParseFloat(p.InputCacheRead, 64)
-	return
+	return in, out, cacheRead
 }
 
 // SessionCost returns the USD spend for cumulative usage u at per-token
@@ -589,7 +579,7 @@ func SessionCost(u Usage, in, out, cacheRead float64) float64 {
 
 // Models fetches GET /models from the provider.
 func (c *Client) Models(ctx context.Context) ([]ModelInfo, error) {
-	hr, err := http.NewRequestWithContext(ctx, "GET", c.BaseURL+"/models", nil)
+	hr, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+"/models", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -667,7 +657,7 @@ func (c *Client) Stream(ctx context.Context, req Request, onText, onThink func(s
 // wrapper calls it per attempt and reads its own `emitted` flag (set by the
 // wrapped callbacks) to decide whether a retry would replay visible output.
 func (c *Client) streamOnce(ctx context.Context, body []byte, onText, onThink func(string)) (Message, Usage, error) {
-	hr, err := http.NewRequestWithContext(ctx, "POST", c.BaseURL+"/chat/completions", bytes.NewReader(body))
+	hr, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
 		return Message{}, Usage{}, err
 	}
@@ -792,7 +782,7 @@ func (c *Client) Complete(ctx context.Context, req Request) (string, Usage, erro
 
 // completeOnce performs one non-streaming request attempt.
 func (c *Client) completeOnce(ctx context.Context, body []byte) (string, Usage, error) {
-	hr, err := http.NewRequestWithContext(ctx, "POST", c.BaseURL+"/chat/completions", bytes.NewReader(body))
+	hr, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
 		return "", Usage{}, err
 	}
@@ -819,7 +809,7 @@ func (c *Client) completeOnce(ctx context.Context, body []byte) (string, Usage, 
 		return "", Usage{}, err
 	}
 	if len(out.Choices) == 0 {
-		return "", Usage{}, fmt.Errorf("no choices in completion response")
+		return "", Usage{}, errors.New("no choices in completion response")
 	}
 	var usage Usage
 	if out.Usage != nil {

@@ -12,6 +12,7 @@ package mcp
 import (
 	"fmt"
 	"hash/fnv"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -103,7 +104,7 @@ func serverKey(name string) string {
 		return name // already safe and "__"-free
 	}
 	sum := fnv.New32a()
-	sum.Write([]byte(name))
+	_, _ = sum.Write([]byte(name)) // hash.Hash never errors
 	return fmt.Sprintf("%s_%08x", strings.ReplaceAll(sanitize(name), "_", "-"), sum.Sum32())
 }
 
@@ -135,15 +136,9 @@ func ParseToolName(name string) (srvKey, tool string, ok bool) {
 // predictable, and matches how claude/codex treat their own scopes.
 func Merge(whip, codex, claude map[string]ServerConfig) map[string]ServerConfig {
 	out := make(map[string]ServerConfig, len(whip)+len(codex)+len(claude))
-	for name, cfg := range claude {
-		out[name] = cfg
-	}
-	for name, cfg := range codex {
-		out[name] = cfg
-	}
-	for name, cfg := range whip {
-		out[name] = cfg
-	}
+	maps.Copy(out, claude)
+	maps.Copy(out, codex)
+	maps.Copy(out, whip)
 	return out
 }
 

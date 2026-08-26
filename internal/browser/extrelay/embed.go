@@ -32,7 +32,7 @@ func WriteExtension(dir string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return nil, err
 	}
 	for _, e := range entries {
@@ -44,7 +44,7 @@ func WriteExtension(dir string) ([]string, error) {
 			return written, err
 		}
 		dst := filepath.Join(dir, e.Name())
-		if err := os.WriteFile(dst, data, 0o644); err != nil {
+		if err := os.WriteFile(dst, data, 0o600); err != nil {
 			return written, err
 		}
 		written = append(written, dst)

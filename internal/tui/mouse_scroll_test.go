@@ -14,7 +14,7 @@ func TestWheelScrollsTranscript(t *testing.T) {
 	m := compactCmdModel()
 	m.Update(mkWinSize(80, 20))
 	// overflow the viewport so there's somewhere to scroll
-	for i := 0; i < 40; i++ {
+	for range 40 {
 		m.appendAssistant("line of transcript content that is long enough to matter")
 	}
 	m.vp.GotoBottom()
@@ -34,7 +34,7 @@ func TestWheelScrollsTranscript(t *testing.T) {
 	}
 
 	down := tea.MouseMsg(tea.MouseEvent{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelDown, X: 40, Y: 10})
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		um, _ := m.Update(down)
 		m = um.(*model)
 	}

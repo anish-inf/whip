@@ -29,7 +29,7 @@ func TestBrowserExecE2E(t *testing.T) {
 	}
 	t.Setenv("ROD_BROWSER_BIN", bin)
 
-	ln, _ := net.Listen("tcp", "0.0.0.0:0")
+	ln, _ := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "0.0.0.0:0")
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, `<!doctype html><title>e2e-page</title><h1>hello agent</h1>`)
@@ -37,7 +37,7 @@ func TestBrowserExecE2E(t *testing.T) {
 	go http.Serve(ln, mux)
 	defer ln.Close()
 	ip := "127.0.0.1"
-	if conn, err := net.Dial("udp", "8.8.8.8:80"); err == nil {
+	if conn, err := (&net.Dialer{}).DialContext(context.Background(), "udp", "8.8.8.8:80"); err == nil {
 		ip = conn.LocalAddr().(*net.UDPAddr).IP.String()
 		conn.Close()
 	}

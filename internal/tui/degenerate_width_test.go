@@ -51,7 +51,7 @@ func TestDegenerateWidthThenRealResizeReflows(t *testing.T) {
 	m = tm.(*model)
 
 	var maxW int
-	for _, l := range strings.Split(ansi.Strip(m.vp.View()), "\n") {
+	for l := range strings.SplitSeq(ansi.Strip(m.vp.View()), "\n") {
 		if w := ansi.StringWidth(l); w > maxW {
 			maxW = w
 		}

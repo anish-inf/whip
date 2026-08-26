@@ -7,13 +7,14 @@ package computer
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"os/exec"
 )
 
 // runCmd runs a command in dir, returning combined output.
 func runCmd(dir, name string, args ...string) (string, error) {
-	c := exec.Command(name, args...)
+	c := exec.CommandContext(context.Background(), name, args...)
 	c.Dir = dir
 	var b bytes.Buffer
 	c.Stdout, c.Stderr = &b, &b

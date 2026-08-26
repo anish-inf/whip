@@ -106,7 +106,7 @@ func TestRunJSONStream(t *testing.T) {
 		t.Fatal(err)
 	}
 	var sawText, sawDone bool
-	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+	for line := range strings.SplitSeq(strings.TrimSpace(out), "\n") {
 		var ev map[string]string
 		if err := json.Unmarshal([]byte(line), &ev); err != nil {
 			t.Fatalf("line not JSON: %q: %v", line, err)
@@ -285,7 +285,7 @@ func TestRunQuietJSON(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+	for line := range strings.SplitSeq(strings.TrimSpace(out), "\n") {
 		var ev map[string]string
 		if err := json.Unmarshal([]byte(line), &ev); err != nil {
 			t.Fatalf("stdout should be clean NDJSON, got line %q: %v", line, err)

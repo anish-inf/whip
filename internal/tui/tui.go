@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -52,10 +53,12 @@ var (
 )
 
 // messages sent from the agent goroutine
-type textMsg string
-type toolStartMsg struct{ id, name, args string }
-type toolEndMsg struct{ id, name, result string }
-type steeredMsg string
+type (
+	textMsg      string
+	toolStartMsg struct{ id, name, args string }
+	toolEndMsg   struct{ id, name, result string }
+	steeredMsg   string
+)
 
 // goalFromContextMsg carries the model-formulated goal back from the
 // /goal-from-context goroutine to the Update loop.
@@ -77,17 +80,19 @@ type turnDoneMsg struct {
 	snap  string // pre-turn workspace snapshot commit ("" = not a git repo)
 	clean bool   // the turn left the tree clean — snap is worthless, drop it
 }
-type catalogsMsg map[string]config.Catalog // background /models fetch result
-type noticeMsg string                      // dim one-liner appended to the transcript
-type usageMsg llm.Usage                    // one request's token usage
-type quitArmMsg struct{}                   // the idle ctrl+c arm window expired
-type taskUpdateMsg struct{}                // a background subagent started/settled — redraw
-type mcpStatusMsg struct{}                 // an MCP server changed state — redraw
-type thinkMsg string                       // streamed reasoning tokens
-type imageMsg struct {                     // ctrl+v clipboard image result
-	path string // clipboard image saved to disk
-	err  error
-}
+type (
+	catalogsMsg   map[string]config.Catalog // background /models fetch result
+	noticeMsg     string                    // dim one-liner appended to the transcript
+	usageMsg      llm.Usage                 // one request's token usage
+	quitArmMsg    struct{}                  // the idle ctrl+c arm window expired
+	taskUpdateMsg struct{}                  // a background subagent started/settled — redraw
+	mcpStatusMsg  struct{}                  // an MCP server changed state — redraw
+	thinkMsg      string                    // streamed reasoning tokens
+	imageMsg      struct {                  // ctrl+v clipboard image result
+		path string // clipboard image saved to disk
+		err  error
+	}
+)
 
 // menu is the open completion dropdown.
 type menu struct {
@@ -257,7 +262,7 @@ func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string, ca
 	if ok, err := checkTrust(); err != nil {
 		return "", err
 	} else if !ok {
-		return "", fmt.Errorf("folder not trusted")
+		return "", errors.New("folder not trusted")
 	}
 
 	ag, mn, pn, err := buildAgent(cfg, modelName, provName, sysPrompt)
@@ -353,8 +358,8 @@ func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string, ca
 			// UserHistory is newest-first; hist is oldest-first (up-arrow walks
 			// back from the end), so reverse it into place.
 			if hist, herr := st.UserHistory(500); herr == nil && len(hist) > 0 {
-				for i := len(hist) - 1; i >= 0; i-- {
-					m.hist = append(m.hist, hist[i])
+				for _, h := range slices.Backward(hist) {
+					m.hist = append(m.hist, h)
 				}
 				m.histIdx = len(m.hist)
 			}
@@ -365,7 +370,7 @@ func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string, ca
 	}
 	if resumeID != "" {
 		if m.store == nil {
-			return "", fmt.Errorf("cannot resume: session store unavailable")
+			return "", errors.New("cannot resume: session store unavailable")
 		}
 		if err := m.resume(resumeID); err != nil {
 			return "", err
@@ -480,10 +485,10 @@ func (m *model) startupReport() {
 			case mcp.StatusReady:
 				parts = append(parts, fmt.Sprintf("%s ✓ (%d tools)", st.Name, st.Tools))
 			case mcp.StatusFailed:
-				parts = append(parts, fmt.Sprintf("%s ✗", st.Name))
+				parts = append(parts, st.Name+" ✗")
 				warned = true
 			case mcp.StatusDisabled:
-				parts = append(parts, fmt.Sprintf("%s ○", st.Name))
+				parts = append(parts, st.Name+" ○")
 			default:
 				parts = append(parts, st.Name+" ◌")
 			}
@@ -543,7 +548,7 @@ func applyTmuxMouseFix() {
 	// Only override when the pane can still use copy-mode: not in alt-screen,
 	// not already in a mode, and not full/all mouse tracking (in which case the
 	// app genuinely wants the drag). Then select via copy-mode -M.
-	_ = exec.Command("tmux", "bind-key", "-T", "root", "MouseDrag1Pane", "if-shell", "-F",
+	_ = exec.CommandContext(context.Background(), "tmux", "bind-key", "-T", "root", "MouseDrag1Pane", "if-shell", "-F",
 		"#{||:#{alternate_on},#{pane_in_mode},#{mouse_all_flag}}", "send-keys -M", "copy-mode -M").Run()
 }
 
@@ -1225,7 +1230,7 @@ func fmtTok(n int) string {
 	case n >= 1000:
 		return fmt.Sprintf("%.1fk", float64(n)/1000)
 	default:
-		return fmt.Sprint(n)
+		return strconv.Itoa(n)
 	}
 }
 
@@ -1315,7 +1320,7 @@ func detectColorScheme() string {
 	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
 	if err == nil {
 		if light, ok := queryTerminalBackground(tty, inTmux); ok {
-			tty.Close()
+			_ = tty.Close()
 			setScheme(light)
 			bgCache = bgResult{light: light, valid: true}
 			if inTmux {
@@ -1337,14 +1342,14 @@ func detectColorScheme() string {
 			}()
 			select {
 			case r := <-done:
-				tty.Close()
+				_ = tty.Close()
 				setScheme(r.light)
 				bgCache = bgResult{light: r.light, valid: true}
 				return "terminal query"
 			case <-time.After(300 * time.Millisecond):
 			}
 		}
-		tty.Close()
+		_ = tty.Close()
 	}
 	light, ok, how := fallbackScheme(inTmux, os.Getenv("COLORFGBG"))
 	if ok {
@@ -1382,12 +1387,12 @@ func fallbackScheme(inTmux bool, colorfgbg string) (light, ok bool, how string) 
 // the value, not View(): the textarea clamps View() to its current height, so
 // measuring it can never grow the box.
 func (m *model) inputContentHeight() int {
-	contentWidth := m.input.Width() - 2 // minus the "┃ " prompt
-	if contentWidth < 1 {
-		contentWidth = 1
-	}
+	contentWidth := max(
+		// minus the "┃ " prompt
+		m.input.Width()-2, 1,
+	)
 	h := 0
-	for _, line := range strings.Split(m.input.Value(), "\n") {
+	for line := range strings.SplitSeq(m.input.Value(), "\n") {
 		h += max(1, (lipgloss.Width(line)+contentWidth-1)/contentWidth)
 	}
 	return h
@@ -1694,7 +1699,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			m.append(errStyle.Render("/me: editor failed: " + msg.err.Error()))
 		} else if n := len(config.MeInstructions()); n > 0 {
-			m.append(dimStyle.Render("✓ me.md saved — standing instructions updated (" + fmt.Sprint(n) + " chars)"))
+			m.append(dimStyle.Render("✓ me.md saved — standing instructions updated (" + strconv.Itoa(n) + " chars)"))
 		} else {
 			m.append(dimStyle.Render("me.md saved — no standing instructions set (all comments)"))
 		}
@@ -1769,7 +1774,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.flushThink()
 		m.flushCurrent()
 		switch {
-		case msg.err == context.Canceled:
+		case errors.Is(msg.err, context.Canceled):
 			m.busy = false
 			m.cancel = nil
 			m.append(dimStyle.Render("(interrupted)"))
@@ -1866,7 +1871,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// goal loop: keep working until the model explicitly declares GOAL_MET
 		if m.goal != "" && msg.err == nil {
 			if goalMet(msg.final) {
-				m.append(dimStyle.Render("◎ goal met after " + fmt.Sprint(m.goalRounds) + " round(s)"))
+				m.append(dimStyle.Render("◎ goal met after " + strconv.Itoa(m.goalRounds) + " round(s)"))
 				m.setGoal("")
 				return m, nil
 			}
@@ -2000,6 +2005,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// interactive passthrough: forward keystrokes to the child's PTY instead
+	//nolint:dupword // double-press shortcut, not a typo
 	// of editing the input box. ctrl+c ctrl+c breaks out (cancel), esc forwards
 	// a single esc to the child (many prompts use esc to cancel).
 	if m.iactive != nil {
@@ -2036,12 +2042,12 @@ func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// newline always lands (and the textarea's own repositionView scrolls
 		// the new line into view), then reapply the visual cap via SetHeight,
 		// which clamps rendering only, never content.
-		cap := m.input.MaxHeight
+		maxHeight := m.input.MaxHeight
 		m.input.MaxHeight = 0
 		var cmd tea.Cmd
 		m.input, cmd = m.input.Update(tea.KeyMsg{Type: tea.KeyCtrlJ})
-		m.input.MaxHeight = cap
-		m.input.SetHeight(cap)
+		m.input.MaxHeight = maxHeight
+		m.input.SetHeight(maxHeight)
 		// bubbles' InsertNewline scrolls the internal viewport to follow the
 		// cursor while the box is still 1 line high (YOffset=1); the deferred
 		// growInput rebuild inherits that stale offset and the first line
@@ -2432,7 +2438,8 @@ func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 var shiftEnterRe = regexp.MustCompile(
 	`'\[', '1', '3', ';', '2', 'u'` + // CSI 13;2u
 		`|'\[', '2', '7', ';', '2', ';', '1', '3', '~'` + // CSI 27;2;13~
-		`|'\[', 'five', 'seven', 'four', 'four', 'one', 'u'`) // CSI 57441u
+		`|'\[', 'five', 'seven', 'four', 'four', 'one', 'u'`,
+) // CSI 57441u
 
 // isShiftEnterSeq reports whether msg is a shift+enter sequence bubbletea
 // surfaced as an unknown/unmapped key.
@@ -2456,10 +2463,7 @@ func (m *model) busyStats() string {
 	if m.turnStart.IsZero() {
 		return ""
 	}
-	d := m.nowFn().Sub(m.turnStart)
-	if d < 0 {
-		d = 0
-	}
+	d := max(m.nowFn().Sub(m.turnStart), 0)
 	elapsed := d.Round(time.Second)
 	stats := fmt.Sprintf(" %d:%02d", int(elapsed.Minutes()), int(elapsed.Seconds())%60)
 	if u := m.agent.Usage(); u.PromptTokens > 0 || u.CompletionTokens > 0 {
@@ -2955,10 +2959,7 @@ func indentLines(s string, n int) string {
 			continue
 		}
 		lead := len(l) - len(strings.TrimLeft(l, " "))
-		shift := n + lead - docMargin
-		if shift < 0 {
-			shift = 0
-		}
+		shift := max(n+lead-docMargin, 0)
 		lines[i] = strings.Repeat(" ", shift) + strings.TrimLeft(l, " ")
 	}
 	return strings.Join(lines, "\n")
@@ -3384,7 +3385,7 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 			m.busy = false
 			m.cancel = nil
 			switch {
-			case err != nil && err != context.Canceled:
+			case err != nil && !errors.Is(err, context.Canceled):
 				m.append(errStyle.Render("goal-from-context failed: " + err.Error()))
 			case err == nil && strings.TrimSpace(goal) == "":
 				m.append(errStyle.Render("goal-from-context: model returned an empty goal"))
@@ -3662,8 +3663,10 @@ func (m *model) viewBody() string {
 		b.WriteString("\n" + m.permView() + "\n")
 	}
 	if m.busy {
+		//nolint:dupword // double-press shortcut, not a typo
 		hint := " thinking… (enter queues · /theme /mouse /effort run now · esc interrupts · ctrl+c ctrl+c interrupts)"
 		if m.iactive != nil {
+			//nolint:dupword // double-press shortcut, not a typo
 			hint = " bash (interactive) — type to respond · ctrl+c ctrl+c to cancel"
 		} else if m.interrupt1 {
 			hint = " thinking… (esc or ctrl+c again to interrupt)"

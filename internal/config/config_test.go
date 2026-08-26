@@ -215,7 +215,8 @@ func TestLoadPreservesMCPImportOnClobber(t *testing.T) {
 	dir := filepath.Join(home, ".whip")
 	os.MkdirAll(dir, 0o700)
 	os.WriteFile(filepath.Join(dir, "config.json"), []byte(
-		`{"providers":null,"models":null,"mcpImport":{"codex":{"enabled":false}}}`), 0o600)
+		`{"providers":null,"models":null,"mcpImport":{"codex":{"enabled":false}}}`,
+	), 0o600)
 	cfg, err := Load()
 	if err != nil {
 		t.Fatal(err)

@@ -8,6 +8,12 @@ on:
   push:
     branches: [main]
 
+# Cancel superseded runs on the same ref/PR — a force-push or a quick follow-up
+# commit shouldn't waste a runner on a stale diff.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -34,16 +40,18 @@ jobs:
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v8
         with:
-          version: latest
-          # No config file yet — defaults (errcheck, govet, ineffassign,
-          # staticcheck, unused) are a sensible floor. Add .golangci.yml
-          # when we want to tune.
+          # Pinned: "latest" is a moving target and older releases can't parse
+          # Go 1.27 export data. Bump deliberately alongside the Go toolchain.
+          # The enabled linters live in .golangci.yml (repo source of truth).
+          version: v2.13.1
 
       # internal/browser e2e tests need a Chromium sandbox and internal/tui
       # tests need a tty — neither exists on hosted runners. Same portable
       # set the release gate runs; the full suite stays local (task test).
+      # -race catches data races; -shuffle=on randomizes test order to catch
+      # inter-test dependencies a contributor might introduce.
       - name: go test (portable set)
-        run: go test -race $(go list ./... | grep -v -e /internal/browser -e /internal/tui)
+        run: go test -race -shuffle=on $(go list ./... | grep -v -e /internal/browser -e /internal/tui)
 
       - name: go mod tidy is a no-op
         run: |

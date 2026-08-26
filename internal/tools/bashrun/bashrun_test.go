@@ -141,7 +141,7 @@ func TestInteractiveKeyForwardingDelaysInactivity(t *testing.T) {
 	keys := make(chan []byte, 16)
 	go func() {
 		// poke a key every 100ms for ~600ms, longer than the 250ms cap below
-		for i := 0; i < 6; i++ {
+		for range 6 {
 			time.Sleep(100 * time.Millisecond)
 			keys <- []byte("x")
 		}

@@ -2,6 +2,7 @@ package browser
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -87,7 +88,7 @@ func TestDriverParity(t *testing.T) {
 		op("AXTree", func() error {
 			tree, err := b.AXTree(ctx)
 			if err == nil && !strings.Contains(tree, "hello") {
-				return fmt.Errorf("ax missing heading")
+				return errors.New("ax missing heading")
 			}
 			return err
 		})
@@ -130,14 +131,14 @@ func TestDriverParity(t *testing.T) {
 		op("WaitElement", func() error {
 			ok, err := b.WaitElement(ctx, "#h", false)
 			if err == nil && !ok {
-				return fmt.Errorf("not found")
+				return errors.New("not found")
 			}
 			return err
 		})
 		op("Tabs", func() error {
 			tabs, err := b.Tabs(ctx)
 			if err == nil && len(tabs) == 0 {
-				return fmt.Errorf("no tabs")
+				return errors.New("no tabs")
 			}
 			return err
 		})

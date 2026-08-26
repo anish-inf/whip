@@ -1,5 +1,7 @@
 package tui
 
+import "slices"
+
 import "github.com/context-labs/whip/internal/config"
 
 // defaultEfforts are the fallback levels when the provider doesn't advertise
@@ -94,10 +96,5 @@ func (m *model) updateCatalogs(cats map[string]config.Catalog) {
 }
 
 func contains(xs []string, x string) bool {
-	for _, e := range xs {
-		if e == x {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(xs, x)
 }

@@ -376,10 +376,7 @@ func runInteractive(ctx context.Context, cmd *exec.Cmd, opts Options) Result {
 				return res
 			}
 			if opts.OnAwaitInput != nil {
-				secs := int((opts.InactivityTimeout - idle + time.Second - 1) / time.Second)
-				if secs < 0 {
-					secs = 0
-				}
+				secs := max(int((opts.InactivityTimeout-idle+time.Second-1)/time.Second), 0)
 				opts.OnAwaitInput(secs)
 			}
 		}
@@ -392,8 +389,7 @@ func exitString(err error) string {
 	if err == nil {
 		return ""
 	}
-	var exitErr *exec.ExitError
-	if errors.As(err, &exitErr) {
+	if exitErr, ok := errors.AsType[*exec.ExitError](err); ok {
 		return fmt.Sprintf("(exit: %s)", exitErr)
 	}
 	return fmt.Sprintf("(exit: %v)", err)

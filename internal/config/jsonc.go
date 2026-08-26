@@ -3,7 +3,7 @@ package config
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"os"
 	"path/filepath"
 )
@@ -48,7 +48,7 @@ func stripJSONC(src []byte) ([]byte, error) {
 					j++
 				}
 				if j+1 >= n {
-					return nil, fmt.Errorf("unterminated block comment")
+					return nil, errors.New("unterminated block comment")
 				}
 				blank(out, i, j+2)
 				i = j + 2
@@ -60,7 +60,7 @@ func stripJSONC(src []byte) ([]byte, error) {
 		}
 	}
 	if inString {
-		return nil, fmt.Errorf("unterminated string literal")
+		return nil, errors.New("unterminated string literal")
 	}
 	return removeTrailingCommas(out), nil
 }
@@ -136,7 +136,7 @@ func ReadJSON(name string, v any) error {
 	if err != nil {
 		return err
 	}
-	data, err := os.ReadFile(filepath.Join(dir, name))
+	data, err := os.ReadFile(filepath.Join(dir, name)) //nolint:gosec // G304: dir/name are whip-owned state files
 	if err != nil {
 		return err
 	}

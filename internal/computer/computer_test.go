@@ -1,6 +1,7 @@
 package computer
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -33,7 +34,8 @@ func TestPolicyCheck(t *testing.T) {
 	if err == nil {
 		t.Fatal("unlisted app under default-deny must need approval")
 	}
-	if _, ok := err.(*ApprovalNeeded); !ok {
+	approvalNeeded := &ApprovalNeeded{}
+	if !errors.As(err, &approvalNeeded) {
 		t.Fatalf("want ApprovalNeeded, got %T", err)
 	}
 	p.Approve("Safari")

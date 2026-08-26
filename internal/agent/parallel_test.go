@@ -18,7 +18,7 @@ import (
 
 // slowTool returns a tool that records how many copies of itself are running
 // concurrently, to prove parallel execution actually overlaps.
-func slowTool(name string, conc *atomic.Int32, maxConc *atomic.Int32) tools.Tool {
+func slowTool(name string, conc, maxConc *atomic.Int32) tools.Tool {
 	return tools.Tool{
 		Def: llm.NewTool(name, "slow", `{"type":"object","properties":{"s":{"type":"string"}}}`),
 		Run: func(ctx context.Context, args json.RawMessage) (string, error) {
@@ -139,7 +139,7 @@ func TestBackgroundTaskDeliversReport(t *testing.T) {
 	// the report should be queued for steering into the parent. Steer runs in
 	// the task goroutine right after settle closes Done, so poll briefly.
 	var pending []pendingSteer
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		if pending = ag.drainPending(); len(pending) > 0 {
 			break
 		}
@@ -165,16 +165,14 @@ func TestBackgroundTaskBroadcastsToManyWaiters(t *testing.T) {
 	const waiters = 8
 	var woken atomic.Int32
 	var wg sync.WaitGroup
-	for i := 0; i < waiters; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range waiters {
+		wg.Go(func() {
 			select {
 			case <-task.Done:
 				woken.Add(1)
 			case <-time.After(5 * time.Second):
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	if woken.Load() != waiters {
@@ -233,7 +231,7 @@ func TestTaskListStableOrder(t *testing.T) {
 		}
 	}
 	// repeated calls never reshuffle
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		got := r.List()
 		for j := range want {
 			if got[j].ID != want[j] {
@@ -412,7 +410,7 @@ func TestBackgroundTaskManySubscribers(t *testing.T) {
 
 	const subs = 4
 	var counts [subs]atomic.Int32
-	for i := 0; i < subs; i++ {
+	for i := range subs {
 		if !ag.Tasks().Subscribe(task.ID, Events{OnText: func(s string) { counts[i].Add(int32(len(s))) }}) {
 			t.Fatalf("subscriber %d rejected", i)
 		}

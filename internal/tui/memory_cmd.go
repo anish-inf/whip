@@ -51,13 +51,13 @@ func (m *model) memoryCommand(args []string) {
 	// bare /memory — list both scopes, open entries first.
 	var b strings.Builder
 	b.WriteString(dimStyle.Render("memory — injected into every turn · /memory <n> [session] marks done · edit the files directly:"))
-	any := false
+	found := false
 	for _, s := range scopes {
 		entries := s.Entries()
 		if s.Path == "" || len(entries) == 0 {
 			continue
 		}
-		any = true
+		found = true
 		fmt.Fprintf(&b, "\n%s (%s)", s.Name, s.Path)
 		for _, e := range entries {
 			if e.Done {
@@ -67,7 +67,7 @@ func (m *model) memoryCommand(args []string) {
 			}
 		}
 	}
-	if !any {
+	if !found {
 		b.WriteString("\n  (empty — the model saves facts with remember, or write a line like \"- [ ] prefers pnpm\" yourself)")
 	}
 	m.append(b.String())

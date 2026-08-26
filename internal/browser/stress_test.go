@@ -8,6 +8,7 @@ package browser
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -33,7 +34,7 @@ func TestConcurrentSessionsDriveIsolatedBrowsers(t *testing.T) {
 	const sessions = 3
 	var wg sync.WaitGroup
 	errs := make(chan error, sessions)
-	for i := 0; i < sessions; i++ {
+	for i := range sessions {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
@@ -79,7 +80,7 @@ func TestChurnOpenClose(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 	defer cancel()
 
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		b, err := Open(ctx, ModeHeadless)
 		if err != nil {
 			t.Fatalf("iter %d open: %v", i, err)
@@ -161,10 +162,10 @@ func TestManySequentialCalls(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		_, err := sess.Do(ctx, func(b Backend) (string, error) {
 			r, err := b.Eval(ctx, fmt.Sprintf("%d+1", i))
-			if err == nil && r != fmt.Sprintf("%d", i+1) {
+			if err == nil && r != strconv.Itoa(i+1) {
 				return "", fmt.Errorf("iter %d: got %s", i, r)
 			}
 			return "", err

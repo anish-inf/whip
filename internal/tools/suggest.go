@@ -43,14 +43,15 @@ func SuggestTool(name string, candidates []string) []string {
 }
 
 // levenshtein computes the edit distance between a and b, stopping early once
-// the distance provably exceeds cap (returns cap+1). Tool names are short and
+// the distance provably exceeds maxDist (returns maxDist+1). Tool names are
+// short and
 // ASCII-heavy; a byte-wise DP is plenty.
-func levenshtein(a, b string, cap int) int {
+func levenshtein(a, b string, maxDist int) int {
 	if a == b {
 		return 0
 	}
-	if d := len(a) - len(b); d > cap || -d > cap {
-		return cap + 1
+	if d := len(a) - len(b); d > maxDist || -d > maxDist {
+		return maxDist + 1
 	}
 	// prev[j] = edit distance between a[:i] and b[:j].
 	prev := make([]int, len(b)+1)
@@ -69,8 +70,8 @@ func levenshtein(a, b string, cap int) int {
 			cur[j] = min3(cur[j-1]+1, prev[j]+1, prev[j-1]+cost)
 			rowMin = min(rowMin, cur[j])
 		}
-		if rowMin > cap {
-			return cap + 1
+		if rowMin > maxDist {
+			return maxDist + 1
 		}
 		prev = cur
 	}

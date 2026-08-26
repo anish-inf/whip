@@ -123,9 +123,11 @@ func Report(edited string, editedDiags []Diagnostic, siblings map[string][]Diagn
 	}
 	sort.Strings(names)
 	shown := min(len(names), maxSiblingFiles)
+	var outSb126 strings.Builder
 	for _, p := range names[:shown] {
-		out += block(p, siblings[p])
+		outSb126.WriteString(block(p, siblings[p]))
 	}
+	out += outSb126.String()
 	plural := "file"
 	if len(names) > 1 {
 		plural = "files"

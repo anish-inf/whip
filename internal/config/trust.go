@@ -30,7 +30,7 @@ func Trusted(dir string) bool {
 	if err != nil {
 		return false
 	}
-	data, err := os.ReadFile(p)
+	data, err := os.ReadFile(p) //nolint:gosec // G304: p is the whip-owned trust file
 	if err != nil {
 		return false
 	}
@@ -48,7 +48,7 @@ func Trust(dir string) error {
 		return err
 	}
 	t := trustedFile{Paths: map[string]bool{}}
-	if data, err := os.ReadFile(p); err == nil {
+	if data, err := os.ReadFile(p); err == nil { //nolint:gosec // G304: p is the whip-owned trust file
 		_ = json.Unmarshal(data, &t)
 	}
 	if t.Paths == nil {

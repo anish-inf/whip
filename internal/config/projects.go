@@ -32,7 +32,7 @@ func loadProjects() projectsFile {
 	if err != nil {
 		return f
 	}
-	data, err := os.ReadFile(p)
+	data, err := os.ReadFile(p) //nolint:gosec // G304: p is the whip-owned projects file
 	if err != nil {
 		return f
 	}
