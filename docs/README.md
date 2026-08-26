@@ -197,6 +197,8 @@ How it works, from the top down:
 - [browser-computer-use.md](browser-computer-use.md) — driving your
   real Chrome (live / dedicated / headless / extension modes) and your Mac
   desktop.
+- [goal-from-context.md](goal-from-context.md) — `/goal-from-context`:
+  distill the conversation tail into a goal and let the loop finish it.
 - [features.md](features.md) — the full feature map, each section
   linked to code and tests.
 - [roadmap.md](roadmap.md) — what's shipped vs. what's next,

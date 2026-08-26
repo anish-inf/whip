@@ -256,6 +256,7 @@ masked prompt open/cancel, good/bad result, live-session rekey).
   `agent.GoalFromContextMessages`); the TUI command mirrors `/compact`'s
   goroutine + `goalFromContextMsg` pattern, refusing while busy and running
   inline when headless. Tests: `goal_test.go` (`TestGoalFromContext*`).
+  User-facing walkthrough: [goal-from-context.md](goal-from-context.md).
 
 ## Conversation time travel
 
