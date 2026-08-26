@@ -388,6 +388,22 @@ func runInteractive(ctx context.Context, cmd *exec.Cmd, opts Options) Result {
 			quietMu.Lock()
 			idle := time.Since(quiet)
 			quietMu.Unlock()
+			// A context kill outranks the inactivity timer. Without this the
+			// kill races the output pump's end-of-stream: whichever arm of
+			// this select won decided whether the same event was reported as
+			// "timed out"/"cancelled" or as "timed out waiting for input".
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				stop()
+				_ = cmd.Wait()
+				res := Result{Output: buf.String(), Killed: true, Interactive: true}
+				if errors.Is(ctxErr, context.DeadlineExceeded) {
+					res.TimedOut = true
+					res.Exit = "timed out"
+				} else {
+					res.Exit = "cancelled"
+				}
+				return res
+			}
 			if idle >= opts.InactivityTimeout {
 				stop()
 				_ = cmd.Wait()

@@ -87,7 +87,16 @@ type server struct {
 
 	autoTries int // auto-reconnect attempts since the last successful connect
 
-	mu sync.Mutex // guards status/err/defs/sess
+	mu sync.Mutex // guards status/err/defs/sess/cfg.Enabled
+}
+
+// disabled reports the server's current enable state. Enable/Disable flip
+// cfg.Enabled while the run and auto-reconnect goroutines read it, so the
+// read takes mu like any other mutable server field.
+func (s *server) disabled() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.cfg.Disabled()
 }
 
 // autoReconnect caps the background reconnect attempts after an unexpected
@@ -114,7 +123,7 @@ func (s *server) kickAutoReconnect(m *Manager) {
 	s.mu.Lock()
 	tries := s.autoTries
 	s.mu.Unlock()
-	if closing || s.cfg.Disabled() || tries >= autoReconnectMax {
+	if closing || s.disabled() || tries >= autoReconnectMax {
 		return
 	}
 	go func() {
@@ -125,7 +134,7 @@ func (s *server) kickAutoReconnect(m *Manager) {
 		s.mu.Lock()
 		gave := s.status == StatusReady || s.autoTries != tries // someone else recovered/retried
 		s.mu.Unlock()
-		if closing || gave || s.cfg.Disabled() {
+		if closing || gave || s.disabled() {
 			return
 		}
 		s.mu.Lock()
@@ -234,7 +243,7 @@ func (m *Manager) Start(ctx context.Context) {
 func (s *server) run(ctx context.Context, m *Manager) {
 	s.connect(ctx, m)
 	for range s.reconnect {
-		if s.cfg.Disabled() {
+		if s.disabled() {
 			s.setState(m, StatusDisabled, "")
 			continue
 		}
@@ -536,8 +545,8 @@ func (m *Manager) Disable(name string) bool {
 	if !ok {
 		return false
 	}
-	s.cfg.Enabled = new(false)
 	s.mu.Lock()
+	s.cfg.Enabled = new(false)
 	old := s.sess
 	s.sess, s.defs = nil, nil
 	s.gen++
@@ -555,7 +564,9 @@ func (m *Manager) Enable(name string) bool {
 	if !ok {
 		return false
 	}
+	s.mu.Lock()
 	s.cfg.Enabled = nil
+	s.mu.Unlock()
 	return m.Reconnect(name)
 }
 
@@ -690,6 +701,9 @@ func (m *Manager) Reconnect(name string) bool {
 // children get their own process group at spawn (defaultTransport) so whip's
 // exit path can also group-kill strays via the bashrun registry pattern.
 func (m *Manager) Close() {
+	m.onChangeMu.Lock()
+	m.closed = true
+	m.onChangeMu.Unlock()
 	for _, s := range m.servers {
 		s.mu.Lock()
 		sess := s.sess

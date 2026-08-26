@@ -60,3 +60,24 @@ func TestMemoryToolsSessionScope(t *testing.T) {
 		t.Fatalf("installation memory file: %v %q", err, data)
 	}
 }
+
+// Bad arguments and store-level failures surface as tool errors, never as a
+// false "Remembered".
+func TestMemoryToolErrors(t *testing.T) {
+	t.Setenv("WHIP_HOME", t.TempDir())
+	ag := New(llm.New("http://unused", "k"), "m", 100, "sys")
+	ctx := context.Background()
+
+	for _, tc := range []struct{ tool, args, want string }{
+		{"remember", `{"text":`, "unexpected end"},             // malformed arguments
+		{"remember", `{"text":"   "}`, "text is required"},     // store rejects it
+		{"forget", `{"n":`, "unexpected end"},                  // malformed arguments
+		{"forget", `{"n":1,"scope":"bogus"}`, "scope must be"}, // bad scope
+		{"forget", `{"n":99}`, "no memor"},                     // nothing to forget
+	} {
+		out := tools.Execute(ctx, ag.Tools, tc.tool, json.RawMessage(tc.args))
+		if !strings.HasPrefix(out, "Error") || !strings.Contains(out, tc.want) {
+			t.Errorf("%s %s: want error containing %q, got %q", tc.tool, tc.args, tc.want, out)
+		}
+	}
+}
