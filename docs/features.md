@@ -411,6 +411,34 @@ prompts, killed after 15s of no input.
 Tests: `killall_test.go` — `TestKillAllReapsChildren` (kills a live `sleep 60`),
 `TestBackgroundGrandchildDoesNotHang`.
 
+## Update check
+
+`internal/update/update.go` — on interactive startup `main` fires
+`update.Check(version)` in a goroutine, concurrent with the trust prompt and
+agent setup, so its ~1 RTT is usually free: when the check wins, the notice
+shows in that very startup report; when startup wins, the recorded notice is
+durable and shows next launch.
+
+The check reads `~/.whip/update.json` first and skips the network when a
+notice is pending for a release not yet installed (never nags twice about the
+same version) or the last check is under 24h old. Otherwise it GETs
+`api.github.com/.../releases/latest` (2s timeout, `gh` token / `GH_TOKEN`
+auth mirroring `install.sh` while the repo is private), and a strictly newer
+semver (prereleases sort before their release) is written to the notice file
+atomically (tmp+rename). The startup report shows `update available: vX.Y.Z
+(run: whip update)`; a successful `whip update` calls `update.Acknowledge()`
+so an installed release stops nagging — and a user who updates out of band
+(curl|sh) has the now-stale notice cleared on next launch, so checks resume.
+`dev` builds never check. Every failure — offline, rate-limited, corrupt
+notice — is silent by design: a version check must never break startup.
+
+Tests: `internal/update/update_test.go` (`TestCheckNewerRelease`,
+`TestCheckSkips` — pending notice / fresh TTL / dev build never fetch,
+`TestCheckStaleTTLRefetches`, `TestCheckOutOfBandUpdate` clears the stale
+notice of a curl|sh updater, `TestCheckFetchFailure` still records the
+attempt, `TestCheckCorruptNotice`, `TestNewer`, `TestPendingAndAcknowledge`);
+`tui/startup_report_test.go` (`TestStartupReportUpdateNotice`).
+
 ## LSP diagnostics
 
 `internal/lsp/` — a stdlib-only LSP client over stdio (JSON-RPC +
