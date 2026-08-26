@@ -163,7 +163,9 @@ type model struct {
 
 	mouseOn      bool       // runtime mouse-capture state (toggle with /mouse)
 	sel          *selection // in-flight/last drag selection over the transcript
-	vpLead       int        // top blank rows viewportView last dropped (selection row mapping)
+	selDragX     int        // last drag pointer position (edge auto-scroll re-checks it)
+	selDragY     int
+	vpLead       int // top blank rows viewportView last dropped (selection row mapping)
 	viewTop      int        // screen row of the view's first line (View tracks it; mouse Y is absolute)
 	viewH        int        // height of the last rendered view
 	themeHow     string     // how auto theme detection resolved (env var, OSC query, …) — captured at startup/theme change for /report; never re-queried
@@ -1555,6 +1557,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.permDialog = &permDialog{req: msg.req, reply: msg.reply}
 		return m, nil
 
+	case selScrollTick:
+		// drag parked past the viewport edge: keep scrolling + extending the
+		// selection until the drag ends or the viewport hits its limit
+		return m, m.selEdgeScroll()
+
 	case tea.KeyMsg:
 		m.sel = nil // any keypress clears a finished selection highlight
 		return m.key(msg)
@@ -1566,8 +1573,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Shift {
 			return m, nil
 		}
-		if m.handleMouseSelect(msg) {
-			return m, nil
+		if handled, cmd := m.handleMouseSelect(msg); handled {
+			return m, cmd
 		}
 		// clicking the ⚡ control in the header cycles reasoning effort
 		// (mouse Y is an absolute screen row; the header is the view's top row)
