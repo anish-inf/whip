@@ -1407,7 +1407,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 				}
 				if meta.Title == first {
-					m.store.SetTitle(m.sessionID, msg.title)
+					_ = m.store.SetTitle(m.sessionID, msg.title)
 					m.append(dimStyle.Render("◎ session titled: " + msg.title))
 				}
 			}
