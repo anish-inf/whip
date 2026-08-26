@@ -20,7 +20,7 @@ func sessionsCLI() error {
 	if err != nil {
 		return err
 	}
-	defer st.Close()
+	defer func() { _ = st.Close() }()
 	metas, err := st.Recent(50)
 	if err != nil {
 		return err

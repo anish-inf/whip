@@ -60,7 +60,7 @@ func (r permRules) save() {
 	for k := range r {
 		list = append(list, k)
 	}
-	config.WriteJSON("permissions.json", list)
+	_ = config.WriteJSON("permissions.json", list) // best-effort; next save retries
 }
 
 // ruleKey is the stored rule: tool + the arity-collapsed command/path.
