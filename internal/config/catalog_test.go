@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestCatalogPricing(t *testing.T) {
 	cat := Catalog{Models: []ModelInfoLite{
@@ -31,5 +34,39 @@ func TestCatalogPricingRoundTrip(t *testing.T) {
 	in, out, cr, ok := got["p"].Pricing("m")
 	if !ok || in != 1e-6 || out != 5e-6 || cr != 1e-7 {
 		t.Fatalf("round-trip: %v %v %v ok=%v", in, out, cr, ok)
+	}
+}
+
+func TestCatalogStale(t *testing.T) {
+	if (Catalog{FetchedAt: time.Now()}).Stale() {
+		t.Fatal("just-fetched catalog must be fresh")
+	}
+	if !(Catalog{FetchedAt: time.Now().Add(-25 * time.Hour)}).Stale() {
+		t.Fatal("day-old catalog must be stale")
+	}
+	if !(Catalog{}).Stale() {
+		t.Fatal("zero-value catalog must be stale")
+	}
+}
+
+func TestCatalogSupportsVision(t *testing.T) {
+	cat := Catalog{Models: []ModelInfoLite{
+		{ID: "vision", InputModalities: []string{"text", "image"}},
+		{ID: "textonly", InputModalities: []string{"text"}},
+		{ID: "unadvertised"},
+	}}
+	cases := []struct {
+		id            string
+		vision, found bool
+	}{
+		{"vision", true, true},
+		{"textonly", false, true},
+		{"unadvertised", false, false}, // no modalities -> caller falls back
+		{"missing", false, false},
+	}
+	for _, c := range cases {
+		if v, f := cat.SupportsVision(c.id); v != c.vision || f != c.found {
+			t.Errorf("SupportsVision(%q) = %v,%v; want %v,%v", c.id, v, f, c.vision, c.found)
+		}
 	}
 }

@@ -494,7 +494,10 @@ func TestServerInstructions(t *testing.T) {
 	deadline = time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
 		s.mu.Lock()
-		terminal := s.status == StatusReady || (s.status == StatusFailed && s.autoTries >= autoReconnectMax)
+		// Ready is only terminal with a live session: the drop watcher clears
+		// sess/instr under s.mu before it flips status to Failed, so a bare
+		// Ready can be a transient pre-Failed window.
+		terminal := (s.status == StatusReady && s.sess != nil) || (s.status == StatusFailed && s.autoTries >= autoReconnectMax)
 		s.mu.Unlock()
 		if terminal {
 			break
@@ -540,5 +543,32 @@ func TestProbe(t *testing.T) {
 	}
 	if res.Elapsed > 15*time.Second {
 		t.Errorf("probe blew far past the startup timeout: %s", res.Elapsed)
+	}
+}
+
+func TestStatusString(t *testing.T) {
+	want := map[Status]string{
+		StatusDisabled:   "disabled",
+		StatusConnecting: "connecting",
+		StatusReady:      "ready",
+		StatusFailed:     "failed",
+		Status(99):       "unknown",
+	}
+	for s, w := range want {
+		if got := s.String(); got != w {
+			t.Errorf("Status(%d).String() = %q, want %q", s, got, w)
+		}
+	}
+}
+
+func TestSetOnChange(t *testing.T) {
+	m := NewManager(nil)
+	m.FireOnChangeForTest() // nil callback must be a no-op, not a panic
+	fired := 0
+	m.SetOnChange(func() { fired++ })
+	m.FireOnChangeForTest()
+	m.FireOnChangeForTest()
+	if fired != 2 {
+		t.Fatalf("callback fired %d times, want 2", fired)
 	}
 }

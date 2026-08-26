@@ -266,6 +266,57 @@ func TestClearSettledKeepsRunning(t *testing.T) {
 	}
 }
 
+// The global lock (bash) admits one holder at a time: a second acquire
+// blocks until the first releases.
+func TestAcquireGlobalSerializes(t *testing.T) {
+	f := newFileLocks()
+	release := f.acquireGlobal()
+
+	acquired := make(chan struct{})
+	go func() {
+		r2 := f.acquireGlobal()
+		close(acquired)
+		r2()
+	}()
+	select {
+	case <-acquired:
+		t.Fatal("second global acquire should block while the first holds it")
+	case <-time.After(50 * time.Millisecond):
+	}
+	release()
+	select {
+	case <-acquired:
+	case <-time.After(5 * time.Second):
+		t.Fatal("release never unblocked the waiter")
+	}
+}
+
+// SetSessionID publishes (and clears) the session tasks record against, and
+// settle hands that id to OnRecord.
+func TestRegistrySessionID(t *testing.T) {
+	r := newTaskRegistry()
+	if got := r.recordSession(); got != "" {
+		t.Fatalf("fresh registry session: %q", got)
+	}
+	r.SetSessionID("s1")
+	if got := r.recordSession(); got != "s1" {
+		t.Fatalf("after set: %q", got)
+	}
+	r.SetSessionID("") // /clear and /fork
+	if got := r.recordSession(); got != "" {
+		t.Fatalf("after clear: %q", got)
+	}
+
+	var recorded string
+	r.OnRecord = func(id string, _ *BackgroundTask) { recorded = id }
+	r.SetSessionID("s2")
+	r.tasks["task-1"] = &BackgroundTask{ID: "task-1", Status: TaskRunning, Done: make(chan struct{})}
+	r.settle("task-1", TaskDone, "report")
+	if recorded != "s2" {
+		t.Fatalf("settle should record against the published session, got %q", recorded)
+	}
+}
+
 func TestCanonicalPathKey(t *testing.T) {
 	a := canonicalPathKey("foo/../bar/baz.go")
 	b := canonicalPathKey("bar/baz.go")

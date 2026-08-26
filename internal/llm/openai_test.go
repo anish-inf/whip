@@ -1,7 +1,9 @@
 package llm
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -367,5 +369,88 @@ func TestSessionCost(t *testing.T) {
 		if got := SessionCost(c.u, c.in, c.out, c.cacheRead); math.Abs(got-c.want) > 1e-12 {
 			t.Errorf("%s: SessionCost = %v, want %v", c.name, got, c.want)
 		}
+	}
+}
+
+func TestImagePart(t *testing.T) {
+	data := []byte{0x89, 'P', 'N', 'G'}
+	p := ImagePart("png", data)
+	if p.Type != "image_url" || p.ImageURL == nil {
+		t.Fatalf("part = %+v", p)
+	}
+	wantPrefix := "data:image/png;base64,"
+	if !strings.HasPrefix(p.ImageURL.URL, wantPrefix) {
+		t.Fatalf("URL = %q", p.ImageURL.URL)
+	}
+	decoded, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(p.ImageURL.URL, wantPrefix))
+	if err != nil || !bytes.Equal(decoded, data) {
+		t.Fatalf("payload round-trip = %q, %v", decoded, err)
+	}
+	// jpg must be normalized to the real MIME type
+	if jp := ImagePart("jpg", data); !strings.HasPrefix(jp.ImageURL.URL, "data:image/jpeg;base64,") {
+		t.Fatalf("jpg URL = %q", jp.ImageURL.URL)
+	}
+}
+
+func TestModelInfoSupportsVision(t *testing.T) {
+	if !(ModelInfo{InputModalities: []string{"text", "image"}}).SupportsVision() {
+		t.Error("image modality should report vision")
+	}
+	if (ModelInfo{InputModalities: []string{"text"}}).SupportsVision() {
+		t.Error("text-only model should not report vision")
+	}
+	if (ModelInfo{}).SupportsVision() {
+		t.Error("nil modalities should not report vision")
+	}
+}
+
+func TestMessageJSONMultimodalRoundTrip(t *testing.T) {
+	m := Message{Role: "user", Content: "look at this", Parts: []ContentPart{ImagePart("png", []byte("img"))}}
+	data, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// wire form: content array with the text part first, then the image
+	var wire struct {
+		Content []ContentPart `json:"content"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		t.Fatal(err)
+	}
+	if len(wire.Content) != 2 || wire.Content[0].Type != "text" || wire.Content[0].Text != "look at this" || wire.Content[1].Type != "image_url" {
+		t.Fatalf("wire content = %+v", wire.Content)
+	}
+
+	var back Message
+	if err := json.Unmarshal(data, &back); err != nil {
+		t.Fatal(err)
+	}
+	if back.Content != "look at this" || len(back.Parts) != 1 || back.Parts[0].ImageURL.URL != m.Parts[0].ImageURL.URL {
+		t.Fatalf("round-trip = %+v", back)
+	}
+	if back.TextContent() != "look at this" {
+		t.Fatalf("TextContent = %q", back.TextContent())
+	}
+}
+
+func TestMessageUnmarshalPlainString(t *testing.T) {
+	var m Message
+	if err := json.Unmarshal([]byte(`{"role":"assistant","content":"hi","model":"m @ p"}`), &m); err != nil {
+		t.Fatal(err)
+	}
+	if m.Role != "assistant" || m.Content != "hi" || m.Model != "m @ p" {
+		t.Fatalf("m = %+v", m)
+	}
+	// null / absent content is fine (tool-call-only assistant messages)
+	var empty Message
+	if err := json.Unmarshal([]byte(`{"role":"assistant"}`), &empty); err != nil {
+		t.Fatal(err)
+	}
+	if empty.Content != "" {
+		t.Fatalf("empty content = %q", empty.Content)
+	}
+	// malformed content shape must error, not vanish silently
+	if err := json.Unmarshal([]byte(`{"role":"user","content":42}`), &m); err == nil {
+		t.Fatal("numeric content should error")
 	}
 }
