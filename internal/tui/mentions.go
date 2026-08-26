@@ -14,7 +14,7 @@ import (
 // Unknown $tokens are left alone.
 func expandSkills(text string, sk []skills.Skill) string {
 	var used []string
-	for _, tok := range strings.Fields(text) {
+	for tok := range strings.FieldsSeq(text) {
 		if !strings.HasPrefix(tok, "$") || len(tok) < 2 {
 			continue
 		}
@@ -41,7 +41,7 @@ var rangeRe = regexp.MustCompile(`#(\d+)(?:-(\d+))?$`)
 // are never inlined — the model inspects tagged files with its own tools.
 func expandMentions(text string) string {
 	var notes []string
-	for _, tok := range strings.Fields(text) {
+	for tok := range strings.FieldsSeq(text) {
 		if !strings.HasPrefix(tok, "@") || len(tok) < 2 {
 			continue
 		}
@@ -84,7 +84,7 @@ var imageExtsForMention = map[string]bool{
 func imageParts(text string) ([]llm.ContentPart, string) {
 	var parts []llm.ContentPart
 	var names []string
-	for _, tok := range strings.Fields(text) {
+	for tok := range strings.FieldsSeq(text) {
 		if !strings.HasPrefix(tok, "@") || len(tok) < 2 {
 			continue
 		}
@@ -96,7 +96,7 @@ func imageParts(text string) ([]llm.ContentPart, string) {
 		if !ok {
 			continue
 		}
-		data, err := os.ReadFile(abs)
+		data, err := os.ReadFile(abs) //nolint:gosec // G304: abs is the user-@mentioned path, resolved to the workspace
 		if err != nil {
 			continue
 		}

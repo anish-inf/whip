@@ -37,7 +37,8 @@ import (
 var fileRefRE = regexp.MustCompile(
 	`/?[\w@+~-][\w@+~.-]*(?:/[\w@+~-][\w@+~.-]*)+(?::\d+)?` + // path with slashes
 		`|/?[\w@+~-][\w@+~.-]*\.[A-Za-z]{2,10}(?::\d+)?` + // bare multi-letter ext
-		`|\.{1,2}/[\w@+~-][\w@+~.-]*(?:/[\w@+~-][\w@+~.-]*)*(?::\d+)?`) // ./ ../
+		`|\.{1,2}/[\w@+~-][\w@+~.-]*(?:/[\w@+~-][\w@+~.-]*)*(?::\d+)?`,
+) // ./ ../
 
 // linkifyFilePaths wraps mentions of existing local files in OSC 8 file://
 // hyperlinks. exists decides whether a candidate path names a real file
@@ -135,7 +136,7 @@ func splitLineRef(ref string) (path, line string) {
 }
 
 func isDigits(s string) bool {
-	for i := 0; i < len(s); i++ {
+	for i := range len(s) {
 		if s[i] < '0' || s[i] > '9' {
 			return false
 		}
@@ -318,10 +319,11 @@ func hyperlinkGlamourLinks(s string, exists func(string) bool) string {
 			continue // label with no href (anchor-only link): glamour already
 			// prints just the label; nothing to rewire
 		}
-		var hrefText string
+		var sb strings.Builder
 		for _, h := range g.hrefs {
-			hrefText += h.text
+			sb.WriteString(h.text)
 		}
+		hrefText := sb.String()
 		uri := targetURI(hrefText, exists)
 		if uri == "" {
 			continue // leave glamour's output untouched
@@ -365,8 +367,10 @@ func linkAtomAt(s string) (string, byte) {
 		sgr  string
 		kind byte
 	}{
-		{linkTextSGRDark, 't'}, {linkTextSGRLight, 't'},
-		{linkSGRDark, 'h'}, {linkSGRLight, 'h'},
+		{linkTextSGRDark, 't'},
+		{linkTextSGRLight, 't'},
+		{linkSGRDark, 'h'},
+		{linkSGRLight, 'h'},
 	} {
 		if strings.HasPrefix(s, cand.sgr) {
 			return cand.sgr, cand.kind

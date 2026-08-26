@@ -108,7 +108,7 @@ func TestStatusLineSpacing(t *testing.T) {
 	m.provName = "p"
 
 	lines := strings.Split(m.View(), "\n")
-	var statusRow = -1
+	statusRow := -1
 	for i, l := range lines {
 		if strings.Contains(l, "0/0 tok") {
 			statusRow = i

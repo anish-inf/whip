@@ -216,12 +216,14 @@ func TestLoadMergedDiscovery(t *testing.T) {
 func TestLoadMergedFilteredPolicy(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte(
-		`{"mcpServers": {"proj": {"command": "proj-srv"}, "ghost": {"command": "ghost-srv"}}}`), 0o600); err != nil {
+		`{"mcpServers": {"proj": {"command": "proj-srv"}, "ghost": {"command": "ghost-srv"}}}`,
+	), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	codexFile := filepath.Join(dir, "codex.toml")
 	if err := os.WriteFile(codexFile, []byte(
-		"[mcp_servers.node_repl]\ncommand = \"/app/bin/node_repl\"\n[mcp_servers.paper]\nurl = \"http://127.0.0.1:29979/mcp\"\n"), 0o600); err != nil {
+		"[mcp_servers.node_repl]\ncommand = \"/app/bin/node_repl\"\n[mcp_servers.paper]\nurl = \"http://127.0.0.1:29979/mcp\"\n",
+	), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	orig := CodexPath
@@ -265,8 +267,10 @@ func TestLoadMergedFilteredPolicy(t *testing.T) {
 
 	// Only-allowlist, and exclude beating only when both are set.
 	f = LoadMergedFiltered(dir, nil, ImportPolicy{
-		Claude: ImportSourcePolicy{Enabled: true, Only: map[string]bool{"proj": true, "ghost": true},
-			Exclude: map[string]bool{"ghost": true}},
+		Claude: ImportSourcePolicy{
+			Enabled: true, Only: map[string]bool{"proj": true, "ghost": true},
+			Exclude: map[string]bool{"ghost": true},
+		},
 		Codex: ImportSourcePolicy{Enabled: true},
 	})
 	if _, ok := f.Merged["proj"]; !ok {
@@ -314,7 +318,8 @@ func TestManagerFromBlockedDiscovery(t *testing.T) {
 	dir := t.TempDir()
 	codexFile := filepath.Join(dir, "codex.toml")
 	if err := os.WriteFile(codexFile, []byte(
-		"[mcp_servers.node_repl]\ncommand = \"/app/bin/node_repl\"\n"), 0o600); err != nil {
+		"[mcp_servers.node_repl]\ncommand = \"/app/bin/node_repl\"\n",
+	), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	orig := CodexPath
@@ -347,7 +352,8 @@ func TestManagerFromBlockedDiscovery(t *testing.T) {
 func TestManagerStatusSource(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte(
-		`{"mcpServers": {"proj": {"command": "proj-srv"}}}`), 0o600); err != nil {
+		`{"mcpServers": {"proj": {"command": "proj-srv"}}}`,
+	), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	codexFile := filepath.Join(dir, "codex.toml") // absent: keeps the real ~/.codex out

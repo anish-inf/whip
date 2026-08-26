@@ -185,7 +185,7 @@ func (h *Helper) spawn() error {
 	}
 	h.token = hex.EncodeToString(tok)
 
-	h.cmd = exec.Command(path)
+	h.cmd = exec.CommandContext(context.Background(), path)
 	h.cmd.Env = append(os.Environ(), tokenEnvVar+"="+h.token)
 	stdin, err := h.cmd.StdinPipe()
 	if err != nil {
@@ -250,7 +250,7 @@ func (h *Helper) readLineTimeout(d time.Duration) (string, error) {
 		}
 		return r.s, nil
 	case <-time.After(d):
-		return "", fmt.Errorf("timeout waiting for whip-computer")
+		return "", errors.New("timeout waiting for whip-computer")
 	}
 }
 
@@ -281,8 +281,7 @@ func (h *Helper) Call(ctx context.Context, method string, params map[string]any,
 	if err == nil {
 		return nil
 	}
-	var rpcErr *rpcError
-	if errors.As(err, &rpcErr) {
+	if rpcErr, ok := errors.AsType[*rpcError](err); ok {
 		if rpcErr.Code == errCodeStaleGeneration {
 			return &StaleError{Msg: rpcErr.Message}
 		}
@@ -290,7 +289,7 @@ func (h *Helper) Call(ctx context.Context, method string, params map[string]any,
 	}
 	// Transport failure: restart once and retry.
 	if rerr := h.restartLocked(); rerr != nil {
-		return fmt.Errorf("whip-computer crashed and restart failed: %v (restart: %v)", err, rerr)
+		return fmt.Errorf("whip-computer crashed and restart failed: %w (restart: %w)", err, rerr)
 	}
 	params["token"] = h.token // token changed on respawn
 	err = h.callLocked(ctx, method, params, out)
@@ -304,7 +303,7 @@ func (h *Helper) Call(ctx context.Context, method string, params map[string]any,
 // callLocked performs one round-trip. Caller holds h.mu and set the token.
 func (h *Helper) callLocked(ctx context.Context, method string, params map[string]any, out any) error {
 	if h.cmd == nil {
-		return fmt.Errorf("whip-computer not running")
+		return errors.New("whip-computer not running")
 	}
 	h.nextID++
 	req := rpcRequest{JSONRPC: "2.0", ID: h.nextID, Method: method, Params: params}

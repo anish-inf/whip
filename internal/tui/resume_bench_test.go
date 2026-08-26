@@ -12,7 +12,7 @@ import (
 // with a user message, an assistant answer (markdown), and a tool call.
 func benchTranscript(n int) []llm.Message {
 	msgs := make([]llm.Message, 0, n*3)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		msgs = append(msgs,
 			llm.Message{Role: "user", Content: fmt.Sprintf("question %d: how do I do the thing?", i)},
 			llm.Message{Role: "assistant", Content: strings.Repeat("Here is **some** `answer` with text. ", 20)},
@@ -33,7 +33,7 @@ func BenchmarkSeedTranscript(b *testing.B) {
 	msgs := benchTranscript(200)
 	b.ResetTimer()
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		m := compactCmdModel()
 		m.Update(mkWinSize(120, 40))
 		m.seedTranscript(msgs, 1)
@@ -49,7 +49,7 @@ func BenchmarkAppendStream(b *testing.B) {
 	m.seedTranscript(benchTranscript(200), 1)
 	b.ResetTimer()
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	for i := range b.N {
 		m.append(fmt.Sprintf("streamed line %d", i))
 	}
 }

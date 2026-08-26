@@ -30,12 +30,12 @@ func TestBrowserExecReachesModel(t *testing.T) {
 		t.Skip("no chromium on this box")
 	}
 	if _, err := os.Stat("/tmp/chromelibs/usr/lib/x86_64-linux-gnu"); err == nil {
-		os.Setenv("LD_LIBRARY_PATH", "/tmp/chromelibs/usr/lib/x86_64-linux-gnu:"+os.Getenv("LD_LIBRARY_PATH"))
+		t.Setenv("LD_LIBRARY_PATH", "/tmp/chromelibs/usr/lib/x86_64-linux-gnu:"+os.Getenv("LD_LIBRARY_PATH"))
 	}
 	t.Setenv("ROD_BROWSER_BIN", bin)
 	t.Setenv("HOME", t.TempDir())
 
-	ln, _ := net.Listen("tcp", "0.0.0.0:0")
+	ln, _ := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "0.0.0.0:0")
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, `<!doctype html><title>loop-e2e-page</title><h1>hi</h1>`)
@@ -43,7 +43,7 @@ func TestBrowserExecReachesModel(t *testing.T) {
 	go http.Serve(ln, mux)
 	defer ln.Close()
 	ip := "127.0.0.1"
-	if conn, err := net.Dial("udp", "8.8.8.8:80"); err == nil {
+	if conn, err := (&net.Dialer{}).DialContext(context.Background(), "udp", "8.8.8.8:80"); err == nil {
 		ip = conn.LocalAddr().(*net.UDPAddr).IP.String()
 		conn.Close()
 	}

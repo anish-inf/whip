@@ -73,7 +73,7 @@ func ComputerExec() Tool {
 			`{"type":"object","properties":{"code":{"type":"string","description":"Newline/semicolon-separated helper calls; print(...) output is returned."},"timeout":{"type":"number","description":"Seconds before the call is cancelled (default 60; permissions() can wait up to 150)."}},"required":["code"]}`),
 		Run: func(ctx context.Context, args json.RawMessage) (string, error) {
 			if !computer.Available() {
-				return "", fmt.Errorf("computer_exec is macOS-only for now — browser_exec drives browsers on any platform")
+				return "", errors.New("computer_exec is macOS-only for now — browser_exec drives browsers on any platform")
 			}
 			var a struct {
 				Code    string  `json:"code"`
@@ -83,7 +83,7 @@ func ComputerExec() Tool {
 				return "", err
 			}
 			if strings.TrimSpace(a.Code) == "" {
-				return "", fmt.Errorf("no code provided — e.g. print(chrome_state())")
+				return "", errors.New("no code provided — e.g. print(chrome_state())")
 			}
 			if a.Timeout <= 0 {
 				a.Timeout = 60
@@ -125,13 +125,14 @@ func runComputerCode(ctx context.Context, code string) (string, error) {
 // in-session consent prompt (Approver). Returns nil when allowed.
 func gateApp(app string) error {
 	if ComputerPolicy == nil {
-		return fmt.Errorf("computer-use has no policy installed (computer.allow in config, or the TUI consent prompt)")
+		return errors.New("computer-use has no policy installed (computer.allow in config, or the TUI consent prompt)")
 	}
 	err := ComputerPolicy.Check(app)
 	if err == nil {
 		return nil
 	}
-	need, ok := err.(*computer.ApprovalNeeded)
+	need := &computer.ApprovalNeeded{}
+	ok := errors.As(err, &need)
 	if !ok {
 		return err
 	}
@@ -364,7 +365,7 @@ func execComputerStmt(ctx context.Context, st helperStmt) (string, []byte, error
 			}
 			params["x"], params["y"] = x, y
 		} else {
-			return "", nil, fmt.Errorf("click needs (app, index) or (app, x, y)")
+			return "", nil, errors.New("click needs (app, index) or (app, x, y)")
 		}
 		return mutation(app, "click", params)
 	case "type":

@@ -228,9 +228,11 @@ func writeTool() Tool {
 			if deny := checkGate("write", a.Path); deny != "" {
 				return "", errors.New(deny)
 			}
+			//nolint:gosec // workspace files get the user default perms
 			if err := os.MkdirAll(filepath.Dir(a.Path), 0o755); err != nil {
 				return "", err
 			}
+			//nolint:gosec // workspace files get the user default perms
 			if err := os.WriteFile(a.Path, []byte(a.Content), 0o644); err != nil {
 				return "", err
 			}
@@ -270,6 +272,7 @@ func editTool() Tool {
 				return "", fmt.Errorf("old_string appears %d times in %s; make it unique or set replace_all", n, a.Path)
 			}
 			s = strings.ReplaceAll(s, a.OldString, a.NewString)
+			//nolint:gosec // workspace files get the user default perms
 			if err := os.WriteFile(a.Path, []byte(s), 0o644); err != nil {
 				return "", err
 			}

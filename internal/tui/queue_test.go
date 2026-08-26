@@ -382,7 +382,7 @@ func TestQueueRendersOneLineEach(t *testing.T) {
 			needle = needle[:20] // a prefix survives truncation
 		}
 		count := 0
-		for _, line := range strings.Split(view, "\n") {
+		for line := range strings.SplitSeq(view, "\n") {
 			if strings.Contains(ansi.Strip(line), ansi.Strip(needle)) {
 				count++
 			}

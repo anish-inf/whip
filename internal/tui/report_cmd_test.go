@@ -23,8 +23,10 @@ func TestEnvReportCollectsWhitelist(t *testing.T) {
 	Version = "1.4.0-test"
 	defer func() { Version = "dev" }()
 
-	m := &model{modelName: "gpt-5", provName: "openai", themeHow: "COLORFGBG",
-		mouseOn: true, sessionID: "abc123", width: 120, height: 40}
+	m := &model{
+		modelName: "gpt-5", provName: "openai", themeHow: "COLORFGBG",
+		mouseOn: true, sessionID: "abc123", width: 120, height: 40,
+	}
 	r := m.envReport()
 
 	got := map[string]string{}

@@ -25,7 +25,7 @@ func TestWedgedServerTeardown(t *testing.T) {
 	c := newClient(inW, outR, nil)
 
 	start := time.Now()
-	for i := 0; i < 200; i++ {
+	for i := range 200 {
 		c.notify("test/flood", map[string]any{"i": i})
 		if c.isDead() {
 			break

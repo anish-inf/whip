@@ -94,7 +94,7 @@ func ScanDetailed(dirs ...string) ([]Skill, []ScanProblem) {
 // parse reads name/description from the YAML frontmatter.
 // ponytail: single-line values only; a real YAML parser when a skill needs one
 func parse(path string) (Skill, error) {
-	f, err := os.Open(path)
+	f, err := os.Open(path) //nolint:gosec // G304: reading caller-discovered skill files is the function's contract
 	if err != nil {
 		return Skill{}, err
 	}

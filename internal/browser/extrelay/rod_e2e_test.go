@@ -41,7 +41,7 @@ func TestRodThroughRelay(t *testing.T) {
 				Method string          `json:"method"`
 				Params json.RawMessage `json:"params"`
 			}
-			if json.Unmarshal([]byte(msg), &f) != nil || f.ID == 0 {
+			if json.Unmarshal(msg, &f) != nil || f.ID == 0 {
 				continue
 			}
 			answer(ext, f.ID, f.Method)

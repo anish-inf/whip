@@ -100,7 +100,7 @@ func TestMarkdownContrastBothThemes(t *testing.T) {
 		theme := map[bool]string{true: "light", false: "dark"}[light]
 		for name, src := range samples {
 			out := renderMarkdown(src, 70)
-			for _, l := range strings.Split(out, "\n") {
+			for l := range strings.SplitSeq(out, "\n") {
 				plain := ansi.Strip(l)
 				if strings.TrimSpace(plain) == "" {
 					continue
@@ -164,10 +164,22 @@ func ansiColorToRGB(n int, light bool) color.RGBA {
 		return color.RGBA{lv[n/36], lv[(n/6)%6], lv[n%6], 255}
 	}
 	std := [16]color.RGBA{
-		{0, 0, 0, 255}, {128, 0, 0, 255}, {0, 128, 0, 255}, {128, 128, 0, 255},
-		{0, 0, 128, 255}, {128, 0, 128, 255}, {0, 128, 128, 255}, {192, 192, 192, 255},
-		{128, 128, 128, 255}, {255, 0, 0, 255}, {0, 255, 0, 255}, {255, 255, 0, 255},
-		{0, 0, 255, 255}, {255, 0, 255, 255}, {0, 255, 255, 255}, {255, 255, 255, 255},
+		{0, 0, 0, 255},
+		{128, 0, 0, 255},
+		{0, 128, 0, 255},
+		{128, 128, 0, 255},
+		{0, 0, 128, 255},
+		{128, 0, 128, 255},
+		{0, 128, 128, 255},
+		{192, 192, 192, 255},
+		{128, 128, 128, 255},
+		{255, 0, 0, 255},
+		{0, 255, 0, 255},
+		{255, 255, 0, 255},
+		{0, 0, 255, 255},
+		{255, 0, 255, 255},
+		{0, 255, 255, 255},
+		{255, 255, 255, 255},
 	}
 	return std[n%16]
 }
@@ -190,8 +202,8 @@ func TestThemeProbeImages(t *testing.T) {
 			bg = color.RGBA{255, 255, 255, 255}
 			name = "/tmp/whip-theme-light.png"
 		}
-		for y := 0; y < img.Bounds().Dy(); y++ {
-			for x := 0; x < img.Bounds().Dx(); x++ {
+		for y := range img.Bounds().Dy() {
+			for x := range img.Bounds().Dx() {
 				img.Set(x, y, bg)
 			}
 		}

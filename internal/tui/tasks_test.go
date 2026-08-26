@@ -566,7 +566,7 @@ func TestDockScrollsWithSelection(t *testing.T) {
 	m := tasksModel(srv.URL)
 	// task IDs come from a global counter, so tests can't rely on a fresh
 	// numbering — the probe-N descriptions are what the dock shows
-	for i := 0; i < 8; i++ {
+	for i := range 8 {
 		tk := m.agent.StartBackground(t.Context(), fmt.Sprintf("probe-%d", i), "p")
 		defer m.agent.Tasks().Cancel(tk.ID)
 	}

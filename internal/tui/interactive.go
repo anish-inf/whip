@@ -38,13 +38,15 @@ type interactive struct {
 // messages sent from the runner goroutine to the UI thread.
 // interactiveStartMsg carries the keys channel the TUI should push user
 // keystrokes into; processing it on the UI thread starts passthrough mode.
-type interactiveStartMsg struct{ keys chan []byte }
-type interactiveOutMsg struct{ chunk string }
-type interactiveAwaitMsg struct{ secsLeft int }
-type interactiveDoneMsg struct {
-	output string
-	exit   string
-}
+type (
+	interactiveStartMsg struct{ keys chan []byte }
+	interactiveOutMsg   struct{ chunk string }
+	interactiveAwaitMsg struct{ secsLeft int }
+	interactiveDoneMsg  struct {
+		output string
+		exit   string
+	}
+)
 
 // interactiveRunner implements tools.InteractiveRunner and is installed on the
 // agent's bash tool at startup. It owns the tea.Program so it can Send messages

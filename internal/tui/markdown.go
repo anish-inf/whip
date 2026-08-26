@@ -185,14 +185,14 @@ func mdStyle() glamouransi.StyleConfig {
 		st = neutralStyle()
 	case mdLight:
 		st = styles.LightStyleConfig
-		st.Code.Color = strPtr("124")           // dark red
-		st.Code.BackgroundColor = strPtr("255") // lightest gray chip
+		st.Code.Color = new("124")           // dark red
+		st.Code.BackgroundColor = new("255") // lightest gray chip
 	default:
 		st = styles.DarkStyleConfig
 	}
-	st.Table.ColumnSeparator = strPtr("│")
-	st.Table.CenterSeparator = strPtr("┼")
-	st.Table.RowSeparator = strPtr("─")
+	st.Table.ColumnSeparator = new("│")
+	st.Table.CenterSeparator = new("┼")
+	st.Table.RowSeparator = new("─")
 	zero := uint(0)
 	st.Table.Margin = &zero
 	return st
@@ -213,23 +213,21 @@ func mdStyle() glamouransi.StyleConfig {
 func neutralStyle() glamouransi.StyleConfig {
 	st := styles.DarkStyleConfig
 	st.Document.Color = nil // terminal default foreground
-	st.Heading.Color = strPtr("4")
+	st.Heading.Color = new("4")
 	st.H1.Color, st.H1.BackgroundColor = nil, nil // no color chip
 	st.H1.Prefix, st.H1.Suffix = "# ", ""
 	st.H6.Color = nil
-	st.HorizontalRule.Color = strPtr("8")
-	st.Link.Color = strPtr("4")
-	st.LinkText.Color = strPtr("6")
-	st.Image.Color = strPtr("4")
-	st.ImageText.Color = strPtr("8")
-	st.Code.Color = strPtr("1") // inline code: ANSI red, no chip
+	st.HorizontalRule.Color = new("8")
+	st.Link.Color = new("4")
+	st.LinkText.Color = new("6")
+	st.Image.Color = new("4")
+	st.ImageText.Color = new("8")
+	st.Code.Color = new("1") // inline code: ANSI red, no chip
 	st.Code.BackgroundColor = nil
 	st.CodeBlock.StylePrimitive.Color = nil
 	st.CodeBlock.Chroma = nil
 	return st
 }
-
-func strPtr(s string) *string { return &s }
 
 // mdRenderer returns a cached renderer per width (glamour builds a
 // style-traversed renderer per Render call otherwise).

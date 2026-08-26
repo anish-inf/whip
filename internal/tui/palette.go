@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -113,7 +114,8 @@ func slashHint(m *model, name string) string {
 
 func (m *model) paletteItems() []paletteItem {
 	return []paletteItem{
-		{title: "Model", category: "Agent", suggested: true,
+		{
+			title: "Model", category: "Agent", suggested: true,
 			// first suggestion: ctrl+p → enter opens the model panel directly
 			dynDesc: func(m *model) string { return m.modelName + " @ " + m.provName },
 			dynHint: func(m *model) string { return "/model · tab" },
@@ -130,8 +132,10 @@ func (m *model) paletteItems() []paletteItem {
 					}
 				}
 				return pp
-			}},
-		{title: "Reasoning effort", category: "Agent",
+			},
+		},
+		{
+			title: "Reasoning effort", category: "Agent",
 			dynDesc: func(m *model) string {
 				return "thinking level for " + m.agent.Model
 			},
@@ -148,16 +152,20 @@ func (m *model) paletteItems() []paletteItem {
 				return pp
 			},
 			stepBack: func(m *model) { m.setEffort(prevEffort(m.effortsFor(), m.agent.Effort)) },
-			stepFwd:  func(m *model) { m.setEffort(nextEffort(m.effortsFor(), m.agent.Effort)) }},
-		{title: "Resume session", category: "Session", suggested: true,
+			stepFwd:  func(m *model) { m.setEffort(nextEffort(m.effortsFor(), m.agent.Effort)) },
+		},
+		{
+			title: "Resume session", category: "Session", suggested: true,
 			dynDesc: func(m *model) string { return slashHint(m, "/resume") },
 			dynHint: func(m *model) string { return "/resume" },
 			run: func(m *model) (tea.Model, tea.Cmd) {
 				m.palette = nil
 				m.openPicker()
 				return m, nil
-			}},
-		{title: "Rewind conversation", category: "Session", suggested: true,
+			},
+		},
+		{
+			title: "Rewind conversation", category: "Session", suggested: true,
 			dynDesc: func(m *model) string {
 				if len(m.future) > 0 {
 					return "rewound — browse to go back further or forward again"
@@ -172,8 +180,10 @@ func (m *model) paletteItems() []paletteItem {
 				}
 				m.openRewind()
 				return m, nil
-			}},
-		{title: "Fork session", category: "Session",
+			},
+		},
+		{
+			title: "Fork session", category: "Session",
 			dynDesc: func(m *model) string { return slashHint(m, "/fork") },
 			dynHint: func(m *model) string { return "/fork" },
 			run: func(m *model) (tea.Model, tea.Cmd) {
@@ -182,8 +192,10 @@ func (m *model) paletteItems() []paletteItem {
 					m.forkCommand("")
 				}
 				return m, nil
-			}},
-		{title: "Rename session", category: "Session",
+			},
+		},
+		{
+			title: "Rename session", category: "Session",
 			dynDesc: func(m *model) string {
 				if m.sessionID == "" || m.store == nil {
 					return "retitle this session"
@@ -200,31 +212,43 @@ func (m *model) paletteItems() []paletteItem {
 					m.renameCommand("")
 				}
 				return m, nil
-			}},
-		{title: "New session", category: "Session",
+			},
+		},
+		{
+			title: "New session", category: "Session",
 			dynDesc: func(m *model) string { return slashHint(m, "/clear") },
 			dynHint: func(m *model) string { return "/clear" },
 			run: func(m *model) (tea.Model, tea.Cmd) {
 				m.palette = nil
 				return m.command("/clear")
-			}},
-		{title: "Compact session", category: "Session", suggested: true,
+			},
+		},
+		{
+			title: "Compact session", category: "Session", suggested: true,
 			dynDesc: func(m *model) string { return slashHint(m, "/compact") },
 			dynHint: func(m *model) string { return "/compact" },
-			run:     func(m *model) (tea.Model, tea.Cmd) { return m.command("/compact") }},
-		{title: "Context doctor", category: "Session",
+			run:     func(m *model) (tea.Model, tea.Cmd) { return m.command("/compact") },
+		},
+		{
+			title: "Context doctor", category: "Session",
 			dynDesc: func(m *model) string { return slashHint(m, "/context-doctor") },
 			dynHint: func(m *model) string { return "/context-doctor" },
-			run:     func(m *model) (tea.Model, tea.Cmd) { return m.command("/context-doctor") }},
-		{title: "Bug report", category: "Session",
+			run:     func(m *model) (tea.Model, tea.Cmd) { return m.command("/context-doctor") },
+		},
+		{
+			title: "Bug report", category: "Session",
 			dynDesc: func(m *model) string { return slashHint(m, "/report") },
 			dynHint: func(m *model) string { return "/report" },
-			run:     func(m *model) (tea.Model, tea.Cmd) { return m.command("/report") }},
-		{title: "MCP servers", category: "Session",
+			run:     func(m *model) (tea.Model, tea.Cmd) { return m.command("/report") },
+		},
+		{
+			title: "MCP servers", category: "Session",
 			dynDesc: func(m *model) string { return slashHint(m, "/mcp") }, // live count: [n/n ready] badge
 			dynHint: func(m *model) string { return "/mcp" },
-			run:     func(m *model) (tea.Model, tea.Cmd) { return m.command("/mcp") }},
-		{title: "Compaction model", category: "Session",
+			run:     func(m *model) (tea.Model, tea.Cmd) { return m.command("/mcp") },
+		},
+		{
+			title: "Compaction model", category: "Session",
 			dynDesc: func(m *model) string {
 				if m.compactModel == "" {
 					return "default (" + config.DefaultCompactModel + ")"
@@ -251,15 +275,19 @@ func (m *model) paletteItems() []paletteItem {
 					}
 				}
 				return pp
-			}},
-		{title: "Compaction level", category: "Session",
+			},
+		},
+		{
+			title: "Compaction level", category: "Session",
 			dynDesc: func(m *model) string {
 				return "auto-compact at this share of the context window"
 			},
 			dynHint:  func(m *model) string { return "←/→" },
 			stepBack: func(m *model) { m.setCompactPct(m.compactPct() - 10) },
-			stepFwd:  func(m *model) { m.setCompactPct(m.compactPct() + 10) }},
-		{title: "Goal", category: "Session",
+			stepFwd:  func(m *model) { m.setCompactPct(m.compactPct() + 10) },
+		},
+		{
+			title: "Goal", category: "Session",
 			dynDesc: func(m *model) string {
 				if m.goal == "" {
 					return fmt.Sprintf("keep working until the goal is met (max %d rounds)", m.goalMaxRounds())
@@ -270,8 +298,10 @@ func (m *model) paletteItems() []paletteItem {
 			panel: func(m *model) *ppanel {
 				pp := &ppanel{kind: panelGoal, title: "Goal", prepare: m.goal}
 				return pp
-			}},
-		{title: "Thinking tokens", category: "Display",
+			},
+		},
+		{
+			title: "Thinking tokens", category: "Display",
 			dynDesc: func(m *model) string { return "show or hide model reasoning" },
 			dynHint: func(m *model) string { return palHintThinking },
 			run: func(m *model) (tea.Model, tea.Cmd) {
@@ -279,8 +309,10 @@ func (m *model) paletteItems() []paletteItem {
 				return m, nil
 			},
 			stepBack: func(m *model) { m.setThinking(false) },
-			stepFwd:  func(m *model) { m.setThinking(true) }},
-		{title: "Theme", category: "Display",
+			stepFwd:  func(m *model) { m.setThinking(true) },
+		},
+		{
+			title: "Theme", category: "Display",
 			dynDesc: func(m *model) string { return "current: " + CurrentTheme() },
 			dynHint: func(m *model) string { return "/theme " + slashHint(m, "/theme") },
 			panel: func(m *model) *ppanel {
@@ -299,8 +331,10 @@ func (m *model) paletteItems() []paletteItem {
 				return pp
 			},
 			stepBack: func(m *model) { m.setTheme("light") },
-			stepFwd:  func(m *model) { m.setTheme("dark") }},
-		{title: "Browser driver", category: "Display",
+			stepFwd:  func(m *model) { m.setTheme("dark") },
+		},
+		{
+			title: "Browser driver", category: "Display",
 			dynDesc: func(m *model) string {
 				return "current: " + browser.Driver + " — which automation engine drives Chrome"
 			},
@@ -317,26 +351,33 @@ func (m *model) paletteItems() []paletteItem {
 				return pp
 			},
 			stepBack: func(m *model) { m.switchBrowserDriver(browser.DriverRod) },
-			stepFwd:  func(m *model) { m.switchBrowserDriver(browser.DriverChromedp) }},
-		{title: "Mouse capture", category: "Display",
+			stepFwd:  func(m *model) { m.switchBrowserDriver(browser.DriverChromedp) },
+		},
+		{
+			title: "Mouse capture", category: "Display",
 			dynDesc: func(m *model) string { return slashHint(m, "/mouse") },
 			dynHint: func(m *model) string { return "/mouse" },
 			run: func(m *model) (tea.Model, tea.Cmd) {
 				return m.command("/mouse")
 			},
 			stepBack: func(m *model) { m.setMouse(false) },
-			stepFwd:  func(m *model) { m.setMouse(true) }},
-		{title: "Help", category: "App",
+			stepFwd:  func(m *model) { m.setMouse(true) },
+		},
+		{
+			title: "Help", category: "App",
 			dynDesc: func(m *model) string { return slashHint(m, "/help") },
 			dynHint: func(m *model) string { return "/help" },
 			run: func(m *model) (tea.Model, tea.Cmd) {
 				m.palette = nil
 				return m.command("/help")
-			}},
-		{title: "Quit", category: "App",
+			},
+		},
+		{
+			title: "Quit", category: "App",
 			dynDesc: func(m *model) string { return "exit whip" },
 			dynHint: func(m *model) string { return "/quit · " + palHintQuit },
-			run:     func(m *model) (tea.Model, tea.Cmd) { return m, tea.Quit }},
+			run:     func(m *model) (tea.Model, tea.Cmd) { return m, tea.Quit },
+		},
 	}
 }
 
@@ -683,7 +724,7 @@ func (m *model) previewModel(it modelItem) {
 	ag.CompactClient, ag.CompactModel = m.agent.CompactClient, m.agent.CompactModel
 	ag.CompactThreshold = m.agent.CompactThreshold
 	m.agent, m.modelName, m.provName = ag, mn, pn
-	if !contains(m.effortsFor(), ag.Effort) {
+	if !slices.Contains(m.effortsFor(), ag.Effort) {
 		m.setEffort("") // the previewed model doesn't support the current level
 	}
 }

@@ -29,7 +29,7 @@ func detach(rb *rod.Browser) bool {
 	if !nilable(f) || f.IsNil() {
 		return false
 	}
-	client, ok := reflect.NewAt(f.Type(), unsafe.Pointer(f.UnsafeAddr())).Elem().Interface().(*cdp.Client)
+	client, ok := reflect.TypeAssert[*cdp.Client](reflect.NewAt(f.Type(), unsafe.Pointer(f.UnsafeAddr())).Elem()) //nolint:gosec // G103: deliberate reflect-into-unexported-field to reach rod's socket
 	if !ok || client == nil {
 		return false
 	}
@@ -38,7 +38,7 @@ func detach(rb *rod.Browser) bool {
 	if !nilable(wf) || wf.IsNil() {
 		return false
 	}
-	ws, ok := reflect.NewAt(wf.Type(), unsafe.Pointer(wf.UnsafeAddr())).Elem().Interface().(*cdp.WebSocket)
+	ws, ok := reflect.TypeAssert[*cdp.WebSocket](reflect.NewAt(wf.Type(), unsafe.Pointer(wf.UnsafeAddr())).Elem()) //nolint:gosec // G103: same deliberate reflect-into-unexported-field as above
 	if !ok || ws == nil {
 		return false
 	}

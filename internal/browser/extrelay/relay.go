@@ -18,7 +18,7 @@ package extrelay
 import (
 	"context"
 	"crypto/rand"
-	"crypto/sha1"
+	"crypto/sha1" //nolint:gosec // G505: WebSocket handshake hash per RFC 6455, not a security primitive
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -95,6 +95,7 @@ func NewRelay() (*Relay, error) {
 	mux.HandleFunc("/ext", r.handleExt)
 	mux.HandleFunc("/cdp", r.handleCDP)
 	mux.HandleFunc("/swlog", r.handleSWLog) // diagnostic: SW step logging (test/debug)
+	//nolint:gosec // G114: loopback-only relay for the local browser extension; long-lived CDP websockets make timeouts wrong
 	go func() { _ = http.Serve(ln, mux) }()
 	return r, nil
 }
@@ -187,12 +188,12 @@ func upgrade(w http.ResponseWriter, req *http.Request) (*conn, error) {
 	// weight; the accept just has to round-trip what the client expects.
 	if !strings.EqualFold(req.Header.Get("Upgrade"), "websocket") {
 		http.Error(w, "not a websocket upgrade", http.StatusBadRequest)
-		return nil, fmt.Errorf("not a websocket upgrade")
+		return nil, errors.New("not a websocket upgrade")
 	}
 	hj, ok := w.(http.Hijacker)
 	if !ok {
 		http.Error(w, "no hijack", http.StatusInternalServerError)
-		return nil, fmt.Errorf("response writer cannot hijack")
+		return nil, errors.New("response writer cannot hijack")
 	}
 	nc, rw, err := hj.Hijack()
 	if err != nil {
@@ -217,7 +218,7 @@ func upgrade(w http.ResponseWriter, req *http.Request) (*conn, error) {
 // RFC 6455 — accepting any key verbatim (including rod's "nil").
 func wsAccept(key string) string {
 	const magic = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
-	sum := sha1.Sum([]byte(key + magic))
+	sum := sha1.Sum([]byte(key + magic)) //nolint:gosec // G401: RFC 6455 mandates SHA-1 for Sec-WebSocket-Accept
 	return base64.StdEncoding.EncodeToString(sum[:])
 }
 

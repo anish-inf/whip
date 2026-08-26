@@ -63,7 +63,7 @@ func CheckURL(ctx context.Context, rawURL string) error {
 	defer cancel()
 	ips, err := resolver.LookupIP(ctx, "ip", host)
 	if err != nil {
-		return fmt.Errorf("blocked: DNS resolution for %s failed (%s) — fail-closed", host, err)
+		return fmt.Errorf("blocked: DNS resolution for %s failed (%w) — fail-closed", host, err)
 	}
 	for _, ip := range ips {
 		addr, ok := netip.AddrFromSlice(ip)
@@ -133,7 +133,7 @@ func CheckPrivateURL(ctx context.Context, rawURL string) error {
 	defer cancel()
 	ips, err := (&net.Resolver{}).LookupIP(ctx, "ip", host)
 	if err != nil {
-		return fmt.Errorf("blocked: DNS resolution for %s failed (%s) — fail-closed", host, err)
+		return fmt.Errorf("blocked: DNS resolution for %s failed (%w) — fail-closed", host, err)
 	}
 	for _, ip := range ips {
 		if addr, ok := netip.AddrFromSlice(ip); ok && isPrivate(addr) {

@@ -26,11 +26,9 @@ func TestSpawnDedup(t *testing.T) {
 
 	var wg sync.WaitGroup
 	for i := range 8 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			m.WaitDiagnostics(context.Background(), fmt.Sprintf("%s/f%d.go", dir, i))
-		}()
+		})
 	}
 	wg.Wait()
 
@@ -68,11 +66,9 @@ func TestParallelWaiterWake(t *testing.T) {
 	var wg sync.WaitGroup
 	outs := make([]string, 2)
 	for i, name := range []string{"a.go", "b.go"} {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			outs[i] = m.WaitDiagnostics(context.Background(), dir+"/"+name)
-		}()
+		})
 	}
 	wg.Wait()
 	pushes.Wait() // both touches reached the server

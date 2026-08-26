@@ -144,7 +144,7 @@ func TestDiscoverFallsBackToFileWSPath(t *testing.T) {
 			// Minimal 101 handshake response — no ws dependency needed.
 			hj, ok := w.(http.Hijacker)
 			if !ok {
-				http.Error(w, "no hijack", 500)
+				http.Error(w, "no hijack", http.StatusInternalServerError)
 				return
 			}
 			conn, buf, err := hj.Hijack()
@@ -420,7 +420,7 @@ func TestSessionFallbackNotice(t *testing.T) {
 	ctx := context.Background()
 	lines := func(s *Session, n int) []string {
 		var out []string
-		for i := 0; i < n; i++ {
+		for range n {
 			o, err := s.Do(ctx, func(Backend) (string, error) { return "result", nil })
 			if err != nil {
 				t.Fatal(err)

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"sort"
@@ -27,14 +28,14 @@ import (
 // source file); remove on an imported name explains that.
 func mcpCLI(args []string, version string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: whip mcp <list|add|remove|import|serve|test>")
+		return errors.New("usage: whip mcp <list|add|remove|import|serve|test>")
 	}
 	if args[0] == "serve" {
 		return mcp.Serve(context.Background(), version)
 	}
 	if args[0] == "test" {
 		if len(args) < 2 {
-			return fmt.Errorf("usage: whip mcp test <name>")
+			return errors.New("usage: whip mcp test <name>")
 		}
 		return mcpTestCLI(args[1])
 	}
@@ -82,7 +83,7 @@ func mcpCLI(args []string, version string) error {
 
 	case "add":
 		if len(args) < 2 {
-			return fmt.Errorf("usage: whip mcp add <name> -- <cmd...> | whip mcp add <name> --url <url>")
+			return errors.New("usage: whip mcp add <name> -- <cmd...> | whip mcp add <name> --url <url>")
 		}
 		name := args[1]
 		entry := config.MCPServer{}
@@ -93,7 +94,7 @@ func mcpCLI(args []string, version string) error {
 		case len(rest) >= 2 && rest[0] == "--":
 			entry.Command = rest[1:]
 		default:
-			return fmt.Errorf("usage: whip mcp add <name> -- <cmd...> | whip mcp add <name> --url <url>")
+			return errors.New("usage: whip mcp add <name> -- <cmd...> | whip mcp add <name> --url <url>")
 		}
 		sc := mcp.FromConfigMap(map[string]config.MCPServer{name: entry})[name]
 		if msg := sc.Valid(); msg != "" {
@@ -111,7 +112,7 @@ func mcpCLI(args []string, version string) error {
 
 	case "remove":
 		if len(args) < 2 {
-			return fmt.Errorf("usage: whip mcp remove <name>")
+			return errors.New("usage: whip mcp remove <name>")
 		}
 		name := args[1]
 		if _, ok := cfg.MCPServers[name]; !ok {
@@ -195,7 +196,7 @@ func mcpImportCLI(args []string) error {
 		if a == "--dry-run" {
 			dryRun = true
 		} else {
-			return fmt.Errorf("usage: whip mcp import [--dry-run]")
+			return errors.New("usage: whip mcp import [--dry-run]")
 		}
 	}
 	cfg, err := config.Load()

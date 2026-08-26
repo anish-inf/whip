@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -90,10 +91,10 @@ func TestDragSelectsHighlightsCopies(t *testing.T) {
 func TestClickIsNotASelection(t *testing.T) {
 	m := selTestModel()
 	y := blockRowY(m, m.blocks[0].y0)
-	if !m.handleMouseSelect(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: 2, Y: y}) {
+	if handled, _ := m.handleMouseSelect(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: 2, Y: y}); !handled {
 		t.Fatal("press inside the block range is consumed (the viewport must not scroll on it)")
 	}
-	if !m.handleMouseSelect(tea.MouseMsg{Action: tea.MouseActionRelease, Button: tea.MouseButtonLeft, X: 2, Y: y}) {
+	if handled, _ := m.handleMouseSelect(tea.MouseMsg{Action: tea.MouseActionRelease, Button: tea.MouseButtonLeft, X: 2, Y: y}); !handled {
 		t.Fatal("release is consumed (it replays the click)")
 	}
 	if m.sel != nil {
@@ -128,7 +129,7 @@ func TestPressOutsideTranscriptNotConsumed(t *testing.T) {
 	m := selTestModel()
 	lastY := blockRowY(m, m.blocks[1].y1)
 	for _, y := range []int{0, 1, lastY + 2, m.height - 1} {
-		if m.handleMouseSelect(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: 2, Y: y}) {
+		if handled, _ := m.handleMouseSelect(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: 2, Y: y}); handled {
 			t.Fatalf("press on non-transcript row %d must not be consumed", y)
 		}
 		if m.sel != nil {
@@ -219,5 +220,64 @@ func TestReverseRange(t *testing.T) {
 	got = reverseRange("ab\x1b[0mcd", 0, 4)
 	if !strings.Contains(got, "\x1b[0m\x1b[7mcd") {
 		t.Fatalf("reverse video must be re-asserted after a reset: %q", got)
+	}
+}
+
+// Dragging past the viewport's top/bottom edge scrolls it a line, extends the
+// selection to the row now under the pointer, and arms a tick that repeats
+// the scroll while the pointer stays parked there — so a drag can select more
+// than one screenful.
+func TestDragEdgeAutoScroll(t *testing.T) {
+	m := compactCmdModel()
+	m.Update(mkWinSize(80, 30))
+	for i := range 60 {
+		m.append(fmt.Sprintf("line-%02d", i))
+	}
+	tm, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(" ")})
+	m = tm.(*model)
+	m.input.SetValue("")
+	m.View()
+	if m.vp.YOffset == 0 {
+		t.Fatal("test setup: viewport must start scrolled to the bottom")
+	}
+	start := m.vp.YOffset
+
+	// press inside the transcript, then drag up past the header
+	m.handleMouseSelect(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: 2, Y: m.viewTop + 5})
+	handled, cmd := m.handleMouseSelect(tea.MouseMsg{Action: tea.MouseActionMotion, Button: tea.MouseButtonLeft, X: 2, Y: m.viewTop})
+	if !handled || cmd == nil {
+		t.Fatalf("edge drag must be handled and arm the scroll tick (handled=%v cmd=%v)", handled, cmd != nil)
+	}
+	if m.vp.YOffset != start-1 {
+		t.Fatalf("edge drag must scroll up one line: %d -> %d", start, m.vp.YOffset)
+	}
+
+	// parked pointer: each tick keeps scrolling until the top, then disarms
+	for i := 0; i < 200 && m.selEdgeScroll() != nil; i++ {
+	}
+	if m.vp.YOffset != 0 {
+		t.Fatalf("ticks must scroll to the top, YOffset=%d", m.vp.YOffset)
+	}
+	if m.selEdgeScroll() != nil {
+		t.Fatal("at the top the tick must disarm")
+	}
+	// the selection followed the scroll all the way to the first row
+	if lo, _ := selOrder(*m.sel); lo.row != m.blocks[0].y0 {
+		t.Fatalf("selection must extend to the first content row, got %d", lo.row)
+	}
+
+	// and the bottom edge scrolls back down
+	m.selDragY = m.height - 1
+	if m.selEdgeScroll() == nil {
+		t.Fatal("drag below the viewport must scroll down")
+	}
+	if m.vp.YOffset != 1 {
+		t.Fatalf("bottom edge must scroll down one line, YOffset=%d", m.vp.YOffset)
+	}
+
+	// release ends the drag: the tick no-ops from then on
+	m.handleMouseSelect(tea.MouseMsg{Action: tea.MouseActionRelease, Button: tea.MouseButtonLeft, X: 2, Y: m.viewTop})
+	if m.selEdgeScroll() != nil {
+		t.Fatal("after release the tick must disarm")
 	}
 }

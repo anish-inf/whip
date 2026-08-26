@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -18,7 +20,7 @@ import (
 //	           install — the three clicks are on the user).
 func browserCLI(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: whip browser <install>")
+		return errors.New("usage: whip browser <install>")
 	}
 	switch args[0] {
 	case "install":
@@ -82,14 +84,14 @@ func openInstallTargets(dir string) {
 	var urlCmd, dirCmd *exec.Cmd
 	switch runtime.GOOS {
 	case "darwin":
-		urlCmd = exec.Command("open", "-a", "Google Chrome", "chrome://extensions")
-		dirCmd = exec.Command("open", dir)
+		urlCmd = exec.CommandContext(context.Background(), "open", "-a", "Google Chrome", "chrome://extensions")
+		dirCmd = exec.CommandContext(context.Background(), "open", dir)
 	case "windows":
-		urlCmd = exec.Command("cmd", "/c", "start", "", "chrome://extensions")
-		dirCmd = exec.Command("explorer", dir)
+		urlCmd = exec.CommandContext(context.Background(), "cmd", "/c", "start", "", "chrome://extensions")
+		dirCmd = exec.CommandContext(context.Background(), "explorer", dir)
 	default: // linux
-		urlCmd = exec.Command("xdg-open", "chrome://extensions")
-		dirCmd = exec.Command("xdg-open", dir)
+		urlCmd = exec.CommandContext(context.Background(), "xdg-open", "chrome://extensions")
+		dirCmd = exec.CommandContext(context.Background(), "xdg-open", dir)
 	}
 	if urlCmd != nil {
 		_ = urlCmd.Start()

@@ -105,7 +105,8 @@ func block(file string, diags []Diagnostic) string {
 // (sorted by path, capped at maxSiblingFiles). Returns "" when there is
 // nothing to report.
 func Report(edited string, editedDiags []Diagnostic, siblings map[string][]Diagnostic) string {
-	out := block(edited, editedDiags)
+	var sb strings.Builder
+	sb.WriteString(block(edited, editedDiags))
 	var names []string
 	for p, diags := range siblings {
 		if p == edited {
@@ -119,23 +120,23 @@ func Report(edited string, editedDiags []Diagnostic, siblings map[string][]Diagn
 		}
 	}
 	if len(names) == 0 {
-		return out
+		return sb.String()
 	}
 	sort.Strings(names)
 	shown := min(len(names), maxSiblingFiles)
 	for _, p := range names[:shown] {
-		out += block(p, siblings[p])
+		sb.WriteString(block(p, siblings[p]))
 	}
 	plural := "file"
 	if len(names) > 1 {
 		plural = "files"
 	}
 	if len(names) > shown {
-		out += fmt.Sprintf("\n(this edit introduced errors in %d other %s, %d shown; fix them too)", len(names), plural, shown)
+		fmt.Fprintf(&sb, "\n(this edit introduced errors in %d other %s, %d shown; fix them too)", len(names), plural, shown)
 	} else {
-		out += fmt.Sprintf("\n(this edit introduced errors in %s; fix them too)", plural)
+		fmt.Fprintf(&sb, "\n(this edit introduced errors in %s; fix them too)", plural)
 	}
-	return out
+	return sb.String()
 }
 
 // siblingErrors returns cached error-bearing files in the edited file's

@@ -151,8 +151,10 @@ func TestModelRefreshForcesRefetch(t *testing.T) {
 func TestModelRefreshCompletion(t *testing.T) {
 	t.Setenv("WHIP_HOME", t.TempDir())
 	if err := config.SaveCatalogs(map[string]config.Catalog{
-		"inference": {FetchedAt: time.Now(), BaseURL: "https://x",
-			Models: []config.ModelInfoLite{{ID: "catalog-only-model"}}},
+		"inference": {
+			FetchedAt: time.Now(), BaseURL: "https://x",
+			Models: []config.ModelInfoLite{{ID: "catalog-only-model"}},
+		},
 	}); err != nil {
 		t.Fatal(err)
 	}

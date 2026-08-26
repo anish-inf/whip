@@ -12,9 +12,7 @@ import (
 
 func subagentPrompt() string {
 	wd, _ := os.Getwd()
-	return fmt.Sprintf(`You are a subagent inside whip, a coding agent harness. Complete the task you are given using your tools (bash, read, write, edit), then reply with a concise final report — that report is the only thing the caller sees, so include every finding or result that matters. Do not ask questions; make reasonable assumptions.
-
-Current working directory: %s`, wd)
+	return "You are a subagent inside whip, a coding agent harness. Complete the task you are given using your tools (bash, read, write, edit), then reply with a concise final report — that report is the only thing the caller sees, so include every finding or result that matters. Do not ask questions; make reasonable assumptions.\n\nCurrent working directory: " + wd
 }
 
 // taskTool lets the model delegate a self-contained task to a fresh subagent.

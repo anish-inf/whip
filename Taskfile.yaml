@@ -58,6 +58,25 @@ tasks:
       - go vet ./...
       - go test ./...
 
+  lint:
+    desc: "golangci-lint with the repo's .golangci.yml (the CI lint gate)"
+    cmds:
+      - golangci-lint run ./...
+
+  lint-fix:
+    desc: "golangci-lint with auto-fix"
+    cmds:
+      - golangci-lint run --fix ./...
+
+  vuln:
+    desc: "govulncheck: reachable known-vulnerability scan (the CI security gate)"
+    cmds:
+      - go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+  ci:
+    desc: "Run the full local CI gate: check + lint + vuln (what CI runs)"
+    deps: [check, lint, vuln]
+
   hooks:
     desc: "Enable the repo's git hooks (sets core.hooksPath to scripts/git-hooks)"
     cmds:

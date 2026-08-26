@@ -2,10 +2,12 @@
 package session
 
 import (
+	"context"
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -131,26 +133,26 @@ func Open(path string) (*Store, error) {
 		"PRAGMA synchronous=NORMAL", // safe in WAL; skips per-commit fsync
 		"PRAGMA temp_store=MEMORY",
 	} {
-		if _, err := db.Exec(pragma); err != nil {
+		if _, err := db.ExecContext(context.Background(), pragma); err != nil {
 			return nil, err
 		}
 	}
-	if _, err := db.Exec(schema); err != nil {
+	if _, err := db.ExecContext(context.Background(), schema); err != nil {
 		return nil, err
 	}
 	// migrate pre-goal databases; duplicate-column errors are expected
-	_, _ = db.Exec(`ALTER TABLE sessions ADD COLUMN goal TEXT NOT NULL DEFAULT ''`)
+	_, _ = db.ExecContext(context.Background(), `ALTER TABLE sessions ADD COLUMN goal TEXT NOT NULL DEFAULT ''`)
 	// later per-session bookkeeping (fork linkage, tags, pinned); the same
 	// duplicate-column-tolerant migration as goal
 	for _, c := range extraColumns {
-		_, _ = db.Exec(`ALTER TABLE sessions ADD COLUMN ` + c.def)
+		_, _ = db.ExecContext(context.Background(), `ALTER TABLE sessions ADD COLUMN `+c.def)
 	}
 	return &Store{db: db}, nil
 }
 
 // SetGoal stores the session's active goal ("" clears it).
 func (s *Store) SetGoal(id, goal string) error {
-	_, err := s.db.Exec(`UPDATE sessions SET goal=? WHERE id=?`, goal, id)
+	_, err := s.db.ExecContext(context.Background(), `UPDATE sessions SET goal=? WHERE id=?`, goal, id)
 	return err
 }
 
@@ -158,7 +160,7 @@ func (s *Store) SetGoal(id, goal string) error {
 // plan is a whole-list snapshot: the model rewrites it in full each call, so
 // this is a plain overwrite, not a merge.
 func (s *Store) SetTodos(id, todosJSON string) error {
-	_, err := s.db.Exec(`UPDATE sessions SET todos=? WHERE id=?`, todosJSON, id)
+	_, err := s.db.ExecContext(context.Background(), `UPDATE sessions SET todos=? WHERE id=?`, todosJSON, id)
 	return err
 }
 
@@ -166,7 +168,7 @@ func (s *Store) SetTodos(id, todosJSON string) error {
 // the session is unknown). The agent package owns the schema.
 func (s *Store) Todos(id string) string {
 	var v string
-	_ = s.db.QueryRow(`SELECT todos FROM sessions WHERE id=?`, id).Scan(&v)
+	_ = s.db.QueryRowContext(context.Background(), `SELECT todos FROM sessions WHERE id=?`, id).Scan(&v)
 	return v
 }
 
@@ -174,7 +176,7 @@ func (s *Store) Todos(id string) string {
 // per-session effort or never set one: resume falls back to the current global
 // default and stamps it on the next save.
 func (s *Store) SetEffort(id, effort string) error {
-	_, err := s.db.Exec(`UPDATE sessions SET effort=? WHERE id=?`, effort, id)
+	_, err := s.db.ExecContext(context.Background(), `UPDATE sessions SET effort=? WHERE id=?`, effort, id)
 	return err
 }
 
@@ -183,7 +185,7 @@ func (s *Store) SetEffort(id, effort string) error {
 // compactions. Rows from before this column existed read as zero and get
 // stamped with real totals on the next save.
 func (s *Store) SetUsage(id string, in, cached, out int) error {
-	_, err := s.db.Exec(`UPDATE sessions SET usage_in=?, usage_cached=?, usage_out=? WHERE id=?`, in, cached, out, id)
+	_, err := s.db.ExecContext(context.Background(), `UPDATE sessions SET usage_in=?, usage_cached=?, usage_out=? WHERE id=?`, in, cached, out, id)
 	return err
 }
 
@@ -207,7 +209,7 @@ func (s *Store) SaveTask(sessionID string, t Task) error {
 	if !t.EndedAt.IsZero() {
 		ended = t.EndedAt.UTC().Format(time.RFC3339)
 	}
-	_, err := s.db.Exec(`INSERT OR REPLACE INTO tasks
+	_, err := s.db.ExecContext(context.Background(), `INSERT OR REPLACE INTO tasks
 		(session_id, task_id, description, prompt, status, report, started_at, ended_at)
 		VALUES (?,?,?,?,?,?,?,?)`,
 		sessionID, t.ID, t.Description, t.Prompt, t.Status, t.Report,
@@ -217,7 +219,7 @@ func (s *Store) SaveTask(sessionID string, t Task) error {
 
 // LoadTasks returns a session's persisted background subagents, oldest first.
 func (s *Store) LoadTasks(sessionID string) ([]Task, error) {
-	rows, err := s.db.Query(`SELECT task_id, description, prompt, status, report, started_at, ended_at
+	rows, err := s.db.QueryContext(context.Background(), `SELECT task_id, description, prompt, status, report, started_at, ended_at
 		FROM tasks WHERE session_id=? ORDER BY started_at`, sessionID)
 	if err != nil {
 		return nil, err
@@ -248,7 +250,7 @@ func (s *Store) Create(cwd, model, provider string) (string, error) {
 	b := make([]byte, 4)
 	rand.Read(b)
 	id := hex.EncodeToString(b)
-	_, err := s.db.Exec(`INSERT INTO sessions (id, created_at, updated_at, cwd, model, provider) VALUES (?,?,?,?,?,?)`,
+	_, err := s.db.ExecContext(context.Background(), `INSERT INTO sessions (id, created_at, updated_at, cwd, model, provider) VALUES (?,?,?,?,?,?)`,
 		id, now(), now(), cwd, model, provider)
 	return id, err
 }
@@ -256,7 +258,7 @@ func (s *Store) Create(cwd, model, provider string) (string, error) {
 // Save persists msgs[from:] (the conversation without the system prompt) and
 // refreshes the session's metadata.
 func (s *Store) Save(id string, from int, msgs []llm.Message, model, provider string) error {
-	tx, err := s.db.Begin()
+	tx, err := s.db.BeginTx(context.Background(), nil)
 	if err != nil {
 		return err
 	}
@@ -272,7 +274,7 @@ func (s *Store) Save(id string, from int, msgs []llm.Message, model, provider st
 		if err != nil {
 			return err
 		}
-		if _, err := tx.Exec(`INSERT OR REPLACE INTO messages (session_id, seq, role, content) VALUES (?,?,?,?)`,
+		if _, err := tx.ExecContext(context.Background(), `INSERT OR REPLACE INTO messages (session_id, seq, role, content) VALUES (?,?,?,?)`,
 			id, i, msgs[i].Role, string(data)); err != nil {
 			return err
 		}
@@ -284,7 +286,7 @@ func (s *Store) Save(id string, from int, msgs []llm.Message, model, provider st
 			break
 		}
 	}
-	if _, err := tx.Exec(`UPDATE sessions SET updated_at=?, model=?, provider=?, title=CASE WHEN title='' THEN ? ELSE title END WHERE id=?`,
+	if _, err := tx.ExecContext(context.Background(), `UPDATE sessions SET updated_at=?, model=?, provider=?, title=CASE WHEN title='' THEN ? ELSE title END WHERE id=?`,
 		now(), model, provider, title, id); err != nil {
 		return err
 	}
@@ -293,7 +295,7 @@ func (s *Store) Save(id string, from int, msgs []llm.Message, model, provider st
 
 // Load resolves idOrPrefix to a session and returns its metadata and messages.
 func (s *Store) Load(idOrPrefix string) (Meta, []llm.Message, error) {
-	rows, err := s.db.Query(`SELECT id, title, model, provider, cwd, goal, forked_from, fork_seq, tags, pinned, effort, usage_in, usage_cached, usage_out, updated_at FROM sessions WHERE id LIKE ?||'%' LIMIT 3`, idOrPrefix)
+	rows, err := s.db.QueryContext(context.Background(), `SELECT id, title, model, provider, cwd, goal, forked_from, fork_seq, tags, pinned, effort, usage_in, usage_cached, usage_out, updated_at FROM sessions WHERE id LIKE ?||'%' LIMIT 3`, idOrPrefix)
 	if err != nil {
 		return Meta{}, nil, err
 	}
@@ -313,9 +315,9 @@ func (s *Store) Load(idOrPrefix string) (Meta, []llm.Message, error) {
 	// pre-size the slice: a long session is hundreds of rows; the COUNT is
 	// one index scan and avoids O(log n) reallocs while scanning
 	var count int
-	_ = s.db.QueryRow(`SELECT COUNT(*) FROM messages WHERE session_id=?`, meta.ID).Scan(&count)
+	_ = s.db.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM messages WHERE session_id=?`, meta.ID).Scan(&count)
 
-	mrows, err := s.db.Query(`SELECT content FROM messages WHERE session_id=? ORDER BY seq`, meta.ID)
+	mrows, err := s.db.QueryContext(context.Background(), `SELECT content FROM messages WHERE session_id=? ORDER BY seq`, meta.ID)
 	if err != nil {
 		return Meta{}, nil, err
 	}
@@ -346,7 +348,7 @@ func (s *Store) Load(idOrPrefix string) (Meta, []llm.Message, error) {
 func applyCompaction(db *sql.DB, sessionID string, msgs []llm.Message) []llm.Message {
 	var cutoff int
 	var summary string
-	err := db.QueryRow(`SELECT cutoff, summary FROM compactions WHERE session_id=? ORDER BY seq DESC LIMIT 1`,
+	err := db.QueryRowContext(context.Background(), `SELECT cutoff, summary FROM compactions WHERE session_id=? ORDER BY seq DESC LIMIT 1`,
 		sessionID).Scan(&cutoff, &summary)
 	if err != nil || cutoff <= 1 || cutoff > len(msgs) {
 		return msgs // no event, or one that post-dates the raw log
@@ -422,7 +424,7 @@ func answerDanglingToolCalls(msgs []llm.Message) []llm.Message {
 
 // Recent returns up to n sessions, newest first.
 func (s *Store) Recent(n int) ([]Meta, error) {
-	rows, err := s.db.Query(`SELECT id, title, model, provider, cwd, goal, forked_from, fork_seq, tags, pinned, effort, usage_in, usage_cached, usage_out, updated_at FROM sessions
+	rows, err := s.db.QueryContext(context.Background(), `SELECT id, title, model, provider, cwd, goal, forked_from, fork_seq, tags, pinned, effort, usage_in, usage_cached, usage_out, updated_at FROM sessions
 		WHERE EXISTS (SELECT 1 FROM messages WHERE session_id = sessions.id)
 		ORDER BY updated_at DESC LIMIT ?`, n)
 	if err != nil {
@@ -440,7 +442,7 @@ func (s *Store) Recent(n int) ([]Meta, error) {
 // they're injected by whip, not written by the user. Those carry Authored=false
 // and are skipped; only Authored=true messages come back.
 func (s *Store) UserHistory(limit int) ([]string, error) {
-	rows, err := s.db.Query(`SELECT m.content FROM messages m
+	rows, err := s.db.QueryContext(context.Background(), `SELECT m.content FROM messages m
 		JOIN sessions s ON s.id = m.session_id
 		WHERE m.role='user'
 		ORDER BY s.updated_at DESC, m.seq DESC`)
@@ -483,7 +485,7 @@ func (s *Store) LastExchange(id string) (user, assistant string) {
 		dst  *string
 	}{{"user", &user}, {"assistant", &assistant}} {
 		var data string
-		if err := s.db.QueryRow(`SELECT content FROM messages WHERE session_id=? AND role=? ORDER BY seq DESC LIMIT 1`,
+		if err := s.db.QueryRowContext(context.Background(), `SELECT content FROM messages WHERE session_id=? AND role=? ORDER BY seq DESC LIMIT 1`,
 			id, q.role).Scan(&data); err == nil {
 			var m llm.Message
 			if json.Unmarshal([]byte(data), &m) == nil {
@@ -498,7 +500,7 @@ func (s *Store) LastExchange(id string) (user, assistant string) {
 // row is kept). Used after compaction rewrites history: the compacted
 // messages are smaller and re-seqenced from 0, so the old rows must go first.
 func (s *Store) ClearMessages(id string) error {
-	_, err := s.db.Exec(`DELETE FROM messages WHERE session_id=?`, id)
+	_, err := s.db.ExecContext(context.Background(), `DELETE FROM messages WHERE session_id=?`, id)
 	return err
 }
 
@@ -509,11 +511,11 @@ func (s *Store) ClearMessages(id string) error {
 // persisted). Used by rewind: the clipped tail is deleted from disk but kept
 // in memory for forward travel.
 func (s *Store) DeleteFrom(id string, from int) error {
-	_, err := s.db.Exec(`DELETE FROM messages WHERE session_id=? AND seq>=?`, id, from)
+	_, err := s.db.ExecContext(context.Background(), `DELETE FROM messages WHERE session_id=? AND seq>=?`, id, from)
 	if err != nil {
 		return err
 	}
-	_, err = s.db.Exec(`DELETE FROM snapshots WHERE session_id=? AND seq>=?`, id, from)
+	_, err = s.db.ExecContext(context.Background(), `DELETE FROM snapshots WHERE session_id=? AND seq>=?`, id, from)
 	return err
 }
 
@@ -521,10 +523,10 @@ func (s *Store) DeleteFrom(id string, from int) error {
 // conversation index seq ("" deletes: the turn's files were restored away).
 func (s *Store) SetSnapshot(id string, seq int, ref string) error {
 	if ref == "" {
-		_, err := s.db.Exec(`DELETE FROM snapshots WHERE session_id=? AND seq=?`, id, seq)
+		_, err := s.db.ExecContext(context.Background(), `DELETE FROM snapshots WHERE session_id=? AND seq=?`, id, seq)
 		return err
 	}
-	_, err := s.db.Exec(`INSERT OR REPLACE INTO snapshots (session_id, seq, ref, created_at) VALUES (?,?,?,?)`,
+	_, err := s.db.ExecContext(context.Background(), `INSERT OR REPLACE INTO snapshots (session_id, seq, ref, created_at) VALUES (?,?,?,?)`,
 		id, seq, ref, now())
 	return err
 }
@@ -532,7 +534,7 @@ func (s *Store) SetSnapshot(id string, seq int, ref string) error {
 // Snapshots returns the session's workspace snapshot refs keyed by
 // conversation index.
 func (s *Store) Snapshots(id string) map[int]string {
-	rows, err := s.db.Query(`SELECT seq, ref FROM snapshots WHERE session_id=?`, id)
+	rows, err := s.db.QueryContext(context.Background(), `SELECT seq, ref FROM snapshots WHERE session_id=?`, id)
 	if err != nil {
 		return nil
 	}
@@ -544,6 +546,9 @@ func (s *Store) Snapshots(id string) map[int]string {
 		if rows.Scan(&seq, &ref) == nil {
 			out[seq] = ref
 		}
+	}
+	if rows.Err() != nil {
+		return nil
 	}
 	return out
 }
@@ -560,7 +565,7 @@ type Schedule struct {
 // AddSchedule records a scheduled task and returns its id.
 func (s *Store) AddSchedule(sessionID, schedule, prompt string, anchor time.Time) (int, error) {
 	var id int
-	err := s.db.QueryRow(`INSERT INTO schedules (session_id, id, schedule, prompt, anchor, created_at)
+	err := s.db.QueryRowContext(context.Background(), `INSERT INTO schedules (session_id, id, schedule, prompt, anchor, created_at)
 		SELECT ?, COALESCE(MAX(id),0)+1, ?, ?, ?, ? FROM schedules WHERE session_id=? RETURNING id`,
 		sessionID, schedule, prompt, anchor.UTC().Format(time.RFC3339), now(), sessionID).Scan(&id)
 	return id, err
@@ -568,7 +573,7 @@ func (s *Store) AddSchedule(sessionID, schedule, prompt string, anchor time.Time
 
 // Schedules returns a session's scheduled tasks, id order.
 func (s *Store) Schedules(sessionID string) []Schedule {
-	rows, err := s.db.Query(`SELECT id, schedule, prompt, anchor, last_fire FROM schedules WHERE session_id=? ORDER BY id`, sessionID)
+	rows, err := s.db.QueryContext(context.Background(), `SELECT id, schedule, prompt, anchor, last_fire FROM schedules WHERE session_id=? ORDER BY id`, sessionID)
 	if err != nil {
 		return nil
 	}
@@ -584,27 +589,30 @@ func (s *Store) Schedules(sessionID string) []Schedule {
 		sc.LastFire, _ = time.Parse(time.RFC3339, lastFire)
 		out = append(out, sc)
 	}
+	if rows.Err() != nil {
+		return nil
+	}
 	return out
 }
 
 // MarkFired stamps a task's last fire (a fired one-shot stays listed but
 // never fires again).
 func (s *Store) MarkFired(sessionID string, id int, at time.Time) error {
-	_, err := s.db.Exec(`UPDATE schedules SET last_fire=? WHERE session_id=? AND id=?`,
+	_, err := s.db.ExecContext(context.Background(), `UPDATE schedules SET last_fire=? WHERE session_id=? AND id=?`,
 		at.UTC().Format(time.RFC3339), sessionID, id)
 	return err
 }
 
 // DeleteSchedule removes a scheduled task.
 func (s *Store) DeleteSchedule(sessionID string, id int) error {
-	_, err := s.db.Exec(`DELETE FROM schedules WHERE session_id=? AND id=?`, sessionID, id)
+	_, err := s.db.ExecContext(context.Background(), `DELETE FROM schedules WHERE session_id=? AND id=?`, sessionID, id)
 	return err
 }
 
 // ClearSnapshots drops all of a session's workspace snapshot rows (compaction
 // re-seqs messages, so the keys stop mapping to turns).
 func (s *Store) ClearSnapshots(id string) error {
-	_, err := s.db.Exec(`DELETE FROM snapshots WHERE session_id=?`, id)
+	_, err := s.db.ExecContext(context.Background(), `DELETE FROM snapshots WHERE session_id=?`, id)
 	return err
 }
 
@@ -617,7 +625,7 @@ type Compaction struct {
 
 // RecordCompaction appends a compaction event. The raw messages stay.
 func (s *Store) RecordCompaction(id string, cutoff int, summary string) error {
-	_, err := s.db.Exec(`INSERT INTO compactions (session_id, seq, cutoff, summary, created_at)
+	_, err := s.db.ExecContext(context.Background(), `INSERT INTO compactions (session_id, seq, cutoff, summary, created_at)
 		SELECT ?, COALESCE(MAX(seq),0)+1, ?, ?, ? FROM compactions WHERE session_id=?`,
 		id, cutoff, summary, now(), id)
 	return err
@@ -625,7 +633,7 @@ func (s *Store) RecordCompaction(id string, cutoff int, summary string) error {
 
 // Compactions returns a session's compaction events, oldest first.
 func (s *Store) Compactions(id string) []Compaction {
-	rows, err := s.db.Query(`SELECT seq, cutoff, summary FROM compactions WHERE session_id=? ORDER BY seq`, id)
+	rows, err := s.db.QueryContext(context.Background(), `SELECT seq, cutoff, summary FROM compactions WHERE session_id=? ORDER BY seq`, id)
 	if err != nil {
 		return nil
 	}
@@ -637,20 +645,23 @@ func (s *Store) Compactions(id string) []Compaction {
 			out = append(out, c)
 		}
 	}
+	if rows.Err() != nil {
+		return nil
+	}
 	return out
 }
 
 // DeleteCompaction removes one compaction event by generation (retry drops
 // the bad event before re-compacting from the raw log).
 func (s *Store) DeleteCompaction(id string, seq int) error {
-	_, err := s.db.Exec(`DELETE FROM compactions WHERE session_id=? AND seq=?`, id, seq)
+	_, err := s.db.ExecContext(context.Background(), `DELETE FROM compactions WHERE session_id=? AND seq=?`, id, seq)
 	return err
 }
 
 // RawMessages returns the full stored log (no compaction view applied) —
 // the inspection/retry surface for compactions.
 func (s *Store) RawMessages(id string) []llm.Message {
-	rows, err := s.db.Query(`SELECT content FROM messages WHERE session_id=? ORDER BY seq`, id)
+	rows, err := s.db.QueryContext(context.Background(), `SELECT content FROM messages WHERE session_id=? ORDER BY seq`, id)
 	if err != nil {
 		return nil
 	}
@@ -666,12 +677,15 @@ func (s *Store) RawMessages(id string) []llm.Message {
 			msgs = append(msgs, m)
 		}
 	}
+	if rows.Err() != nil {
+		return nil
+	}
 	return msgs
 }
 
 // SetTitle retitles a session (/rename).
 func (s *Store) SetTitle(id, title string) error {
-	_, err := s.db.Exec(`UPDATE sessions SET title=? WHERE id=?`, title, id)
+	_, err := s.db.ExecContext(context.Background(), `UPDATE sessions SET title=? WHERE id=?`, title, id)
 	return err
 }
 
@@ -685,18 +699,18 @@ func (s *Store) Fork(srcID string, uptoSeq int, title string) (string, error) {
 	b := make([]byte, 4)
 	rand.Read(b)
 	newID := hex.EncodeToString(b)
-	tx, err := s.db.Begin()
+	tx, err := s.db.BeginTx(context.Background(), nil)
 	if err != nil {
 		return "", err
 	}
 	defer func() { _ = tx.Rollback() }()
-	if _, err := tx.Exec(`INSERT INTO sessions (id, created_at, updated_at, cwd, model, provider, title, goal, forked_from, fork_seq, effort)
+	if _, err := tx.ExecContext(context.Background(), `INSERT INTO sessions (id, created_at, updated_at, cwd, model, provider, title, goal, forked_from, fork_seq, effort)
 		SELECT ?, ?, ?, cwd, model, provider, ?, goal, ?, ?, effort FROM sessions WHERE id=?`,
 		newID, now(), now(), title, srcID, uptoSeq, srcID); err != nil {
 		return "", err
 	}
 	if uptoSeq > 0 {
-		if _, err := tx.Exec(`INSERT INTO messages (session_id, seq, role, content)
+		if _, err := tx.ExecContext(context.Background(), `INSERT INTO messages (session_id, seq, role, content)
 			SELECT ?, seq, role, content FROM messages WHERE session_id=? AND seq <= ?`,
 			newID, srcID, uptoSeq); err != nil {
 			return "", err
@@ -707,7 +721,7 @@ func (s *Store) Fork(srcID string, uptoSeq int, title string) (string, error) {
 
 // SetTags replaces a session's label set (comma-separated storage).
 func (s *Store) SetTags(id string, tags []string) error {
-	_, err := s.db.Exec(`UPDATE sessions SET tags=? WHERE id=?`, strings.Join(tags, ","), id)
+	_, err := s.db.ExecContext(context.Background(), `UPDATE sessions SET tags=? WHERE id=?`, strings.Join(tags, ","), id)
 	return err
 }
 
@@ -717,14 +731,14 @@ func (s *Store) SetPinned(id string, pinned bool) error {
 	if pinned {
 		v = 1
 	}
-	_, err := s.db.Exec(`UPDATE sessions SET pinned=? WHERE id=?`, v, id)
+	_, err := s.db.ExecContext(context.Background(), `UPDATE sessions SET pinned=? WHERE id=?`, v, id)
 	return err
 }
 
 // ForksOf lists sessions forked from id, newest first — the session tree's
 // children of one node.
 func (s *Store) ForksOf(id string) ([]Meta, error) {
-	rows, err := s.db.Query(`SELECT id, title, model, provider, cwd, goal, forked_from, fork_seq, tags, pinned, effort, usage_in, usage_cached, usage_out, updated_at
+	rows, err := s.db.QueryContext(context.Background(), `SELECT id, title, model, provider, cwd, goal, forked_from, fork_seq, tags, pinned, effort, usage_in, usage_cached, usage_out, updated_at
 		FROM sessions WHERE forked_from=? ORDER BY updated_at DESC`, id)
 	if err != nil {
 		return nil, err
@@ -747,11 +761,11 @@ func (s *Store) ForkTitle(base string) (string, error) {
 		var n0 int
 		var rest string
 		n, err := fmt.Sscanf(base[i:], " (fork #%d)%s", &n0, &rest)
-		if n0 > 0 && rest == "" && (err == nil || err == io.EOF) && n >= 1 {
+		if n0 > 0 && rest == "" && (err == nil || errors.Is(err, io.EOF)) && n >= 1 {
 			base = base[:i]
 		}
 	}
-	rows, err := s.db.Query(`SELECT title FROM sessions WHERE title = ? OR title LIKE ? ESCAPE '\'`,
+	rows, err := s.db.QueryContext(context.Background(), `SELECT title FROM sessions WHERE title = ? OR title LIKE ? ESCAPE '\'`,
 		base, likeEscape(base)+` (fork #%)`)
 	if err != nil {
 		return "", err
@@ -767,7 +781,7 @@ func (s *Store) ForkTitle(base string) (string, error) {
 		var rest string
 		// exact suffix match only: a manually renamed "x (fork #9) notes"
 		// must not inflate the numbering
-		if nf, err := fmt.Sscanf(t, base+" (fork #%d)%s", &num, &rest); num > n && rest == "" && nf >= 1 && (err == nil || err == io.EOF) {
+		if nf, err := fmt.Sscanf(t, base+" (fork #%d)%s", &num, &rest); num > n && rest == "" && nf >= 1 && (err == nil || errors.Is(err, io.EOF)) {
 			n = num
 		}
 	}

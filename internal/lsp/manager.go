@@ -5,10 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -51,9 +53,7 @@ var builtinServers = map[string]ServerSpec{
 // (internal/mcp/config.go:169).
 func FromConfigMap(in map[string]config.LSPServer) map[string]ServerSpec {
 	out := make(map[string]ServerSpec, len(builtinServers)+len(in))
-	for name, s := range builtinServers {
-		out[name] = s
-	}
+	maps.Copy(out, builtinServers)
 	for name, c := range in {
 		existing := out[name]
 		if c.Enabled != nil && !*c.Enabled {
@@ -151,7 +151,7 @@ func (m *Manager) WaitDiagnostics(ctx context.Context, path string) string {
 	if err != nil || cs == nil {
 		return ""
 	}
-	data, err := os.ReadFile(abs)
+	data, err := os.ReadFile(abs) //nolint:gosec // G304: abs is a workspace file the LSP already opened
 	if err != nil {
 		return ""
 	}
@@ -298,11 +298,8 @@ func (m *Manager) clientFor(ctx context.Context, abs string) (*clientState, erro
 	var spec ServerSpec
 	m.mu.Lock()
 	for n, s := range m.specs {
-		for _, e := range s.Extensions {
-			if e == ext {
-				name, spec = n, s
-				break
-			}
+		if slices.Contains(s.Extensions, ext) {
+			name, spec = n, s
 		}
 		if name != "" {
 			break
@@ -310,7 +307,7 @@ func (m *Manager) clientFor(ctx context.Context, abs string) (*clientState, erro
 	}
 	m.mu.Unlock()
 	if name == "" || spec.Disabled || len(spec.Command) == 0 {
-		return nil, nil
+		return nil, nil //nolint:nilnil // nil client = no server for this file (or disabled); caller treats that as "no LSP available", not an error
 	}
 	root := findRoot(filepath.Dir(abs), spec.RootMarkers)
 	if m.keyer != nil {
@@ -369,7 +366,11 @@ func (m *Manager) spawn(ctx context.Context, key, name string, spec ServerSpec, 
 	if _, err := exec.LookPath(spec.Command[0]); err != nil {
 		return nil, fmt.Errorf("%s not on PATH", spec.Command[0])
 	}
-	cmd := exec.Command(spec.Command[0], spec.Command[1:]...)
+	// WithoutCancel: ctx is the calling tool/turn context, but the server is
+	// cached in m.clients for the whole whip session — binding the process to
+	// the turn would kill gopls on the first interrupt and leave a dead client
+	// cached forever. Shutdown is cs.kill()/Close, not context cancellation.
+	cmd := exec.CommandContext(context.WithoutCancel(ctx), spec.Command[0], spec.Command[1:]...)
 	cmd.Dir = root
 	cmd.Env = os.Environ()
 	for k, v := range spec.Env {

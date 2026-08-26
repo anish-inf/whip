@@ -9,6 +9,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -59,7 +60,7 @@ func BrowserExec() Tool {
 			`{"type":"object","properties":{"code":{"type":"string","description":"Newline/semicolon-separated helper calls; print(...) output is returned."},"session":{"type":"string","description":"Named isolated session (default 'default'); prefix mode e.g. 'headless:scrape'."},"timeout":{"type":"number","description":"Seconds before the call is cancelled (default 60)."}},"required":["code"]}`),
 		Run: func(ctx context.Context, args json.RawMessage) (string, error) {
 			if Browser == nil {
-				return "", fmt.Errorf("browser subsystem not initialized")
+				return "", errors.New("browser subsystem not initialized")
 			}
 			var a struct {
 				Code    string  `json:"code"`
@@ -70,7 +71,7 @@ func BrowserExec() Tool {
 				return "", err
 			}
 			if strings.TrimSpace(a.Code) == "" {
-				return "", fmt.Errorf("no code provided — e.g. goto(\"https://example.com\"); print(info())")
+				return "", errors.New("no code provided — e.g. goto(\"https://example.com\"); print(info())")
 			}
 			if a.Timeout <= 0 {
 				a.Timeout = 60

@@ -1,11 +1,13 @@
 package tui
 
 import (
+	"context"
 	"encoding/base64"
 	"fmt"
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -228,7 +230,7 @@ func copyText(s string) {
 		// DCS passthrough so the outer terminal sees it (allow-passthrough).
 		seq = "\x1bPtmux;" + strings.ReplaceAll(seq, "\x1b", "\x1b\x1b") + "\x1b\\"
 	}
-	fmt.Fprint(os.Stdout, seq) //nolint:errcheck
+	fmt.Fprint(os.Stdout, seq)
 	for _, c := range [][]string{
 		{"pbcopy"}, {"wl-copy"}, {"xclip", "-selection", "clipboard"},
 	} {
@@ -236,7 +238,7 @@ func copyText(s string) {
 		if err != nil {
 			continue
 		}
-		cmd := exec.Command(path, c[1:]...)
+		cmd := exec.CommandContext(context.Background(), path, c[1:]...)
 		cmd.Stdin = strings.NewReader(s)
 		if cmd.Run() == nil {
 			return
@@ -244,47 +246,81 @@ func copyText(s string) {
 	}
 }
 
+// selScrollTick drives edge auto-scroll: while a drag is parked above/below
+// the transcript, the viewport keeps scrolling one line per tick so the
+// selection can keep growing past what's on screen.
+type selScrollTick struct{}
+
 // handleMouseSelect runs the selection state machine for one mouse event. It
 // returns handled=true when the event is consumed by selection: a left press
 // inside the transcript block range (the viewport must NOT see it — a click
 // scrolls the viewport, shifting contentPad mid-drag), motion while dragging,
 // and release. A release with no drag replays the press as a click so
-// tool-block expand still works.
-func (m *model) handleMouseSelect(msg tea.MouseMsg) (handled bool) {
+// tool-block expand still works. cmd is the edge-scroll tick when a drag sits
+// past the viewport's top/bottom.
+func (m *model) handleMouseSelect(msg tea.MouseMsg) (handled bool, cmd tea.Cmd) {
 	switch msg.Action {
 	case tea.MouseActionPress:
 		m.sel = nil // any new press drops the old highlight
 		if msg.Button != tea.MouseButtonLeft {
-			return false
+			return false, nil
 		}
 		p, ok := m.selPoint(msg.X, msg.Y, false)
 		if !ok {
-			return false
+			return false, nil
 		}
 		m.sel = &selection{anchor: p, cur: p}
-		return true // consumed: the viewport must not scroll on this press
+		return true, nil // consumed: the viewport must not scroll on this press
 	case tea.MouseActionMotion:
 		if m.sel == nil || m.sel.done {
-			return false
+			return false, nil
 		}
 		if p, ok := m.selPoint(msg.X, msg.Y, true); ok {
 			m.sel.cur = p
 		}
-		return true
+		m.selDragX, m.selDragY = msg.X, msg.Y
+		return true, m.selEdgeScroll()
 	case tea.MouseActionRelease:
 		if m.sel == nil || m.sel.done {
-			return false
+			return false, nil
 		}
 		if m.sel.anchor != m.sel.cur { // a real drag: copy, keep the highlight
 			m.sel.done = true
 			copyText(m.selText(*m.sel))
-			return true
+			return true, nil
 		}
 		m.sel = nil
 		m.clickAt(msg.X, msg.Y) // no drag: the press was a click all along
-		return true
+		return true, nil
 	}
-	return false
+	return false, nil
+}
+
+// selEdgeScroll scrolls the viewport one line when the in-flight drag sits
+// above/below the transcript's screen band, extends the selection to the row
+// now under the pointer, and returns a tick so the scroll repeats while the
+// pointer stays parked at the edge (motion events only arrive when the mouse
+// MOVES). Returns nil when the drag is inside the band or the viewport can't
+// scroll further — the next real motion event re-arms it.
+func (m *model) selEdgeScroll() tea.Cmd {
+	if m.sel == nil || m.sel.done {
+		return nil
+	}
+	top := m.viewTop + 3 // header + tips + blank
+	bottom := top + m.vp.Height - 1
+	switch {
+	case m.selDragY < top && m.vp.YOffset > 0:
+		m.vp.SetYOffset(m.vp.YOffset - 1)
+	case m.selDragY > bottom && !m.vp.AtBottom():
+		m.vp.SetYOffset(m.vp.YOffset + 1)
+	default:
+		return nil
+	}
+	m.follow = m.vp.AtBottom()
+	if p, ok := m.selPoint(m.selDragX, m.selDragY, true); ok {
+		m.sel.cur = p
+	}
+	return tea.Tick(60*time.Millisecond, func(time.Time) tea.Msg { return selScrollTick{} })
 }
 
 // clickAt replays the click actions a press inside the transcript would have

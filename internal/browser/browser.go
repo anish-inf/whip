@@ -239,7 +239,7 @@ func openRod(ctx context.Context, mode Mode, sessionName string) (*Browser, erro
 			// discovery error's guidance if the fallback also fails.
 			fb, ferr := openRod(ctx, ModeDedicated, sessionName)
 			if ferr != nil {
-				return nil, fmt.Errorf("%v; dedicated fallback failed: %w", err, ferr)
+				return nil, fmt.Errorf("%w; dedicated fallback failed: %w", err, ferr)
 			}
 			return fb, nil
 		}
@@ -478,7 +478,7 @@ func (b *Browser) pendingDialog(ctx context.Context) (*Dialog, error) {
 	// a background reader; v1 surfaces dialogs only through HandleDialog when
 	// an action hangs on one. Generalize to an event buffer if agents trip
 	// on unexpected alerts.
-	return nil, nil
+	return nil, nil //nolint:nilnil // nil dialog = none pending; Info's `err == nil && d != nil` check relies on that contract
 }
 
 // HandleDialog accepts or dismisses the next pending native dialog,
@@ -775,7 +775,7 @@ func (b *Browser) BoxModel(ctx context.Context, backendNodeID int) (float64, flo
 	}
 	q := res.Model.Content // [x1,y1,x2,y2,x3,y3,x4,y4]
 	var sx, sy float64
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		sx += q[i*2]
 		sy += q[i*2+1]
 	}

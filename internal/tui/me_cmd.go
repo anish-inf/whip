@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"os"
 	"os/exec"
 
@@ -27,7 +28,8 @@ func (m *model) openMe() tea.Cmd {
 		editor = "vi"
 	}
 	m.append(dimStyle.Render("editing " + path + " — save and quit to apply (next turn picks it up)"))
-	c := exec.Command(editor, path)
+	//nolint:gosec // G702: $VISUAL/$EDITOR is the user's own editor choice; running it is the command's purpose
+	c := exec.CommandContext(context.Background(), editor, path)
 	c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
 	return tea.ExecProcess(c, func(err error) tea.Msg {
 		return meEditedMsg{path, err}

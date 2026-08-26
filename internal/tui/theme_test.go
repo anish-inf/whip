@@ -20,7 +20,7 @@ func TestLightThemeRendersDarkText(t *testing.T) {
 		t.Errorf("light theme must not use dark-style color 252: %q", out)
 	}
 	// width behavior unchanged
-	for _, l := range strings.Split(out, "\n") {
+	for l := range strings.SplitSeq(out, "\n") {
 		if ansi.StringWidth(l) > 60 {
 			t.Errorf("light render overflow: %q", l)
 		}

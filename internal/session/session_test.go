@@ -1,6 +1,7 @@
 package session
 
 import (
+	"context"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -74,8 +75,10 @@ func TestStoreRoundTrip(t *testing.T) {
 	msgs := []llm.Message{
 		{Role: "system", Content: "sys"},
 		{Role: "user", Content: "first question here", Authored: true, SentAt: &sent},
-		{Role: "assistant", Content: "the answer", Usage: &use, Model: "kimi-k3-fast @ inference",
-			ToolCalls: []llm.ToolCall{{ID: "c1", DurationMs: 42, ExitCode: 0}}},
+		{
+			Role: "assistant", Content: "the answer", Usage: &use, Model: "kimi-k3-fast @ inference",
+			ToolCalls: []llm.ToolCall{{ID: "c1", DurationMs: 42, ExitCode: 0}},
+		},
 		{Role: "tool", Content: "c1 result", ToolCallID: "c1", Name: "bash"},
 		{Role: "user", Content: "follow-up"},
 		{Role: "assistant", Content: "final\nanswer"},
@@ -281,7 +284,7 @@ func TestStoreEdgeCases(t *testing.T) {
 		t.Fatalf("last exchange: %q %q", u, a)
 	}
 	// corrupt message row surfaces a load error
-	st.db.Exec(`UPDATE messages SET content='{bad' WHERE session_id=?`, id1)
+	st.db.ExecContext(context.Background(), `UPDATE messages SET content='{bad' WHERE session_id=?`, id1)
 	if _, _, err := st.Load(id1); err == nil {
 		t.Fatal("expected corrupt-row error")
 	}
@@ -423,7 +426,13 @@ func TestCompactionEvent(t *testing.T) {
 	// a later turn appends new rows to the raw log (the TUI only ever saves
 	// the compacted in-memory history's NEW tail, which is raw rows)
 	if err := st.Save(id, 7, []llm.Message{
-		{}, {}, {}, {}, {}, {}, {}, // placeholder rows 0..6 (already stored)
+		{},
+		{},
+		{},
+		{},
+		{},
+		{},
+		{}, // placeholder rows 0..6 (already stored)
 		{Role: "user", Content: "q4"},
 		{Role: "assistant", Content: "a4"},
 	}, "m", "p"); err != nil {

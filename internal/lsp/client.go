@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"strconv"
@@ -188,7 +189,7 @@ func readFrame(br *bufio.Reader) ([]byte, error) {
 		}
 	}
 	if length < 0 {
-		return nil, fmt.Errorf("missing Content-Length header")
+		return nil, errors.New("missing Content-Length header")
 	}
 	body := make([]byte, length)
 	if _, err := io.ReadFull(br, body); err != nil {
@@ -225,7 +226,7 @@ func (c *client) send(msg rpcMessage) {
 // ctx (tool-call ctx, so ctrl+c cancels).
 func (c *client) request(ctx context.Context, method string, params, result any) error {
 	n := c.nextID.Add(1)
-	id := fmt.Sprintf("%d", n)
+	id := strconv.FormatInt(n, 10)
 	ch := make(chan rpcResponse, 1)
 	c.pend.Store(id, ch)
 	defer c.pend.Delete(id)
@@ -237,7 +238,7 @@ func (c *client) request(ctx context.Context, method string, params, result any)
 	}
 	select {
 	case <-c.dead:
-		return fmt.Errorf("lsp server connection closed")
+		return errors.New("lsp server connection closed")
 	default:
 	}
 	c.send(rpcMessage{ID: idRaw, Method: method, Params: paramsRaw})
@@ -252,7 +253,7 @@ func (c *client) request(ctx context.Context, method string, params, result any)
 		}
 		return nil
 	case <-c.dead:
-		return fmt.Errorf("lsp server connection closed")
+		return errors.New("lsp server connection closed")
 	case <-ctx.Done():
 		return ctx.Err()
 	}

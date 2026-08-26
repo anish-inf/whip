@@ -1,0 +1,32 @@
+# Keep Go modules and GitHub Actions up to date.
+# Minor/patch updates are grouped into one PR; major updates get their own PR
+# (they may carry breaking changes). Actions are pinned to major versions
+# elsewhere, so Dependabot tracks new majors.
+version: 2
+
+updates:
+  - package-ecosystem: gomod
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+    open-pull-requests-limit: 5
+    groups:
+      gomod-minor-patch:
+        applies-to: version-updates
+        update-types: ["minor", "patch"]
+    # Security updates (separate from the weekly cadence) come through
+    # automatically regardless of grouping.
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+    open-pull-requests-limit: 5
+    groups:
+      actions:
+        applies-to: version-updates
+        update-types: ["minor", "patch"]

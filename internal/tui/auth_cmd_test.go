@@ -210,9 +210,11 @@ func TestAuthKeyNeverLeaksIntoHistoryOrQueue(t *testing.T) {
 // a nil Pricing stays a zero-rated entry (callers hide $0 costs).
 func TestCatalogLites(t *testing.T) {
 	lites := catalogLites([]llm.ModelInfo{
-		{ID: "openai/gpt-5", ContextLength: 400000, MaxCompletionTokens: 128000,
+		{
+			ID: "openai/gpt-5", ContextLength: 400000, MaxCompletionTokens: 128000,
 			ReasoningEfforts: []string{"low", "high"}, InputModalities: []string{"text", "image"},
-			Pricing: &llm.Pricing{Prompt: "0.00000125", Completion: "0.00001", InputCacheRead: "0.000000125"}},
+			Pricing: &llm.Pricing{Prompt: "0.00000125", Completion: "0.00001", InputCacheRead: "0.000000125"},
+		},
 		{ID: "meta/llama-4", ContextLength: 131072}, // no pricing, text-only
 	})
 	if len(lites) != 2 {
