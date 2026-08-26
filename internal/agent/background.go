@@ -278,17 +278,17 @@ func (r *taskRegistry) emitter(id string) Events {
 				}
 			})
 		},
-		OnToolStart: func(n, a string) {
+		OnToolStart: func(tcID, n, a string) {
 			r.broadcast(id, func(e Events) {
 				if e.OnToolStart != nil {
-					e.OnToolStart(n, a)
+					e.OnToolStart(tcID, n, a)
 				}
 			})
 		},
-		OnToolEnd: func(n, res string) {
+		OnToolEnd: func(tcID, n, res string) {
 			r.broadcast(id, func(e Events) {
 				if e.OnToolEnd != nil {
-					e.OnToolEnd(n, res)
+					e.OnToolEnd(tcID, n, res)
 				}
 			})
 		},

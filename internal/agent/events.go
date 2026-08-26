@@ -23,17 +23,17 @@ func FanIn(evs ...Events) Events {
 				}
 			}
 		},
-		OnToolStart: func(name, args string) {
+		OnToolStart: func(id, name, args string) {
 			for _, e := range evs {
 				if e.OnToolStart != nil {
-					e.OnToolStart(name, args)
+					e.OnToolStart(id, name, args)
 				}
 			}
 		},
-		OnToolEnd: func(name, result string) {
+		OnToolEnd: func(id, name, result string) {
 			for _, e := range evs {
 				if e.OnToolEnd != nil {
-					e.OnToolEnd(name, result)
+					e.OnToolEnd(id, name, result)
 				}
 			}
 		},

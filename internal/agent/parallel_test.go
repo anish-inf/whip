@@ -377,8 +377,8 @@ func TestBackgroundTaskSubscriberSeesToolEvents(t *testing.T) {
 	var seq []string
 	ok := ag.Tasks().Subscribe(task.ID, Events{
 		OnText:      func(s string) { mu.Lock(); seq = append(seq, "text:"+s); mu.Unlock() },
-		OnToolStart: func(n, a string) { mu.Lock(); seq = append(seq, "start:"+n); mu.Unlock() },
-		OnToolEnd:   func(n, r string) { mu.Lock(); seq = append(seq, "end:"+n+":"+r); mu.Unlock() },
+		OnToolStart: func(_, n, _ string) { mu.Lock(); seq = append(seq, "start:"+n); mu.Unlock() },
+		OnToolEnd:   func(_, n, r string) { mu.Lock(); seq = append(seq, "end:"+n+":"+r); mu.Unlock() },
 	})
 	if !ok {
 		t.Fatal("Subscribe on a running task should succeed")

@@ -707,9 +707,23 @@ func (m *Manager) Close() {
 // StreamableClientTransport (remote, header-injecting client).
 func defaultTransport(cfg ServerConfig, stderr *ringBuffer) (sdkmcp.Transport, error) {
 	if cfg.Remote() {
+		// Header values may be secret references ("$VAR"/"${VAR}"/"!cmd") —
+		// resolve them at connect time (the point of use) so configs hold only
+		// references and resolved secrets never reach the log or session store.
+		// Unresolvable references drop the header: the connect then fails
+		// cleanly instead of sending the literal reference upstream.
+		headers := make(map[string]string, len(cfg.Headers))
+		for k, v := range cfg.Headers {
+			rv, err := config.ResolveSecret(v)
+			if err != nil {
+				logf("header %s: %v (dropped)", k, err)
+				continue
+			}
+			headers[k] = rv
+		}
 		return &sdkmcp.StreamableClientTransport{
 			Endpoint:   cfg.URL,
-			HTTPClient: &http.Client{Transport: headerTransport(cfg.Headers)},
+			HTTPClient: &http.Client{Transport: headerTransport(headers)},
 			// ponytail: the standalone SSE stream would deliver server-initiated
 			// notifications (tool list changes); request-response is enough for v1
 			DisableStandaloneSSE: true,

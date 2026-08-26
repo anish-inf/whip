@@ -53,8 +53,8 @@ var (
 
 // messages sent from the agent goroutine
 type textMsg string
-type toolStartMsg struct{ name, args string }
-type toolEndMsg struct{ name, result string }
+type toolStartMsg struct{ id, name, args string }
+type toolEndMsg struct{ id, name, result string }
 type steeredMsg string
 
 // goalFromContextMsg carries the model-formulated goal back from the
@@ -149,6 +149,8 @@ type model struct {
 	lastUp  time.Time        // last ↑ keypress; repeat detection for history rollover
 	now     func() time.Time // test seam; defaults to time.Now
 
+	turnStart time.Time // when the in-flight turn began; zero when idle (busy line shows elapsed)
+
 	queue      []string // messages typed while busy, sent after the turn ends
 	queueSel   int      // selected queued message, -1 = none (not navigating)
 	interrupt1 bool     // first ctrl+c pressed while busy; second cancels
@@ -169,6 +171,9 @@ type model struct {
 
 	irunner *interactiveRunner // installed on tools.InteractiveBash at startup
 	iactive *interactive       // in-flight interactive command; nil when idle
+
+	perms      permRules   // saved allow-always rules
+	permDialog *permDialog // open permission modal; the turn is paused on it
 
 	tasksFocus bool      // the tasks dock owns ↑/↓/enter/esc instead of the input
 	taskSel    int       // selected row in the dock (index into newest-first tasks)
@@ -308,6 +313,7 @@ func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string) (s
 	// computer-use: the per-app consent prompt — installed once, here, where
 	// the model exists (buildAgent is package-level and has no m).
 	tools.ComputerApprover = m.computerConsent
+	m.installPermGate()
 	if dir, derr := config.Dir(); derr == nil {
 		if st, serr := session.Open(dir + "/sessions.db"); serr == nil {
 			m.store = st
@@ -501,7 +507,11 @@ func (m *model) fetchCatalogs(force bool) {
 		if c, ok := cats[name]; ok && !force && !c.Stale() && c.BaseURL == prov.BaseURL {
 			continue
 		}
-		key := prov.Key()
+		key, keyErr := prov.ResolveKey()
+		if keyErr != nil {
+			config.LogEvent("catalog.fetch", name+" skipped: "+keyErr.Error())
+			continue
+		}
 		if key == "" {
 			continue
 		}
@@ -834,7 +844,10 @@ func buildAgent(cfg *config.Config, modelName, provName, sysPrompt string) (*age
 			provName = mdl.Providers[0]
 		}
 	}
-	key := prov.Key()
+	key, keyErr := prov.ResolveKey()
+	if keyErr != nil {
+		return nil, "", "", keyErr
+	}
 	if key == "" {
 		return nil, "", "", fmt.Errorf("no API key for provider %q (set apiKey/apiKeyEnv in ~/.whip/config.json)", provName)
 	}
@@ -913,6 +926,7 @@ const (
 	blockText      blockKind = iota // already-styled line(s): re-wrap on resize
 	blockAssistant                  // raw markdown: re-render through glamour
 	blockTool                       // raw tool result: collapsed preview, expandable
+	blockToolRun                    // a running tool call: verb line, collapses on completion
 )
 
 // toolPreviewLines is how many lines of a tool result show when collapsed.
@@ -931,7 +945,12 @@ const minRenderWidth = 8
 type block struct {
 	kind     blockKind
 	text     string
-	expanded bool // blockTool: show the full output (click / ctrl+e toggles)
+	expanded bool // blockTool/blockToolRun: show the full output (click / ctrl+e toggles)
+	// blockToolRun: the tool-call id this row tracks and whether it's still
+	// running — on completion the row collapses in place to one line.
+	toolID      string
+	toolRunning bool
+	toolFailed  bool
 	// y0/y1 are the block's line range in the last rendered content (set by
 	// refreshVP); used to map a mouse click to the block under it.
 	y0, y1 int
@@ -971,10 +990,35 @@ func (b block) render(width int) string {
 		if b.expanded || len(lines) <= toolPreviewLines {
 			return wrap(dimStyle.Render("  "+strings.Join(lines, "\n  ")), width)
 		}
-		preview := strings.Join(lines[:toolPreviewLines], "\n  ")
-		out := dimStyle.Render("  " + preview)
+		preview := lines[:toolPreviewLines]
+		// An edit-style result carries a fenced diff at the tail; surface its
+		// -/+ lines in the collapsed preview so the change shows without
+		// expanding.
+		if strings.HasSuffix(lines[len(lines)-1], "```") {
+			var diffs []string
+			for _, l := range lines {
+				if strings.HasPrefix(l, "-") || strings.HasPrefix(l, "+") {
+					diffs = append(diffs, l)
+				}
+			}
+			if len(diffs) > 0 {
+				preview = append(preview, diffs...)
+			}
+		}
+		out := dimStyle.Render("  " + strings.Join(preview, "\n  "))
 		hint := fmt.Sprintf("\n  … +%d lines (ctrl+e or click to expand)", len(lines)-toolPreviewLines)
 		return wrap(out+dimStyle.Render(hint), width)
+	case blockToolRun:
+		// While running, the verb line shows in full. On completion the same
+		// block collapses in place to one line (red on failure); ctrl+e expands.
+		if b.toolRunning || b.expanded {
+			return wrap(b.text, width)
+		}
+		line := ansi.Truncate(b.text, width, "…")
+		if b.toolFailed {
+			return wrap(errStyle.Render(line), width)
+		}
+		return wrap(dimStyle.Render(line), width)
 	default:
 		return wrap(b.text, width)
 	}
@@ -982,7 +1026,7 @@ func (b block) render(width int) string {
 
 // expand toggles a tool block and returns whether it changed.
 func (b *block) toggle() bool {
-	if b.kind != blockTool {
+	if b.kind != blockTool && b.kind != blockToolRun {
 		return false
 	}
 	b.expanded = !b.expanded
@@ -1337,6 +1381,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case permRequest:
+		m.permDialog = &permDialog{req: msg.req, reply: msg.reply}
+		return m, nil
+
 	case tea.KeyMsg:
 		return m.key(msg)
 
@@ -1448,15 +1496,31 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				args = label
 			}
 		}
-		// full args, wrapped at render time like every other block — no
-		// truncation: the command being run must always be fully visible
-		m.append(toolStyle.Render("⚒ "+msg.name+" ") + dimStyle.Render(args))
+		// a running row: icon + present-participle verb + full args (the
+		// command being run is always fully visible). On toolEndMsg the same
+		// block collapses in place to one line.
+		row := toolStyle.Render("⚒ "+toolVerb(msg.name)+" ") + dimStyle.Render(args)
+		m.blocks = append(m.blocks, block{kind: blockToolRun, text: row, toolID: msg.id, toolRunning: true})
+		m.refreshVP()
 		return m, nil
 
 	case toolEndMsg:
 		// store the raw result; render collapses to a preview (ctrl+e /
 		// click expands) and re-wraps on resize
 		m.appendRaw(blockTool, msg.result)
+		// collapse the matching running row in place: full args+result when
+		// expanded, one dim line (red on failure) otherwise
+		for i := len(m.blocks) - 1; i >= 0; i-- {
+			b := &m.blocks[i]
+			if b.kind == blockToolRun && b.toolRunning && b.toolID == msg.id {
+				b.toolRunning = false
+				b.toolFailed = strings.HasPrefix(msg.result, "Error:")
+				b.text = toolStyle.Render("⚒ "+msg.name+" ") + dimStyle.Render(firstLine(msg.result))
+				b.stale = true
+				break
+			}
+		}
+		m.refreshVP()
 		return m, nil
 
 	case meEditedMsg:
@@ -1594,6 +1658,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.busy = false
 		m.cancel = nil
 		m.interrupt1 = false
+		m.turnStart = time.Time{}
 		// Cancellation arrives wrapped from the in-flight http request
 		// ("Post ...: context canceled"), so identity comparison misses it —
 		// which would strand the queue instead of draining it.
@@ -1763,6 +1828,10 @@ func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// a single esc to the child (many prompts use esc to cancel).
 	if m.iactive != nil {
 		return m.iactiveKey(msg)
+	}
+	if m.permDialog != nil {
+		m.permKey(msg)
+		return m, nil
 	}
 	if m.palette != nil {
 		return m.paletteKey(msg)
@@ -2172,6 +2241,28 @@ func (m *model) nowFn() time.Time {
 	return time.Now()
 }
 
+// busyStats renders the busy line's live counters: elapsed time since the
+// turn started, session tokens so far, and the share of the advertised
+// context window. Returns "" when idle (turnStart zero).
+func (m *model) busyStats() string {
+	if m.turnStart.IsZero() {
+		return ""
+	}
+	d := m.nowFn().Sub(m.turnStart)
+	if d < 0 {
+		d = 0
+	}
+	elapsed := d.Round(time.Second)
+	stats := fmt.Sprintf(" %d:%02d", int(elapsed.Minutes()), int(elapsed.Seconds())%60)
+	if u := m.agent.Usage(); u.PromptTokens > 0 || u.CompletionTokens > 0 {
+		stats += fmt.Sprintf(" · %s tok", fmtTok(u.PromptTokens+u.CompletionTokens))
+	}
+	if m.agent.ContextLimit > 0 {
+		stats += fmt.Sprintf(" · %d%%", agent.EstimateTokens(m.agent.Messages)*100/m.agent.ContextLimit)
+	}
+	return stats
+}
+
 // histPrev/histNext recall submitted inputs with the arrow keys.
 func (m *model) histPrev() {
 	if len(m.hist) == 0 || m.histIdx == 0 {
@@ -2269,12 +2360,17 @@ func (m *model) applyCompactModel() {
 		}
 		return
 	}
-	if key := prov.Key(); key != "" {
+	key, keyErr := prov.ResolveKey()
+	if keyErr == nil && key != "" {
 		m.agent.CompactClient = llm.New(prov.BaseURL, key)
 		m.agent.CompactClient.MaxRetries = m.cfg.MaxRetries
 		m.agent.CompactModel = apiID
 	} else if m.compactModel != "" {
-		m.append(errStyle.Render("compaction model: no API key — using current model"))
+		if keyErr != nil {
+			m.append(errStyle.Render("compaction model: " + keyErr.Error() + " — using current model"))
+		} else {
+			m.append(errStyle.Render("compaction model: no API key — using current model"))
+		}
 	}
 }
 
@@ -2749,6 +2845,7 @@ func (m *model) submitGoal(text string) (tea.Model, tea.Cmd) {
 
 func (m *model) submitTurn(text string, authored bool) (tea.Model, tea.Cmd) {
 	m.busy = true
+	m.turnStart = m.nowFn()
 	prepared, parts := m.prepareTurn(text)
 	userMsgIdx := len(m.agent.Messages) // where Turn will append this message
 	// Snapshot the pre-turn workspace so a rewind past this turn restores the
@@ -2829,11 +2926,11 @@ func (m *model) submitTurn(text string, authored bool) (tea.Model, tea.Cmd) {
 		events := agent.Events{
 			OnText:  onText,
 			OnThink: onThink,
-			OnToolStart: func(n, a string) {
+			OnToolStart: func(id, n, a string) {
 				flush()
-				send(toolStartMsg{n, a})
+				send(toolStartMsg{id, n, a})
 			},
-			OnToolEnd: func(n, r string) { send(toolEndMsg{n, r}) },
+			OnToolEnd: func(id, n, r string) { send(toolEndMsg{id, n, r}) },
 			OnSteer: func(s string) {
 				flush()
 				send(steeredMsg(s))
@@ -3157,8 +3254,7 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 	case "/report":
 		m.append(m.reportBlock())
 	case "/help":
-		m.append(dimStyle.Render(
-			"/model <name> [provider] — switch model (any provider-catalog model works; refresh pulls new announcements)\n/context-doctor — audit what a fresh session injects (skills, MCP, tool schemas) and its token cost\n/report — bug-report bundle: prefilled GitHub-issue link + copy-pastable environment snippet (terminal, theme, versions)\n/mcp [name] [reconnect|enable|disable] — MCP servers: status, reconnect, toggle\n/compact [model] [provider]|off — compact now, or pick the compaction model (off restores the default); retry undoes the last compaction, log lists them; compaction level: ctrl+p › Compaction level\n/mouse — toggle mouse capture (on = wheel scroll + clicks, drag to copy)\n/theme [light|dark|auto] — color scheme (bare opens the switcher)\n/tasks [id] — background subagents: focus the dock, or open one subagent's live view (ctrl+t toggles dock focus)\n/resume [id] — resume a previous session\n/fork [name] — copy this conversation into a new session (pick a point in the rewind picker with f)\n/rename [title] — retitle this session\n/goal <text> — keep working until the goal is met (resume | clear | rounds <n>|default [--global])\n/goal-from-context [n] — formulate a goal from the last n messages (default 8) and work until it's met\n/clear — reset conversation\n/memory [n] [session] — saved memories: list what's injected each turn, mark entry n done\n/me — edit your standing instructions (~/.whip/me.md) in $EDITOR\n/schedule @every 10m|<@at time> <prompt> — schedule a wakeup turn; list | cancel <n>\n/cd [dir] — change working directory (bare prints it)\n/pwd — print working directory\n!<cmd> — run a shell command locally; output lands in the transcript and the conversation\n/quit — exit\ntab — complete · ctrl+k — clear the conversation · ctrl+t — focus the subagents dock (↑/↓ select, enter opens, esc backs out) · ctrl+o — toggle thinking tokens · ctrl+e — expand the last tool result · ctrl+j / shift+enter — newline · ctrl+v — paste image · esc — interrupt the agent · esc esc (idle) — rewind the conversation (↑/↓ browse, enter rewinds, f forks) · while busy with queued messages: ↑/↓ select, del removes · PgUp/PgDn — scroll · wheel — scroll · drag — select/copy text · ctrl+c ctrl+c — quit"))
+		m.append(dimStyle.Render(helpText()))
 	case "/model":
 		if len(fields) < 2 {
 			m.openModelPicker()
@@ -3323,6 +3419,9 @@ func (m *model) View() string {
 	if m.iactive != nil {
 		b.WriteString("\n" + m.interactiveView() + "\n")
 	}
+	if m.permDialog != nil {
+		b.WriteString("\n" + m.permView() + "\n")
+	}
 	if m.busy {
 		hint := " thinking… (enter queues · /theme /mouse /effort run now · esc interrupts · ctrl+c ctrl+c interrupts)"
 		if m.iactive != nil {
@@ -3330,7 +3429,7 @@ func (m *model) View() string {
 		} else if m.interrupt1 {
 			hint = " thinking… (esc or ctrl+c again to interrupt)"
 		}
-		b.WriteString("\n" + m.spin.View() + dimStyle.Render(hint) + "\n")
+		b.WriteString("\n" + m.spin.View() + dimStyle.Render(m.busyStats()+hint) + "\n")
 	}
 	if len(m.queue) > 0 {
 		nav := ""

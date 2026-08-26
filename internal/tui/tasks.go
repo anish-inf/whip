@@ -170,10 +170,10 @@ func (m *model) openTask(id string) {
 			OnText: func(s string) {
 				sendTaskMsg(p, taskEventMsg{id: id, kind: 0, s: s})
 			},
-			OnToolStart: func(n, a string) {
+			OnToolStart: func(_, n, a string) {
 				sendTaskMsg(p, taskEventMsg{id: id, kind: 1, s: n, s2: a})
 			},
-			OnToolEnd: func(n, r string) {
+			OnToolEnd: func(_, n, r string) {
 				sendTaskMsg(p, taskEventMsg{id: id, kind: 2, s: n, s2: r})
 			},
 		})

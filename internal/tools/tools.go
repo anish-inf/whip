@@ -4,6 +4,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -140,6 +141,9 @@ func bashTool() Tool {
 			if a.Timeout <= 0 {
 				a.Timeout = 120
 			}
+			if deny := checkGate("bash", a.Command); deny != "" {
+				return "", errors.New(deny)
+			}
 			dur := time.Duration(a.Timeout * float64(time.Second))
 
 			// Interactive mode hands the live terminal to the user only when the
@@ -221,6 +225,9 @@ func writeTool() Tool {
 			if err := json.Unmarshal(args, &a); err != nil {
 				return "", err
 			}
+			if deny := checkGate("write", a.Path); deny != "" {
+				return "", errors.New(deny)
+			}
 			if err := os.MkdirAll(filepath.Dir(a.Path), 0o755); err != nil {
 				return "", err
 			}
@@ -247,6 +254,9 @@ func editTool() Tool {
 			if err := json.Unmarshal(args, &a); err != nil {
 				return "", err
 			}
+			if deny := checkGate("edit", a.Path); deny != "" {
+				return "", errors.New(deny)
+			}
 			data, err := os.ReadFile(a.Path)
 			if err != nil {
 				return "", err
@@ -263,7 +273,50 @@ func editTool() Tool {
 			if err := os.WriteFile(a.Path, []byte(s), 0o644); err != nil {
 				return "", err
 			}
-			return fmt.Sprintf("Replaced %d occurrence(s) in %s", n, a.Path) + lspDiagnostics(ctx, a.Path), nil
+			out := fmt.Sprintf("Replaced %d occurrence(s) in %s", n, a.Path)
+			if d := editDiff(a.OldString, a.NewString); d != "" {
+				out += "\n```diff\n" + d + "\n```"
+			}
+			return out + lspDiagnostics(ctx, a.Path), nil
 		},
 	}
+}
+
+// editDiff renders the changed region of an edit as a compact unified-ish
+// diff: one line of common context on each side of the first/last changed
+// lines, "- old"/"+ new" pairs in between. "" when old and new are identical.
+func editDiff(oldS, newS string) string {
+	o := strings.Split(strings.TrimSuffix(oldS, "\n"), "\n")
+	n := strings.Split(strings.TrimSuffix(newS, "\n"), "\n")
+	p := 0
+	for p < len(o) && p < len(n) && o[p] == n[p] {
+		p++
+	}
+	s := 0
+	for s < len(o)-p && s < len(n)-p && o[len(o)-1-s] == n[len(n)-1-s] {
+		s++
+	}
+	if p == len(o) && p == len(n) {
+		return ""
+	}
+	var b strings.Builder
+	ctxLine := func(prefix, line string) {
+		if len(line) > 200 {
+			line = line[:200] + "…"
+		}
+		b.WriteString(prefix + line + "\n")
+	}
+	if p > 0 {
+		ctxLine(" ", o[p-1])
+	}
+	for _, l := range o[p : len(o)-s] {
+		ctxLine("-", l)
+	}
+	for _, l := range n[p : len(n)-s] {
+		ctxLine("+", l)
+	}
+	if s > 0 {
+		ctxLine(" ", o[len(o)-1])
+	}
+	return strings.TrimSuffix(b.String(), "\n")
 }

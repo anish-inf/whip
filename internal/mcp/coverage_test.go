@@ -140,3 +140,36 @@ func TestFlattenRemainingContentTypes(t *testing.T) {
 		}
 	}
 }
+
+func TestDefaultTransportResolvesHeaderSecrets(t *testing.T) {
+	t.Setenv("WHIP_MCP_SECRET_TEST", "resolved-token")
+
+	// References resolve at connect time; the config keeps the raw reference.
+	cfg := ServerConfig{URL: "https://mcp.example.com", Headers: map[string]string{
+		"Authorization": "${WHIP_MCP_SECRET_TEST}",
+		"X-Cmd":         "!printf cmd-token",
+		"X-Literal":     "plain",
+		"X-Dropped":     "$WHIP_MCP_SECRET_UNSET",
+	}}
+	tr, err := defaultTransport(cfg, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Headers["Authorization"] != "${WHIP_MCP_SECRET_TEST}" {
+		t.Fatalf("config mutated: %q", cfg.Headers["Authorization"])
+	}
+	st, ok := tr.(*sdkmcp.StreamableClientTransport)
+	if !ok {
+		t.Fatalf("transport type %T", tr)
+	}
+	ht, ok := st.HTTPClient.Transport.(headerTransport)
+	if !ok {
+		t.Fatalf("inner transport type %T", st.HTTPClient.Transport)
+	}
+	if ht["Authorization"] != "resolved-token" || ht["X-Cmd"] != "cmd-token" || ht["X-Literal"] != "plain" {
+		t.Fatalf("resolved headers: %+v", ht)
+	}
+	if _, present := ht["X-Dropped"]; present {
+		t.Fatalf("unresolvable reference must be dropped, got %q", ht["X-Dropped"])
+	}
+}

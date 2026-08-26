@@ -14,25 +14,41 @@ type Provider struct {
 	Name      string `json:"name,omitempty"`
 	BaseURL   string `json:"baseUrl"`
 	API       string `json:"api"`              // "openai-completions" is the only supported value for now
-	APIKey    string `json:"apiKey,omitempty"` // literal key, or use apiKeyEnv
+	APIKey    string `json:"apiKey,omitempty"` // literal key or a secret reference ("$VAR"/"${VAR}"/"!cmd"); apiKeyEnv is another option
 	APIKeyEnv string `json:"apiKeyEnv,omitempty"`
 }
 
-// Key returns the resolved API key for the provider.
+// Key returns the resolved API key for the provider, "" when none is
+// configured. Unresolvable secret references degrade to "" like a missing
+// key; ResolveKey reports the error for callers that can surface it.
 func (p Provider) Key() string {
+	k, _ := p.ResolveKey()
+	return k
+}
+
+// ResolveKey is Key with error detail: apiKey/apiKeyEnv may hold a secret
+// reference (see ResolveSecret), resolved here at the point of use so the
+// config file and session store hold only references and a missing var only
+// errors when the provider is actually used. The resolved value never enters
+// the event log.
+func (p Provider) ResolveKey() (string, error) {
 	if p.APIKeyEnv != "" {
 		if v := os.Getenv(p.APIKeyEnv); v != "" {
-			return v
+			return v, nil
 		}
 	}
 	if p.APIKey != "" {
-		return p.APIKey
+		k, err := ResolveSecret(p.APIKey)
+		if err != nil {
+			return "", fmt.Errorf("provider %q apiKey: %w", p.Name, err)
+		}
+		return k, nil
 	}
 	// ponytail: special-case fallback to the inf CLI's stored key; generalize to apiKeyFile if more providers need it
 	if strings.Contains(p.BaseURL, "api.inference.net") {
-		return infKey()
+		return infKey(), nil
 	}
-	return ""
+	return "", nil
 }
 
 // infKey reads apiKey/codingAgentApiKey from ~/.inf/config.json (written by `inf auth set-key`).

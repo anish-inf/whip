@@ -67,6 +67,40 @@ func (m *model) rewindEntries() []rewindEntry {
 
 func oneLine(s string) string { return truncLine(strings.Join(strings.Fields(s), " "), 100) }
 
+// firstLine is the collapsed tool row's text: the first non-empty line,
+// whitespace-collapsed.
+func firstLine(s string) string {
+	for l := range strings.Lines(s) {
+		if l = strings.TrimSpace(l); l != "" {
+			return truncLine(strings.Join(strings.Fields(l), " "), 120)
+		}
+	}
+	return "(no output)"
+}
+
+// toolVerb is the present-participle a running row leads with ("Reading
+// file…"-style); the tool name verbatim when there's no nicer verb.
+func toolVerb(name string) string {
+	switch name {
+	case "read":
+		return "Reading"
+	case "write":
+		return "Writing"
+	case "edit":
+		return "Editing"
+	case "bash":
+		return "Running"
+	case "task":
+		return "Delegating"
+	case "remember", "forget":
+		return "Remembering"
+	case "todowrite":
+		return "Planning"
+	default:
+		return name
+	}
+}
+
 // scrollToMsg live-scrolls the viewport so the block rendering
 // agent.Messages[msgIdx] is near the top.
 func (m *model) scrollToMsg(msgIdx int) {

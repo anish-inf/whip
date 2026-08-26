@@ -18,8 +18,8 @@ import (
 type Events struct {
 	OnText      func(delta string)               // assistant text as it streams
 	OnThink     func(delta string)               // reasoning/thinking tokens as they stream
-	OnToolStart func(name string, args string)   // a tool call is about to run
-	OnToolEnd   func(name string, result string) // a tool call finished
+	OnToolStart func(id, name, args string)   // a tool call is about to run
+	OnToolEnd   func(id, name, result string) // a tool call finished
 	OnSteer     func(text string)                // a steered message was injected
 	OnCompact   func(took, kept int)             // context was auto-compacted (messages removed/kept)
 	OnCompacted func(summary string, cutoff int) // a compaction ran; record it (raw log survives)
@@ -412,13 +412,13 @@ func (a *Agent) runTools(ctx context.Context, calls []llm.ToolCall, ev Events) [
 			}
 
 			if ev.OnToolStart != nil {
-				ev.OnToolStart(name, args)
+				ev.OnToolStart(tc.ID, name, args)
 			}
 			start := time.Now()
 			out := tools.Execute(ctx, a.AllTools(), name, json.RawMessage(args))
 			ms := time.Since(start).Milliseconds()
 			if ev.OnToolEnd != nil {
-				ev.OnToolEnd(name, out)
+				ev.OnToolEnd(tc.ID, name, out)
 			}
 			outCh <- outcome{i, out, ms, toolExitCode(out)}
 		}(i, tc)

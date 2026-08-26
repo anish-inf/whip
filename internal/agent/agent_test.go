@@ -59,8 +59,8 @@ func TestTurnLoop(t *testing.T) {
 	var events []string
 	final, err := ag.Turn(context.Background(), "go", Events{
 		OnText:      func(d string) { events = append(events, "text:"+d) },
-		OnToolStart: func(n, a string) { events = append(events, "start:"+n) },
-		OnToolEnd:   func(n, r string) { events = append(events, "end:"+r) },
+		OnToolStart: func(_, n, _ string) { events = append(events, "start:"+n) },
+		OnToolEnd:   func(_, _, r string) { events = append(events, "end:"+r) },
 	})
 	if err != nil {
 		t.Fatal(err)
