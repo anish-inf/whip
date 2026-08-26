@@ -496,6 +496,24 @@ func applyTmuxMouseFix() {
 		"#{||:#{alternate_on},#{pane_in_mode},#{mouse_all_flag}}", "send-keys -M", "copy-mode -M").Run()
 }
 
+// catalogLites converts llm model records into the catalog-cache shape.
+func catalogLites(infos []llm.ModelInfo) []config.ModelInfoLite {
+	lites := make([]config.ModelInfoLite, len(infos))
+	for i, mi := range infos {
+		lites[i] = config.ModelInfoLite{
+			ID:                  mi.ID,
+			ContextLength:       mi.ContextLength,
+			MaxCompletionTokens: mi.MaxCompletionTokens,
+			ReasoningEfforts:    mi.ReasoningEfforts,
+			InputModalities:     mi.InputModalities,
+		}
+		if mi.Pricing != nil {
+			lites[i].InPrice, lites[i].OutPrice, lites[i].CacheReadPrice = mi.Pricing.Rates()
+		}
+	}
+	return lites
+}
+
 // fetchCatalogs refreshes each provider's cached model list in the background
 // and sends the merged result to the UI. force bypasses the 24h TTL
 // (/model refresh) so newly announced models appear immediately.
@@ -525,20 +543,7 @@ func (m *model) fetchCatalogs(force bool) {
 			continue // keep any stale cache
 		}
 		config.LogEvent("catalog.fetch", fmt.Sprintf("%s ok: %d models", name, len(infos)))
-		models := make([]config.ModelInfoLite, len(infos))
-		for i, mi := range infos {
-			models[i] = config.ModelInfoLite{
-				ID:                  mi.ID,
-				ContextLength:       mi.ContextLength,
-				MaxCompletionTokens: mi.MaxCompletionTokens,
-				ReasoningEfforts:    mi.ReasoningEfforts,
-				InputModalities:     mi.InputModalities,
-			}
-			if mi.Pricing != nil {
-				models[i].InPrice, models[i].OutPrice, models[i].CacheReadPrice = mi.Pricing.Rates()
-			}
-		}
-		cats[name] = config.Catalog{FetchedAt: time.Now(), BaseURL: prov.BaseURL, Models: models}
+		cats[name] = config.Catalog{FetchedAt: time.Now(), BaseURL: prov.BaseURL, Models: catalogLites(infos)}
 		dirty = true
 	}
 	if dirty {
@@ -1739,6 +1744,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.updateCatalogs(msg)
 		return m, nil
 
+	case authResultMsg:
+		m.applyAuthResult(msg)
+		return m, nil
+
 	case noticeMsg:
 		m.append(dimStyle.Render(string(msg)))
 		return m, nil
@@ -1968,8 +1977,13 @@ func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Dismissing UI takes priority and only arms the window.
 		dismissed := true
 		switch {
-		case m.namePrompt != nil: // cancel the inline fork/rename prompt
+		case m.namePrompt != nil: // cancel the inline fork/rename/auth prompt
+			masked := m.namePrompt.mask
 			m.closeNamePrompt()
+			if masked { // the draft stash must not record a key into history
+				m.escClr = false
+				return m, nil
+			}
 		case m.menu != nil:
 			if m.menu.cyc { // tab cycling previewed candidates: revert the input
 				m.input.SetValue(m.menu.base)
@@ -2203,8 +2217,10 @@ func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			// settings commands don't touch the turn — run them now instead of
 			// queueing them as messages for the model
 			case text != "" && busyCmd(text):
-				m.hist = append(m.hist, text)
-				m.histIdx = len(m.hist)
+				if !strings.HasPrefix(text, "/auth ") { // keys stay out of ↑-recallable history
+					m.hist = append(m.hist, text)
+					m.histIdx = len(m.hist)
+				}
 				m.input.Reset()
 				m.menu = nil
 				return m.command(text)
@@ -2241,8 +2257,13 @@ func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.input.Reset()
 		m.menu = nil
-		m.hist = append(m.hist, text)
-		m.histIdx = len(m.hist)
+		// /auth with an inline key is kept out of input history: the key would
+		// otherwise be ↑-recallable and rendered in the clear. The masked
+		// prompt (bare /auth) is the recommended path.
+		if !strings.HasPrefix(text, "/auth ") {
+			m.hist = append(m.hist, text)
+			m.histIdx = len(m.hist)
+		}
 		m.draft = ""
 		if strings.HasPrefix(text, "/") {
 			return m.command(text)
@@ -3028,6 +3049,8 @@ func busyCmd(text string) bool {
 	switch fields[0] {
 	case "/help", "/theme", "/mouse", "/effort", "/tasks", "/cd", "/pwd", "/report":
 		return true
+	case "/auth": // must run now even while busy: an inline key queued as a chat message would be sent to the model
+		return true
 	case "/goal": // status, clear, and rounds are settings; resume/<text> submit turns
 		return len(fields) == 1 || fields[1] == "clear" || fields[1] == "rounds"
 	}
@@ -3299,6 +3322,8 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 		m.append(m.reportBlock())
 	case "/help":
 		m.append(dimStyle.Render(helpText()))
+	case "/auth":
+		m.authCommand(fields[1:])
 	case "/model":
 		if len(fields) < 2 {
 			m.openModelPicker()
@@ -3502,8 +3527,17 @@ func (m *model) View() string {
 	if m.iactive == nil {
 		if m.namePrompt != nil {
 			b.WriteString(m.namePrompt.label + " ")
+			if m.namePrompt.mask {
+				// Secrets never echo: render the mask instead of the input's
+				// live view (which would show the key in the clear). The "┃ "
+				// prompt matches how the textarea renders its own first line.
+				b.WriteString("┃ " + m.namePrompt.maskedValue(m.input.Value()))
+			} else {
+				b.WriteString(m.input.View())
+			}
+		} else {
+			b.WriteString(m.input.View())
 		}
-		b.WriteString(m.input.View())
 	}
 	if m.quit1 {
 		// first idle ctrl+c armed the quit; make the second press discoverable

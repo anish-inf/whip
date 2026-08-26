@@ -15,6 +15,7 @@ import (
 type namePrompt struct {
 	label string // input prefix, e.g. "⑂ fork name:"
 	draft string // input content stashed while the prompt owns the box
+	mask  bool   // render the value as ••• (secret entry, e.g. /auth)
 	onOK  func(string)
 }
 
@@ -33,6 +34,15 @@ func (m *model) closeNamePrompt() {
 	m.input.CursorEnd()
 	m.namePrompt = nil
 	m.growInput()
+}
+
+// maskedValue renders the input value for the prompt line: ••• when the
+// prompt masks (auth keys never echo), the raw value otherwise.
+func (p *namePrompt) maskedValue(v string) string {
+	if !p.mask {
+		return v
+	}
+	return strings.Repeat("•", len([]rune(v)))
 }
 
 // forkCommand implements /fork [name].

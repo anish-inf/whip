@@ -159,6 +159,27 @@ compaction path must see immediately) are never retried. Each retry posts a
 `⚠ request failed (…) — retrying in Ns (attempt N/M)` line via the
 `Client.OnRetry` hook. Tests: `llm/retry_test.go`.
 
+`cmd/whip/auth.go`, `internal/config/openrouter.go`,
+`internal/tui/auth_cmd.go` — one-command provider onboarding, first (and
+currently only) for OpenRouter. `whip auth openrouter [--env] [<key>]` takes
+the key from arg / `OPENROUTER_API_KEY` / a masked prompt, **validates it
+against the live API before writing anything** (a rejected key leaves no
+trace), upserts the `openrouter` provider into config (literal `apiKey` by
+default — config is 0600; `--env` stores `apiKeyEnv: OPENROUTER_API_KEY` and
+offers to append the export to the shell rc), and pre-fetches the model
+catalog so `/model` lists the entire OpenRouter catalog immediately — every
+model usable with zero per-model config via catalog resolution. In-session,
+`/auth openrouter` (bare) repurposes the input box as a **masked** one-shot
+prompt (the `namePrompt` machinery with a `mask` flag — the key never
+echoes, and the inline-key form is kept out of ↑-recallable input history);
+a session already routed through openrouter is hot-rebuilt with the new key
+so re-authing fixes a 401 without a `/model` round-trip. Tests:
+`config/openrouter_test.go` (upsert modes, idempotence, `TrimKey`),
+`cmd/whip/auth_test.go` (httptest fake OpenRouter — good key wires provider
++ catalog + makes catalog models resolvable, bad key writes nothing,
+re-auth keeps other providers/models), `tui/auth_cmd_test.go` (usage,
+masked prompt open/cancel, good/bad result, live-session rekey).
+
 ## The TUI
 
 `internal/tui/tui.go` — bubbletea fullscreen alt-screen. Highlights:
