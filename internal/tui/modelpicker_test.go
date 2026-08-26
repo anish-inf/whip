@@ -81,3 +81,55 @@ func TestModelPickerFilter(t *testing.T) {
 		t.Fatalf("cleared query view: %d", got)
 	}
 }
+
+func TestModelPickerFuzzyFilter(t *testing.T) {
+	p := &modelPicker{items: []modelItem{
+		{model: "claude-opus-4", provider: "a"},
+		{model: "gpt-5", provider: "openai"},
+	}}
+
+	// subsequence: "claudopus" skips the "-" and still matches
+	p.query = "claudopus"
+	p.applyQuery()
+	if got := p.view(); len(got) != 1 || got[0].model != "claude-opus-4" {
+		t.Fatalf("subsequence filter: %+v", got)
+	}
+
+	// provider match ranks alongside model matches
+	p.query = "openai"
+	p.applyQuery()
+	if got := p.view(); len(got) != 1 || got[0].model != "gpt-5" {
+		t.Fatalf("provider subsequence filter: %+v", got)
+	}
+}
+
+func TestResolveModelFuzzy(t *testing.T) {
+	cfg := &config.Config{
+		Providers: map[string]config.Provider{"a": {BaseURL: "https://a"}},
+		Models: map[string]config.Model{
+			"claude-sonnet-4": {Providers: []string{"a"}},
+			"claude-opus-4":   {Providers: []string{"a"}},
+		},
+	}
+
+	// exact name passes through
+	if got, ok, _ := resolveModelFuzzy(cfg, "claude-opus-4"); !ok || got != "claude-opus-4" {
+		t.Fatalf("exact passthrough: %q %v", got, ok)
+	}
+
+	// unique substring resolves
+	if got, ok, _ := resolveModelFuzzy(cfg, "sonnet"); !ok || got != "claude-sonnet-4" {
+		t.Fatalf("substring resolve: %q %v", got, ok)
+	}
+
+	// ambiguous prefix reports candidates
+	got, ok, alts := resolveModelFuzzy(cfg, "claude")
+	if ok || len(alts) != 2 {
+		t.Fatalf("ambiguous resolve: %q %v %v", got, ok, alts)
+	}
+
+	// no match at all
+	if _, ok, _ := resolveModelFuzzy(cfg, "zzz"); ok {
+		t.Fatal("no-match should not resolve")
+	}
+}
