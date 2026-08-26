@@ -1,10 +1,13 @@
 package tui
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/context-labs/whip/internal/mcp"
+	"github.com/context-labs/whip/internal/skills"
 )
 
 func TestDoctorFreshSession(t *testing.T) {
@@ -46,6 +49,63 @@ func TestDoctorCommandWired(t *testing.T) {
 		t.Error("/doctor should not exist as a shorthand")
 	}
 	_ = before
+}
+
+// TestDoctorSkillSources pins the attribution: each skill named in "biggest:"
+// carries the directory it was discovered from, home-relative for ~/.whip
+// and ./-relative for the project dir — answering "where does this skill come
+// from?" without leaving the report.
+func TestDoctorSkillSources(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	proj := t.TempDir()
+	t.Chdir(proj)
+
+	writeSkill := func(dir, name, desc string) {
+		t.Helper()
+		sd := filepath.Join(dir, name)
+		if err := os.MkdirAll(sd, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		body := "---\nname: " + name + "\ndescription: " + desc + "\n---\n"
+		if err := os.WriteFile(filepath.Join(sd, "SKILL.md"), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeSkill(filepath.Join(proj, ".agents", "skills"), "proj-skill", "from the project")
+	writeSkill(filepath.Join(home, ".whip", "skills"), "user-skill", "from the user dir")
+
+	m := tasksModel("http://unused")
+	m.skillScan = func() []skills.Skill { return skills.Scan(skills.DefaultDirs()...) }
+	out := m.doctorReport()
+	if !strings.Contains(out, "proj-skill") || !strings.Contains(out, "user-skill") {
+		t.Fatalf("both skills should be named:\n%s", out)
+	}
+	if !strings.Contains(out, "proj-skill ~") || !strings.Contains(out, "(./.agents/skills)") {
+		t.Errorf("project skill should point at ./.agents/skills:\n%s", out)
+	}
+	if !strings.Contains(out, "(~/.whip/skills)") {
+		t.Errorf("user skill should point at ~/.whip/skills:\n%s", out)
+	}
+}
+
+// TestShortSkillsDir pins the compaction rules: home → ~, cwd → ./, anything
+// else stays absolute.
+func TestShortSkillsDir(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	wd := t.TempDir()
+	t.Chdir(wd)
+	cases := map[string]string{
+		filepath.Join(home, ".whip", "skills"):                     "~/.whip/skills",
+		filepath.Join(wd, ".agents", "skills"):                     "./.agents/skills",
+		filepath.Join(string(filepath.Separator), "opt", "skills"): "/opt/skills",
+	}
+	for dir, want := range cases {
+		if got := shortSkillsDir(dir); got != want {
+			t.Errorf("shortSkillsDir(%q) = %q, want %q", dir, got, want)
+		}
+	}
 }
 
 func TestTok(t *testing.T) {

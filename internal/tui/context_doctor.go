@@ -3,6 +3,8 @@ package tui
 import (
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -35,24 +37,31 @@ func (m *model) doctorReport() string {
 	// turn in prepareTurn).
 	rows = append(rows, ctxRow{"system prompt (base)", len(m.sysPrompt), ""})
 
-	// Skills: block total + the worst offenders.
-	sk := skills.Scan(skills.DefaultDirs()...)
+	// Skills: block total + the worst offenders, each named with the directory
+	// it was discovered from — "where does this skill come from?" should be
+	// answerable here, not by hunting ~/.whip/skills vs .agents/skills.
+	scan := m.skillScan
+	if scan == nil { // headless tests build models without the seam
+		scan = func() []skills.Skill { return skills.Scan(skills.DefaultDirs()...) }
+	}
+	sk := scan()
 	block := skills.PromptBlock(sk)
 	row := ctxRow{fmt.Sprintf("skills (%d loaded)", len(sk)), len(block), ""}
 	// Per-skill line cost in the block: "- name: desc (path)\n".
 	type sc struct {
 		name string
+		dir  string // the skills dir the SKILL.md lives under
 		n    int
 	}
 	var per []sc
 	for _, s := range sk {
 		n := len(s.Name) + min(len(s.Description), 300) + len(s.Path) + 8
-		per = append(per, sc{s.Name, n})
+		per = append(per, sc{s.Name, filepath.Dir(filepath.Dir(s.Path)), n})
 	}
 	sort.Slice(per, func(i, j int) bool { return per[i].n > per[j].n })
 	var top []string
 	for i := 0; i < len(per) && i < 5; i++ {
-		top = append(top, fmt.Sprintf("%s ~%dtok", per[i].name, (per[i].n+3)/4))
+		top = append(top, fmt.Sprintf("%s ~%dtok (%s)", per[i].name, (per[i].n+3)/4, shortSkillsDir(per[i].dir)))
 	}
 	if len(top) > 0 {
 		row.note = "biggest: " + strings.Join(top, ", ")
@@ -128,6 +137,30 @@ func (m *model) doctorReport() string {
 	fmt.Fprintf(&b, "  %-*s %7s\n", w, "TOTAL injected before you type", "~"+tok(total))
 	b.WriteString("\nTrim: /mcp <name> disable · remove a skill from .agents/skills · /context-doctor again")
 	return b.String()
+}
+
+// shortSkillsDir compacts a skills directory for the doctor's per-skill
+// attribution: home-relative ("~/.whip/skills") when under the user's home,
+// cwd-relative ("./.agents/skills") when under the working directory,
+// absolute otherwise.
+func shortSkillsDir(dir string) string {
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		if rel, err := filepath.Rel(home, dir); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			if rel == "." {
+				return "~"
+			}
+			return "~" + string(filepath.Separator) + rel
+		}
+	}
+	if wd, err := os.Getwd(); err == nil {
+		if rel, err := filepath.Rel(wd, dir); err == nil && !strings.HasPrefix(rel, "..") {
+			if rel == "." {
+				return "."
+			}
+			return "." + string(filepath.Separator) + rel
+		}
+	}
+	return dir
 }
 
 // tok renders a token count compactly (1.2k, 350).
