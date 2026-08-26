@@ -1371,7 +1371,7 @@ func fallbackScheme(inTmux bool, colorfgbg string) (light, ok bool, how string) 
 		}
 	}
 	if inTmux {
-		return false, false, "undetermined (tmux gave no reply — needs tmux ≥3.4 or `set -g allow-passthrough on`) — neutral default"
+		return false, false, "undetermined (no OSC 11 reply through tmux — outer terminal doesn't answer it (e.g. mosh), or tmux <3.4 without `allow-passthrough on`) — neutral default"
 	}
 	return false, false, "undetermined (query timed out) — neutral default"
 }
