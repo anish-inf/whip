@@ -150,7 +150,7 @@ func (m *model) paletteItems() []paletteItem {
 			stepBack: func(m *model) { m.setEffort(prevEffort(m.effortsFor(), m.agent.Effort)) },
 			stepFwd:  func(m *model) { m.setEffort(nextEffort(m.effortsFor(), m.agent.Effort)) }},
 		{title: "Resume session", category: "Session", suggested: true,
-dynDesc: func(m *model) string { return slashHint(m, "/resume") },
+			dynDesc: func(m *model) string { return slashHint(m, "/resume") },
 			dynHint: func(m *model) string { return "/resume" },
 			run: func(m *model) (tea.Model, tea.Cmd) {
 				m.palette = nil
@@ -174,7 +174,7 @@ dynDesc: func(m *model) string { return slashHint(m, "/resume") },
 				return m, nil
 			}},
 		{title: "Fork session", category: "Session",
-dynDesc: func(m *model) string { return slashHint(m, "/fork") },
+			dynDesc: func(m *model) string { return slashHint(m, "/fork") },
 			dynHint: func(m *model) string { return "/fork" },
 			run: func(m *model) (tea.Model, tea.Cmd) {
 				m.palette = nil
@@ -202,22 +202,22 @@ dynDesc: func(m *model) string { return slashHint(m, "/fork") },
 				return m, nil
 			}},
 		{title: "New session", category: "Session",
-dynDesc: func(m *model) string { return slashHint(m, "/clear") },
+			dynDesc: func(m *model) string { return slashHint(m, "/clear") },
 			dynHint: func(m *model) string { return "/clear" },
 			run: func(m *model) (tea.Model, tea.Cmd) {
 				m.palette = nil
 				return m.command("/clear")
 			}},
 		{title: "Compact session", category: "Session", suggested: true,
-dynDesc: func(m *model) string { return slashHint(m, "/compact") },
+			dynDesc: func(m *model) string { return slashHint(m, "/compact") },
 			dynHint: func(m *model) string { return "/compact" },
 			run:     func(m *model) (tea.Model, tea.Cmd) { return m.command("/compact") }},
 		{title: "Context doctor", category: "Session",
-dynDesc: func(m *model) string { return slashHint(m, "/context-doctor") },
+			dynDesc: func(m *model) string { return slashHint(m, "/context-doctor") },
 			dynHint: func(m *model) string { return "/context-doctor" },
 			run:     func(m *model) (tea.Model, tea.Cmd) { return m.command("/context-doctor") }},
 		{title: "Bug report", category: "Session",
-dynDesc: func(m *model) string { return slashHint(m, "/report") },
+			dynDesc: func(m *model) string { return slashHint(m, "/report") },
 			dynHint: func(m *model) string { return "/report" },
 			run:     func(m *model) (tea.Model, tea.Cmd) { return m.command("/report") }},
 		{title: "MCP servers", category: "Session",
@@ -327,7 +327,7 @@ dynDesc: func(m *model) string { return slashHint(m, "/report") },
 			stepBack: func(m *model) { m.setMouse(false) },
 			stepFwd:  func(m *model) { m.setMouse(true) }},
 		{title: "Help", category: "App",
-dynDesc: func(m *model) string { return slashHint(m, "/help") },
+			dynDesc: func(m *model) string { return slashHint(m, "/help") },
 			dynHint: func(m *model) string { return "/help" },
 			run: func(m *model) (tea.Model, tea.Cmd) {
 				m.palette = nil

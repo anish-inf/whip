@@ -25,6 +25,7 @@ func completionTable() []cand {
 		out = append(out, cand{e.Name, e.Hint})
 	}
 	return out
+
 }
 
 // execNow lists commands the menu runs immediately on enter (they act

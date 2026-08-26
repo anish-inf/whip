@@ -43,7 +43,13 @@ go install github.com/context-labs/whip/cmd/whip@latest
 ```
 
 Then `whip` and you're in. Defaults to inference.net models — any
-OpenAI-compatible endpoint works as a provider.
+OpenAI-compatible endpoint works as a provider. One command wires up
+OpenRouter's whole catalog (`/model` lists every model, no per-model
+config):
+
+```sh
+whip auth openrouter   # masked key prompt — or /auth openrouter in-session
+```
 
 To update to the latest release later, run `whip update` — it re-runs the
 install script above.
