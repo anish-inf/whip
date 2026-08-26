@@ -27,6 +27,17 @@ type Events struct {
 	OnRetry     func(ev llm.RetryEvent)          // a transient request failure is being retried
 }
 
+// OnTodos is the agent-level hook fired by setTodos (the todowrite tool)
+// whenever the plan is rewritten. Set by the ACP bridge for the duration of
+// a turn; nil elsewhere. Kept off Events because todowrite is a tool call
+// three layers below the turn loop — threading Events into it would leak the
+// streaming abstraction into tools.
+func (a *Agent) SetOnTodos(fn func(items []Todo)) {
+	a.todosMu.Lock()
+	a.onTodos = fn
+	a.todosMu.Unlock()
+}
+
 // Agent holds one conversation.
 type Agent struct {
 	Client    *llm.Client
@@ -70,6 +81,11 @@ type Agent struct {
 	// injected per round. Like Messages, it is only mutated by the turn
 	// goroutine; the TUI reads it between turns via TodosJSON.
 	Todos []Todo
+
+	// onTodos fires after each setTodos (installed per turn by the ACP
+	// bridge); todosMu guards it against a raced installer.
+	todosMu sync.Mutex
+	onTodos func(items []Todo)
 
 	sessionID string // scopes the per-session memory file (SetSessionID)
 
@@ -265,6 +281,13 @@ func (a *Agent) Turn(ctx context.Context, input string, ev Events) (string, erro
 // submissions.
 func (a *Agent) TurnAuthored(ctx context.Context, input string, ev Events) (string, error) {
 	return a.turn(ctx, input, nil, true, ev)
+}
+
+// TurnParts is TurnAuthored with full control over content parts — the ACP
+// bridge builds mixed text/image submissions from client content blocks this
+// way. With nil parts it behaves exactly like TurnAuthored.
+func (a *Agent) TurnParts(ctx context.Context, input string, parts []llm.ContentPart, ev Events) (string, error) {
+	return a.turn(ctx, input, parts, true, ev)
 }
 
 // TurnWithImages is TurnAuthored for a submission that attaches images. Each

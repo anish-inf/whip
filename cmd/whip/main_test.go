@@ -13,7 +13,7 @@ func TestSystemPromptAppendsUserMe(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("WHIP_HOME", home)
 
-	p := systemPrompt()
+	p := systemPrompt(t.TempDir())
 	if !strings.Contains(p, "never force-push") {
 		t.Fatal("built-in operating rules must always be present")
 	}
@@ -22,7 +22,7 @@ func TestSystemPromptAppendsUserMe(t *testing.T) {
 	}
 
 	os.WriteFile(filepath.Join(home, "me.md"), []byte("- Always pnpm, never npm.\n"), 0o644)
-	p = systemPrompt()
+	p = systemPrompt(t.TempDir())
 	if !strings.Contains(p, "never force-push") {
 		t.Fatal("built-in rules survive a user me.md")
 	}

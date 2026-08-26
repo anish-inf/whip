@@ -14,8 +14,19 @@ import (
 
 var version = "dev" // set via -ldflags "-X main.version=..."
 
-func systemPrompt() string {
-	wd, _ := os.Getwd()
+// cwd is the process working directory, or "." if it's somehow gone.
+func cwd() string {
+	wd, err := os.Getwd()
+	if err != nil {
+		return "."
+	}
+	return wd
+}
+
+// systemPrompt builds the base system prompt rooted at wd. The TUI and
+// `whip run` pass the process cwd; `whip acp` passes the client-provided
+// session cwd (the editor spawns whip wherever it likes).
+func systemPrompt(wd string) string {
 	prompt := fmt.Sprintf(`You are an expert coding assistant operating inside whip, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files.
 
 Available tools:
@@ -74,6 +85,15 @@ func main() {
 
 	// `whip run ...` — non-interactive one-turn mode for scripting; no TTY or
 	// trust prompt required (headless use implies trusted automation).
+	// `whip acp` — ACP agent over stdio for editors (Zed et al.).
+	if flag.NArg() > 0 && flag.Arg(0) == "acp" {
+		if err := acpCLI(flag.Args()[1:]); err != nil {
+			fmt.Fprintln(os.Stderr, "whip acp:", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	if flag.NArg() > 0 && flag.Arg(0) == "run" {
 		if err := runCLI(flag.Args()[1:]); err != nil {
 			fmt.Fprintln(os.Stderr, "whip:", err)
@@ -131,11 +151,11 @@ func main() {
 			os.Exit(1)
 		}
 		_ = prov.Key()
-		_ = agent.New(llm.New(prov.BaseURL, "bench"), id, mdl.MaxTokens, systemPrompt())
+		_ = agent.New(llm.New(prov.BaseURL, "bench"), id, mdl.MaxTokens, systemPrompt(cwd()))
 		return
 	}
 	tui.Version = version // /report names the build in the bug-report bundle
-	sessionID, err := tui.Run(cfg, *modelFlag, *providerFlag, systemPrompt(), *resumeFlag, *cautiousFlag)
+	sessionID, err := tui.Run(cfg, *modelFlag, *providerFlag, systemPrompt(cwd()), *resumeFlag, *cautiousFlag)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "whip:", err)
 		os.Exit(1)

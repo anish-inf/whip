@@ -626,6 +626,83 @@ environment quirk, not a rod/whip bug; verified on real Chrome.
 The browser-use CLI-over-MCP escape hatch remains available via config for
 anyone wanting the Python ecosystem (§4 option B).
 
+## ACP agent mode
+
+`whip acp` (`cmd/whip/acp.go`, `internal/acp/`) serves whip as an **Agent
+Client Protocol** v1 agent over stdio: an editor (Zed et al.) spawns the
+binary and drives the agent loop with newline-delimited JSON-RPC 2.0. Stdout
+is exclusively protocol frames; diagnostics go to stderr + the event log.
+Wire types, framing, and per-session cancel plumbing come from
+`github.com/coder/acp-go-sdk` (schema-generated, zero transitive deps).
+
+- **Bridge** (`internal/acp/bridge.go`) — implements the SDK's `Agent` +
+  `AgentLoader`: `initialize` negotiates protocol version 1 and advertises
+  `loadSession` (with a store), prompt capabilities (image only when the
+  resolved model has vision; embeddedContext always), MCP-over-http, and
+  `sessionCapabilities.list`/`close`. `session/new` builds a fresh
+  `agent.Agent` via a `Factory` (model/key/system-prompt rooted at the
+  client's `cwd`, per-session MCP manager merging client-sent servers over
+  whip's config — whip wins name clashes). `session/prompt` runs
+  `Agent.TurnParts` (the one-line export of the loop's parts-taking turn);
+  streamed text/thought chunks, tool cards (`tool_call`/`tool_call_update`
+  with kind, title, locations, raw input, and `diff` content for
+  write/edit), `plan` updates from todowrite (via the new
+  `Agent.SetOnTodos` hook), `usage_update` (per-request prompt tokens over
+  the advertised context window), and a `session_info_update` title once the
+  store auto-titles the session — all flow through `SessionUpdate`
+  notifications. Stop reasons: `end_turn` normally, `cancelled` on
+  `session/cancel` (never an error response, per spec), `max_tokens` when a
+  context-limit error survives the compaction retry.
+- **Prompt queueing** — prompts arriving mid-turn park FIFO on a 1-capacity
+  channel token (the filelocks idiom) and respond when their own turn ends.
+  The turn runs on a ctx decoupled from the request ctx because the SDK
+  auto-cancels a session's in-flight prompt when a second prompt arrives;
+  cancellation flows through `session/cancel` → `Bridge.Cancel` instead. A
+  prompt whose request ctx died *while queued* is skipped as zombie work; an
+  idle-session cancel (which the SDK parks against the next request's ctx)
+  is correctly a no-op. `session/close` and process teardown
+  (`Bridge.CloseAll` on conn EOF/signal) cancel running turns and close
+  per-session MCP managers before `bashrun.KillAll()`.
+- **Persistence** — turns save into the same SQLite store as the TUI
+  (`storeFrom` starts at 1: the system prompt is never persisted), so an ACP
+  session is resumable with `whip --resume <id>` and appears in
+  `session/list`. `session/load` rejects prefix ids, verifies the request
+  cwd matches the recorded one, then replays the full history (user/agent
+  chunks + tool cards in terminal state, `replayUpdates` in translate.go)
+  **before** responding, per spec.
+- **Modes & permissions** (`internal/acp/permission.go`) — sessions
+  advertise modes `auto` (default; tools ungated, `whip run` posture) and
+  `ask` (gated bash/write/edit round-trip through
+  `session/request_permission` with allow-once/always/reject options).
+  `session/set_mode` flips live and echoes `current_mode_update`. The gate
+  installs on the package-global `tools.Gate` serialized bridge-wide for the
+  turn's duration (a second ask-mode turn waits rather than interleave
+  mislabeled prompts); the permission request runs on the turn ctx so cancel
+  unblocks it, and cancelled/errored prompts fail closed. "Allow always"
+  rules are remembered per session for the session's lifetime.
+
+Out of scope by design (recorded in `.ai-docs/plans/acp/README.md`):
+terminal suite, `fs/*` client calls, elicitation, auth, config options,
+session/resume+delete, ACP v2. Known gap: background subagents gated
+mid-turn share the session's gate.
+
+Tests: `internal/acp/translate_test.go` (content-block conversion, tool
+kind/title/locations, diff cards, replay ordering), `bridge_test.go` +
+`bridge_lifecycle_test.go` (in-memory client over pipes + scripted httptest
+provider: capabilities, streaming order, cancel mid-turn → cancelled not
+error, FIFO queueing, unknown session, idle-cancel no-op + next-prompt
+recovery, plan updates, context-limit → max_tokens),
+`permission_test.go` (allow-once/reject/always-covers-repeats, auto mode
+never prompts, unknown mode, cancelled outcome fails closed),
+`load_test.go` (persistence incremental + system-prompt exclusion, replay
+before response with tool cards, prefix-id rejection, session/list with cwd
+filter, usage + title updates). All green under `-race`.
+
+Editor setup (Zed `settings.json`):
+```json
+{ "agent_servers": { "whip": { "command": "/path/to/whip", "args": ["acp"] } } }
+```
+
 ## Computer-use (macOS)
 
 `internal/computer/` + `internal/tools/computer.go` — `computer_exec` drives
