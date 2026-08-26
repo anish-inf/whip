@@ -51,3 +51,42 @@ func TestFallbackScheme(t *testing.T) {
 		t.Fatalf("no signal: must be neutral, got ok=%v how=%q", ok, how)
 	}
 }
+
+// While bubbletea runs, theme re-detection (/theme auto, config-watcher sync)
+// must NEVER query the tty: the raw-mode query flips the shared terminal to
+// VMIN=0 and bubbletea's concurrent input read then returns a spurious EOF —
+// its reader exits silently and the session stops seeing input forever (the
+// frozen-whip bug). Runtime detection reuses the startup query's answer, or
+// COLORFGBG, or the neutral theme.
+func TestRuntimeDetectionNeverQueriesTTY(t *testing.T) {
+	t.Setenv("WHIP_THEME", "")
+	t.Setenv("COLORFGBG", "")
+	t.Setenv("TMUX", "1") // any env: the gate must hold everywhere
+	tuiRunning = true
+	defer func() { tuiRunning = false; bgCache = bgResult{} }()
+
+	// with a cached startup answer, re-detection returns it
+	bgCache = bgResult{light: true, valid: true}
+	if how := detectColorScheme(); how != "terminal query (cached from startup)" {
+		t.Fatalf("runtime detection must reuse the startup query, got %q", how)
+	}
+	mdMu.Lock()
+	light := mdLight
+	mdMu.Unlock()
+	if !light {
+		t.Fatal("cached light answer must apply the light scheme")
+	}
+
+	// without a cache, COLORFGBG decides
+	bgCache = bgResult{}
+	t.Setenv("COLORFGBG", "15;0")
+	if how := detectColorScheme(); !strings.Contains(how, "COLORFGBG") {
+		t.Fatalf("runtime detection without cache must use COLORFGBG, got %q", how)
+	}
+
+	// and with no signal at all: neutral, never a dark guess
+	t.Setenv("COLORFGBG", "")
+	if how := detectColorScheme(); !strings.Contains(how, "undetermined") {
+		t.Fatalf("runtime detection with no signal must stay neutral, got %q", how)
+	}
+}

@@ -388,7 +388,12 @@ func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string) (s
 	go m.fetchCatalogs(false)
 	go func() { p.Send(cfgSyncTick{}) }()     // start the config watcher
 	go func() { p.Send(scheduleTickMsg{}) }() // start the wakeup channel
+	// From here the terminal belongs to bubbletea: theme re-detections must
+	// not run raw tty queries (see detectColorScheme) or they kill its input
+	// reader with a spurious EOF.
+	tuiRunning = true
 	_, err = p.Run()
+	tuiRunning = false
 	// The UI has exited (quit, /quit, or a signal). We enabled click/wheel mouse
 	// reporting directly on the TTY (bubbletea doesn't manage it), so release it.
 	if m.mouseOn {
@@ -1177,6 +1182,25 @@ func cwd() string {
 // before auto ever reaches detection. detectColorScheme returns a short
 // human-readable note naming the source of the decision (shown by /theme auto
 // so a wrong pick is diagnosable).
+//
+// tuiRunning gates the raw tty query to BEFORE bubbletea starts; bgCache
+// carries the startup answer to runtime re-detections. Both are only touched
+// from the main goroutine (Run pre-tea, then Update inside the event loop).
+var (
+	tuiRunning bool
+	bgCache    bgResult
+)
+
+type bgResult struct{ light, valid bool }
+
+// inTmuxEnv reports whether whip runs inside tmux/screen, where the terminal
+// can't be queried directly.
+func inTmuxEnv() bool {
+	return os.Getenv("TMUX") != "" ||
+		strings.HasPrefix(os.Getenv("TERM"), "screen") ||
+		strings.HasPrefix(os.Getenv("TERM"), "tmux")
+}
+
 func detectColorScheme() string {
 	setScheme := func(light bool) {
 		SetLightTheme(light)                  // glamour markdown style
@@ -1190,6 +1214,26 @@ func detectColorScheme() string {
 		setScheme(false)
 		return "WHIP_THEME"
 	}
+	// While bubbletea runs, the terminal is OFF LIMITS: the raw-mode OSC 11
+	// query flips the shared tty to VMIN=0/VTIME, and if bubbletea's input
+	// reader issues a read in that window it gets a 0-byte result = io.EOF —
+	// the reader exits SILENTLY and the session never sees input again (the
+	// frozen-whip bug: /theme auto or a config-watcher sync re-ran detection
+	// mid-session). Reuse the startup query's answer instead; env fallbacks
+	// below are read-only and stay available.
+	if tuiRunning {
+		if bgCache.valid {
+			setScheme(bgCache.light)
+			return "terminal query (cached from startup)"
+		}
+		light, ok, how := fallbackScheme(inTmuxEnv(), os.Getenv("COLORFGBG"))
+		if ok {
+			setScheme(light)
+		} else {
+			SetUnknownTheme()
+		}
+		return how
+	}
 	// Query the terminal directly whenever we have one — the OSC 11 reply is
 	// the terminal's REAL background, so it outranks COLORFGBG (which can be
 	// stale: inherited from an outer shell/terminal with a different bg).
@@ -1199,14 +1243,13 @@ func detectColorScheme() string {
 	// Background reaches the REAL terminal via DCS passthrough inside tmux, and
 	// via a plain OSC 11 query otherwise, so use it first and keep termenv only
 	// as a fallback for terminals it can query directly.
-	inTmux := os.Getenv("TMUX") != "" ||
-		strings.HasPrefix(os.Getenv("TERM"), "screen") ||
-		strings.HasPrefix(os.Getenv("TERM"), "tmux")
+	inTmux := inTmuxEnv()
 	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
 	if err == nil {
 		if light, ok := queryTerminalBackground(tty, inTmux); ok {
 			tty.Close()
 			setScheme(light)
+			bgCache = bgResult{light: light, valid: true}
 			if inTmux {
 				return "terminal query (inside tmux)"
 			}
@@ -1228,6 +1271,7 @@ func detectColorScheme() string {
 			case r := <-done:
 				tty.Close()
 				setScheme(r.light)
+				bgCache = bgResult{light: r.light, valid: true}
 				return "terminal query"
 			case <-time.After(300 * time.Millisecond):
 			}
