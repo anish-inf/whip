@@ -106,3 +106,10 @@ func TestServerRequestsGetNullAck(t *testing.T) {
 		t.Fatal("no ack for server request")
 	}
 }
+
+func TestRPCErrorMessage(t *testing.T) {
+	err := &rpcError{Code: -32601, Message: "method not found"}
+	if got := err.Error(); got != "rpc error -32601: method not found" {
+		t.Fatalf("Error() = %q", got)
+	}
+}

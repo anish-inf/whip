@@ -179,3 +179,67 @@ func TestCrashRestart(t *testing.T) {
 		t.Fatalf("post-restart call: %v", err)
 	}
 }
+
+func TestSharedSpawnCacheAndReset(t *testing.T) {
+	// fakeHelper builds the fake and points WHIP_COMPUTER_BIN at it.
+	fakeHelper(t, "").kill()
+	ResetShared()
+	t.Cleanup(ResetShared)
+	h1, err := Shared()
+	if err != nil {
+		t.Fatalf("Shared: %v", err)
+	}
+	h2, err := Shared()
+	if err != nil || h2 != h1 {
+		t.Fatalf("Shared must cache the helper: %v %p %p", err, h1, h2)
+	}
+	var out map[string]any
+	if err := h1.Call(context.Background(), "ping", nil, &out); err != nil {
+		t.Fatalf("shared helper call: %v", err)
+	}
+	ResetShared()
+	h3, err := Shared()
+	if err != nil {
+		t.Fatalf("Shared after reset: %v", err)
+	}
+	if h3 == h1 {
+		t.Fatal("ResetShared must drop the cached helper")
+	}
+}
+
+func TestSharedCachesSpawnError(t *testing.T) {
+	t.Setenv("WHIP_COMPUTER_BIN", filepath.Join(t.TempDir(), "does-not-exist"))
+	ResetShared()
+	t.Cleanup(ResetShared)
+	_, err1 := Shared()
+	if err1 == nil {
+		t.Fatal("Shared must fail for a missing binary")
+	}
+	_, err2 := Shared()
+	if !errors.Is(err2, err1) {
+		t.Fatalf("spawn error must be cached, got %v then %v", err1, err2)
+	}
+}
+
+func TestScreenshotDecode(t *testing.T) {
+	var nilShot *Screenshot
+	if b, err := nilShot.Decode(); b != nil || err != nil {
+		t.Errorf("nil screenshot: %v %v", b, err)
+	}
+	if b, err := (&Screenshot{}).Decode(); b != nil || err != nil {
+		t.Errorf("empty screenshot: %v %v", b, err)
+	}
+	b, err := (&Screenshot{JPEGBase64: "aGVsbG8="}).Decode()
+	if err != nil || string(b) != "hello" {
+		t.Errorf("decode: %q %v", b, err)
+	}
+	if _, err := (&Screenshot{JPEGBase64: "!!!"}).Decode(); err == nil {
+		t.Error("bad base64 must error")
+	}
+}
+
+func TestStaleErrorMessage(t *testing.T) {
+	if got := (&StaleError{Msg: "state changed"}).Error(); got != "state changed" {
+		t.Errorf("StaleError.Error: %q", got)
+	}
+}

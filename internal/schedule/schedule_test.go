@@ -65,3 +65,13 @@ func TestOneShot(t *testing.T) {
 		t.Fatal("a fired one-shot is done")
 	}
 }
+
+func TestStringAt(t *testing.T) {
+	s, err := Parse("@at 2026-07-26T17:00:00Z")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := s.String(); got != "@at 2026-07-26T17:00:00Z" {
+		t.Fatalf("String() = %q", got)
+	}
+}
