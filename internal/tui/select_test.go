@@ -230,7 +230,7 @@ func TestReverseRange(t *testing.T) {
 func TestDragEdgeAutoScroll(t *testing.T) {
 	m := compactCmdModel()
 	m.Update(mkWinSize(80, 30))
-	for i := 0; i < 60; i++ {
+	for i := range 60 {
 		m.append(fmt.Sprintf("line-%02d", i))
 	}
 	tm, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(" ")})
