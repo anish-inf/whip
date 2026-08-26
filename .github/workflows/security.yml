@@ -18,6 +18,12 @@ on:
     # Weekly re-scan of main: new CVEs drop against unchanged deps.
     - cron: "17 6 * * 1"
 
+# Cancel superseded runs on the same ref/PR — a force-push or a quick follow-up
+# commit shouldn't waste a runner on a stale diff.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 

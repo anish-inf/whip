@@ -39,7 +39,7 @@ func LogEvent(op, detail string) {
 	if st, err := os.Stat(p); err == nil && st.Size() > logMaxBytes {
 		_ = os.Rename(p, p+".1") // single-generation rotation
 	}
-	f, err := os.OpenFile(p, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600) //nolint:gosec // G304: p is the whip-owned log path
+	f, err := os.OpenFile(p, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		return
 	}

@@ -728,7 +728,11 @@ func defaultTransport(ctx context.Context, cfg ServerConfig, stderr *ringBuffer)
 			DisableStandaloneSSE: true,
 		}, nil
 	}
-	cmd := exec.CommandContext(ctx, cfg.Command[0], cfg.Command[1:]...)
+	// WithoutCancel: ctx is connect()'s startup-timeout context, cancelled the
+	// moment connect returns — binding the command to it would SIGKILL every
+	// stdio server right after a successful connect. The process must live
+	// until the session is closed (CommandTransport terminates it then).
+	cmd := exec.CommandContext(context.WithoutCancel(ctx), cfg.Command[0], cfg.Command[1:]...)
 	// Inherit whip's environment and layer the server's vars on top (opencode
 	// does the same — users expect $PATH etc. to work).
 	cmd.Env = append(os.Environ(), envPairs(cfg.Env)...)

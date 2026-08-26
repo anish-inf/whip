@@ -22,9 +22,6 @@ func browserStepLabel(argsJSON string) string {
 	}
 	for line := range strings.SplitSeq(a.Code, "\n") {
 		line = strings.TrimSpace(line)
-		if after, ok := strings.CutPrefix(line, "# "); ok {
-			return strings.TrimSpace(after)
-		}
 		if after, ok := strings.CutPrefix(line, "#"); ok {
 			return strings.TrimSpace(after)
 		}

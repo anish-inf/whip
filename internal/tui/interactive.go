@@ -106,8 +106,6 @@ func interactiveOutput(res bashrun.Result) string {
 // iactiveKey translates a bubbletea keystroke into PTY bytes and forwards it,
 // returning a no-op. ctrl+c ctrl+c breaks out and cancels the whole turn so a
 // stuck user can escape; the first ctrl+c arms like the busy path.
-//
-//nolint:dupword // double-press shortcut, not a typo
 func (m *model) iactiveKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.Type {
 	case tea.KeyCtrlC:
@@ -217,7 +215,6 @@ func (m *model) interactiveView() string {
 			"  ⏳ waiting for input — cancels in %ds", m.iactive.awaitcd,
 		))
 	} else {
-		//nolint:dupword // double-press shortcut, not a typo
 		header += dimStyle.Render("  (type to respond; ctrl+c ctrl+c to cancel)")
 	}
 	return header + "\n" + rendered

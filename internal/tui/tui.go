@@ -681,7 +681,7 @@ func (m *model) resume(id string) error {
 		}
 		m.agent.SetUsage(u)
 	}
-	if contains(m.effortsFor(), effort) {
+	if slices.Contains(m.effortsFor(), effort) {
 		m.agent.Effort = effort
 	}
 	m.sessionID = meta.ID
@@ -2005,7 +2005,6 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// interactive passthrough: forward keystrokes to the child's PTY instead
-	//nolint:dupword // double-press shortcut, not a typo
 	// of editing the input box. ctrl+c ctrl+c breaks out (cancel), esc forwards
 	// a single esc to the child (many prompts use esc to cancel).
 	if m.iactive != nil {
@@ -2684,7 +2683,7 @@ func (m *model) switchModel(name, prov string) {
 	ag.CompactThreshold = m.agent.CompactThreshold
 	m.agent, m.modelName, m.provName = ag, mn, pn
 	m.wireTasks()
-	if !contains(m.effortsFor(), ag.Effort) {
+	if !slices.Contains(m.effortsFor(), ag.Effort) {
 		m.resetEffort("") // the new model doesn't support the current level
 	}
 	m.cfg.DefaultModel, m.cfg.DefaultProvider = mn, pn // store the switch as the new default
@@ -3663,10 +3662,8 @@ func (m *model) viewBody() string {
 		b.WriteString("\n" + m.permView() + "\n")
 	}
 	if m.busy {
-		//nolint:dupword // double-press shortcut, not a typo
 		hint := " thinking… (enter queues · /theme /mouse /effort run now · esc interrupts · ctrl+c ctrl+c interrupts)"
 		if m.iactive != nil {
-			//nolint:dupword // double-press shortcut, not a typo
 			hint = " bash (interactive) — type to respond · ctrl+c ctrl+c to cancel"
 		} else if m.interrupt1 {
 			hint = " thinking… (esc or ctrl+c again to interrupt)"

@@ -109,7 +109,7 @@ func LoadCatalogs() map[string]Catalog {
 	if err != nil {
 		return cats
 	}
-	data, err := os.ReadFile(p) //nolint:gosec // G304: p comes from catalogPath (whip-owned dir)
+	data, err := os.ReadFile(p)
 	if err != nil {
 		return cats
 	}

@@ -190,12 +190,12 @@ func TestMCPFirstSettleNote(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	mu.Lock()
-	text := ""
-	var textSb192 strings.Builder
+	var sb strings.Builder
 	for _, b := range m.blocks {
-		textSb192.WriteString(b.text + "\n")
+		sb.WriteString(b.text)
+		sb.WriteByte('\n')
 	}
-	text += textSb192.String()
+	text := sb.String()
 	mu.Unlock()
 	if !strings.Contains(text, "mcp: dead failed") || !strings.Contains(text, "/mcp dead reconnect") {
 		t.Errorf("missing failure note:\n%s", text)

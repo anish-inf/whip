@@ -46,7 +46,7 @@ func MeInstructions() string {
 	if path == "" {
 		return ""
 	}
-	data, err := os.ReadFile(path) //nolint:gosec // G304: path is MePath() (whip-owned)
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return ""
 	}

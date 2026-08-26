@@ -58,7 +58,7 @@ func infKey() string {
 	if err != nil {
 		return ""
 	}
-	data, err := os.ReadFile(filepath.Join(home, ".inf", "config.json")) //nolint:gosec // G304: fixed path under the user's home dir
+	data, err := os.ReadFile(filepath.Join(home, ".inf", "config.json"))
 	if err != nil {
 		return ""
 	}
@@ -268,7 +268,7 @@ func Load() (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	data, err := os.ReadFile(p) //nolint:gosec // G304: p comes from path() (whip-owned config dir)
+	data, err := os.ReadFile(p)
 	if os.IsNotExist(err) {
 		cfg := Default()
 		logf("config.load", "missing file, writing defaults (%s)", cfg.fingerprint())
@@ -289,7 +289,7 @@ func Load() (*Config, error) {
 	// defaults would silently wipe them.
 	if len(cfg.Providers) == 0 && len(cfg.Models) == 0 {
 		logf("config.load", "CLOBBERED/EMPTY config detected (%d bytes on disk), attempting recovery", len(data))
-		if bak, err := os.ReadFile(p + ".bak"); err == nil { //nolint:gosec // G304: p is the whip-owned config path
+		if bak, err := os.ReadFile(p + ".bak"); err == nil {
 			var restored Config
 			if parseJSONC(bak, &restored) == nil && (len(restored.Providers) > 0 || len(restored.Models) > 0) {
 				logf("config.load", "restored from .bak (%s)", restored.fingerprint())
@@ -323,7 +323,7 @@ func (c *Config) Save() error {
 		return err
 	}
 	if len(c.Providers) == 0 && len(c.Models) == 0 {
-		if existing, err := os.ReadFile(p); err == nil { //nolint:gosec // G304: p is the whip-owned config path
+		if existing, err := os.ReadFile(p); err == nil {
 			var cur Config
 			if parseJSONC(existing, &cur) == nil && (len(cur.Providers) > 0 || len(cur.Models) > 0) {
 				logf("config.save", "REFUSED empty overwrite of healthy config (disk had providers=%d models=%d)", len(cur.Providers), len(cur.Models))
@@ -336,7 +336,7 @@ func (c *Config) Save() error {
 		return err
 	}
 	// log the before/after fingerprint so a bad write is attributable
-	if existing, err := os.ReadFile(p); err == nil && len(existing) > 0 { //nolint:gosec // G304: p is the whip-owned config path
+	if existing, err := os.ReadFile(p); err == nil && len(existing) > 0 {
 		var cur Config
 		if parseJSONC(existing, &cur) == nil {
 			logf("config.save", "before=(%s) after=(%s)", cur.fingerprint(), c.fingerprint())

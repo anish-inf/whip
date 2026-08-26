@@ -319,12 +319,11 @@ func hyperlinkGlamourLinks(s string, exists func(string) bool) string {
 			continue // label with no href (anchor-only link): glamour already
 			// prints just the label; nothing to rewire
 		}
-		var hrefText string
-		var hrefTextSb322 strings.Builder
+		var sb strings.Builder
 		for _, h := range g.hrefs {
-			hrefTextSb322.WriteString(h.text)
+			sb.WriteString(h.text)
 		}
-		hrefText += hrefTextSb322.String()
+		hrefText := sb.String()
 		uri := targetURI(hrefText, exists)
 		if uri == "" {
 			continue // leave glamour's output untouched

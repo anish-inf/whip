@@ -366,7 +366,11 @@ func (m *Manager) spawn(ctx context.Context, key, name string, spec ServerSpec, 
 	if _, err := exec.LookPath(spec.Command[0]); err != nil {
 		return nil, fmt.Errorf("%s not on PATH", spec.Command[0])
 	}
-	cmd := exec.CommandContext(ctx, spec.Command[0], spec.Command[1:]...)
+	// WithoutCancel: ctx is the calling tool/turn context, but the server is
+	// cached in m.clients for the whole whip session — binding the process to
+	// the turn would kill gopls on the first interrupt and leave a dead client
+	// cached forever. Shutdown is cs.kill()/Close, not context cancellation.
+	cmd := exec.CommandContext(context.WithoutCancel(ctx), spec.Command[0], spec.Command[1:]...)
 	cmd.Dir = root
 	cmd.Env = os.Environ()
 	for k, v := range spec.Env {

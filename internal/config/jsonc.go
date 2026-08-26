@@ -136,7 +136,7 @@ func ReadJSON(name string, v any) error {
 	if err != nil {
 		return err
 	}
-	data, err := os.ReadFile(filepath.Join(dir, name)) //nolint:gosec // G304: dir/name are whip-owned state files
+	data, err := os.ReadFile(filepath.Join(dir, name))
 	if err != nil {
 		return err
 	}

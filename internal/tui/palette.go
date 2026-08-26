@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -96,12 +97,10 @@ type palette struct {
 // through the command switch. /help renders from these too, so a keybind or
 // description lives in exactly one place.
 const (
-	//nolint:dupword // double-press shortcut, not a typo
 	palHintRewind   = "esc esc"
 	palDescRewind   = "rewind the conversation"
 	palHintThinking = "ctrl+o"
-	//nolint:dupword // double-press shortcut, not a typo
-	palHintQuit = "ctrl+c ctrl+c"
+	palHintQuit     = "ctrl+c ctrl+c"
 )
 
 // slashHint looks a command's one-liner up in the registry so the palette
@@ -725,7 +724,7 @@ func (m *model) previewModel(it modelItem) {
 	ag.CompactClient, ag.CompactModel = m.agent.CompactClient, m.agent.CompactModel
 	ag.CompactThreshold = m.agent.CompactThreshold
 	m.agent, m.modelName, m.provName = ag, mn, pn
-	if !contains(m.effortsFor(), ag.Effort) {
+	if !slices.Contains(m.effortsFor(), ag.Effort) {
 		m.setEffort("") // the previewed model doesn't support the current level
 	}
 }

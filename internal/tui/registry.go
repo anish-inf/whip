@@ -40,7 +40,6 @@ var registry = []registryEntry{
 	{Name: "/model", Hint: "<name> [provider] — switch model (any provider-catalog model works; refresh pulls new announcements)", Category: "Agent"},
 	{Name: "/mouse", Hint: "— toggle mouse capture (on = wheel scroll + clicks, drag to copy)", Category: "Display"},
 	{Name: "/pwd", Hint: "— print working directory", Category: "Session"},
-	//nolint:dupword // double-press shortcut, not a typo
 	{Name: "/quit", Hint: "— exit", Keybind: "ctrl+c ctrl+c", Category: "App"},
 	{Name: "/rename", Hint: "[title] — retitle this session", Category: "Session"},
 	{Name: "/report", Hint: "— bug-report bundle: prefilled GitHub-issue link + copy-pastable environment snippet (terminal, theme, versions)", Category: "App"},
@@ -113,7 +112,6 @@ func helpText() string {
 		"ctrl+j / shift+enter — newline",
 		"ctrl+v — paste image",
 		"esc — interrupt the agent",
-		//nolint:dupword // double-press shortcut, not a typo
 		"esc esc (idle) — " + palDescRewind + " (↑/↓ browse, enter rewinds, f forks)",
 		"while busy with queued messages: ↑/↓ select, del removes",
 		"PgUp/PgDn — scroll · wheel — scroll · drag — select/copy text",

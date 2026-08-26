@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"strings"
 	"time"
 
@@ -16,9 +15,6 @@ import (
 
 	"github.com/context-labs/whip/internal/config"
 )
-
-// imageExts are the clipboard image formats we accept, in preference order.
-var imageExts = []string{"png", "jpg", "jpeg", "gif", "webp", "bmp"}
 
 // readClipboardImage returns image bytes and their format extension from the
 // system clipboard, or ("", nil, nil) when the clipboard holds no image.
@@ -51,11 +47,7 @@ func hasImageType(types []byte) (string, bool) {
 	for line := range strings.SplitSeq(string(types), "\n") {
 		line = strings.TrimSpace(line)
 		if after, ok := strings.CutPrefix(line, "image/"); ok {
-			ext := after
-			if slices.Contains(imageExts, ext) {
-				return ext, true
-			}
-			return ext, true // unknown image/*: keep its subtype as extension
+			return after, true // keep the subtype as the file extension
 		}
 	}
 	return "", false
