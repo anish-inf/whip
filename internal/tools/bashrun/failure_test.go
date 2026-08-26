@@ -40,26 +40,35 @@ func TestRunReportsUnstartableShell(t *testing.T) {
 // a silent long-running child dies promptly whether the hard wall-clock cap or
 // the user's interrupt gets there first, and the result says so.
 //
-// Which of the two exit texts wins is not deterministic: killing the child
-// closes the PTY and cancels the context at the same moment, so the output
-// pump may report end-of-stream or may exit on ctx.Done and leave the
-// inactivity clock to finish the job. Both are correct kills; the contract
-// under test is "killed, quickly, and reported".
+// The reported reason comes from the context, not from whichever arm of the
+// run loop's select happened to win the race with the output pump, so each
+// case has one correct exit text.
 func TestInteractiveNeverOutlivesItsCaps(t *testing.T) {
-	cases := map[string]func() (context.Context, time.Duration){
-		"hard timeout": func() (context.Context, time.Duration) {
-			return context.Background(), 200 * time.Millisecond
+	cases := map[string]struct {
+		setup    func() (context.Context, time.Duration)
+		wantExit string
+		wantTO   bool
+	}{
+		"hard timeout": {
+			setup: func() (context.Context, time.Duration) {
+				return context.Background(), 200 * time.Millisecond
+			},
+			wantExit: "timed out",
+			wantTO:   true,
 		},
-		"cancellation": func() (context.Context, time.Duration) {
-			ctx, cancel := context.WithCancel(context.Background())
-			time.AfterFunc(150*time.Millisecond, cancel)
-			t.Cleanup(cancel)
-			return ctx, 30 * time.Second
+		"cancellation": {
+			setup: func() (context.Context, time.Duration) {
+				ctx, cancel := context.WithCancel(context.Background())
+				time.AfterFunc(150*time.Millisecond, cancel)
+				t.Cleanup(cancel)
+				return ctx, 30 * time.Second
+			},
+			wantExit: "cancelled",
 		},
 	}
-	for name, setup := range cases {
+	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			ctx, timeout := setup()
+			ctx, timeout := tc.setup()
 			start := time.Now()
 			res := Run(ctx, Options{
 				Command:           "sleep 30",
@@ -71,8 +80,11 @@ func TestInteractiveNeverOutlivesItsCaps(t *testing.T) {
 			if !res.Killed || !res.Interactive {
 				t.Fatalf("expected a killed interactive result: %+v", res)
 			}
-			if res.Exit == "" {
-				t.Fatalf("a killed command must carry an exit reason: %+v", res)
+			if res.Exit != tc.wantExit {
+				t.Fatalf("exit reason: got %q, want %q (%+v)", res.Exit, tc.wantExit, res)
+			}
+			if res.TimedOut != tc.wantTO {
+				t.Fatalf("TimedOut: got %v, want %v (%+v)", res.TimedOut, tc.wantTO, res)
 			}
 			if elapsed > 10*time.Second {
 				t.Fatalf("the child outlived its caps by %s", elapsed)
