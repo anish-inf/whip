@@ -12,7 +12,7 @@ import (
 // checkTrust gates startup on the folder-trust dialog. If the cwd is already
 // trusted (~/.whip/trusted.json), it returns immediately. Otherwise it asks
 // on the terminal (plain stdin/stdout — this runs before the TUI starts):
-// "Yes, proceed" records the path; anything else declines. When stdin isn't
+// Enter or "y" records the path; anything else declines. When stdin isn't
 // a terminal (piped run, tests), we can't ask — decline safely.
 func checkTrust() (bool, error) {
 	wd, err := os.Getwd()
@@ -32,13 +32,13 @@ func checkTrust() (bool, error) {
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, "With your permission whip may execute files in this folder. Executing untrusted code is unsafe.")
 	fmt.Fprintln(os.Stderr, "")
-	fmt.Fprint(os.Stderr, "  1. Yes, proceed\n  2. No, exit\n\n❯ ")
+	fmt.Fprint(os.Stderr, "Proceed? [Y/n] ")
 	r := bufio.NewReader(os.Stdin)
 	ans, err := r.ReadString('\n')
 	if err != nil {
 		return false, err
 	}
-	if strings.TrimSpace(ans) == "1" {
+	if a := strings.ToLower(strings.TrimSpace(ans)); a == "" || a == "y" || a == "yes" {
 		if err := config.Trust(wd); err != nil {
 			return false, err
 		}
