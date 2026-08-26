@@ -82,6 +82,15 @@ func main() {
 	}
 
 	// `whip browser ...` — browser tooling (install the drive-my-tab extension).
+	// `whip sessions` — list stored sessions (the scriptable companion to run).
+	if flag.NArg() > 0 && flag.Arg(0) == "sessions" {
+		if err := sessionsCLI(); err != nil {
+			fmt.Fprintln(os.Stderr, "whip:", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	if flag.NArg() > 0 && flag.Arg(0) == "browser" {
 		if err := browserCLI(flag.Args()[1:]); err != nil {
 			fmt.Fprintln(os.Stderr, "whip:", err)
@@ -93,6 +102,15 @@ func main() {
 	// `whip update` — re-run the install script to get the latest release.
 	if flag.NArg() > 0 && flag.Arg(0) == "update" {
 		if err := updateCLI(); err != nil {
+			fmt.Fprintln(os.Stderr, "whip:", err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	// `whip auth ...` — provider key onboarding (openrouter).
+	if flag.NArg() > 0 && flag.Arg(0) == "auth" {
+		if err := authCLI(flag.Args()[1:]); err != nil {
 			fmt.Fprintln(os.Stderr, "whip:", err)
 			os.Exit(1)
 		}

@@ -143,11 +143,12 @@ type model struct {
 	saved     int            // messages already persisted (index into agent.Messages)
 	snapshots map[int]string // workspace snapshot ref per turn-start index (mirrors the snapshots table)
 
-	hist    []string         // submitted inputs, for up/down recall
-	histIdx int              // len(hist) == not navigating
-	draft   string           // in-progress input saved while navigating history
-	lastUp  time.Time        // last ↑ keypress; repeat detection for history rollover
-	now     func() time.Time // test seam; defaults to time.Now
+	hist     []string         // submitted inputs, for up/down recall
+	pasteBuf string           // held paste text for the [Pasted ~N lines] placeholder (config collapsePaste)
+	histIdx  int              // len(hist) == not navigating
+	draft    string           // in-progress input saved while navigating history
+	lastUp   time.Time        // last ↑ keypress; repeat detection for history rollover
+	now      func() time.Time // test seam; defaults to time.Now
 
 	turnStart time.Time // when the in-flight turn began; zero when idle (busy line shows elapsed)
 
@@ -158,6 +159,7 @@ type model struct {
 
 	goal       string // active /goal; the loop continues until GOAL_MET
 	goalRounds int    // continuation turns spent on the current goal
+	titled     bool   // an auto-title has been attempted for this session
 
 	mouseOn      bool   // runtime mouse-capture state (toggle with /mouse)
 	themeHow     string // how auto theme detection resolved (env var, OSC query, …) — captured at startup/theme change for /report; never re-queried
@@ -494,6 +496,24 @@ func applyTmuxMouseFix() {
 		"#{||:#{alternate_on},#{pane_in_mode},#{mouse_all_flag}}", "send-keys -M", "copy-mode -M").Run()
 }
 
+// catalogLites converts llm model records into the catalog-cache shape.
+func catalogLites(infos []llm.ModelInfo) []config.ModelInfoLite {
+	lites := make([]config.ModelInfoLite, len(infos))
+	for i, mi := range infos {
+		lites[i] = config.ModelInfoLite{
+			ID:                  mi.ID,
+			ContextLength:       mi.ContextLength,
+			MaxCompletionTokens: mi.MaxCompletionTokens,
+			ReasoningEfforts:    mi.ReasoningEfforts,
+			InputModalities:     mi.InputModalities,
+		}
+		if mi.Pricing != nil {
+			lites[i].InPrice, lites[i].OutPrice, lites[i].CacheReadPrice = mi.Pricing.Rates()
+		}
+	}
+	return lites
+}
+
 // fetchCatalogs refreshes each provider's cached model list in the background
 // and sends the merged result to the UI. force bypasses the 24h TTL
 // (/model refresh) so newly announced models appear immediately.
@@ -523,20 +543,7 @@ func (m *model) fetchCatalogs(force bool) {
 			continue // keep any stale cache
 		}
 		config.LogEvent("catalog.fetch", fmt.Sprintf("%s ok: %d models", name, len(infos)))
-		models := make([]config.ModelInfoLite, len(infos))
-		for i, mi := range infos {
-			models[i] = config.ModelInfoLite{
-				ID:                  mi.ID,
-				ContextLength:       mi.ContextLength,
-				MaxCompletionTokens: mi.MaxCompletionTokens,
-				ReasoningEfforts:    mi.ReasoningEfforts,
-				InputModalities:     mi.InputModalities,
-			}
-			if mi.Pricing != nil {
-				models[i].InPrice, models[i].OutPrice, models[i].CacheReadPrice = mi.Pricing.Rates()
-			}
-		}
-		cats[name] = config.Catalog{FetchedAt: time.Now(), BaseURL: prov.BaseURL, Models: models}
+		cats[name] = config.Catalog{FetchedAt: time.Now(), BaseURL: prov.BaseURL, Models: catalogLites(infos)}
 		dirty = true
 	}
 	if dirty {
@@ -622,6 +629,7 @@ func (m *model) resume(id string) error {
 		m.agent.Effort = effort
 	}
 	m.sessionID = meta.ID
+	bashrun.SetMarkers(meta.ID, m.agent.Model)
 	m.saved = len(m.agent.Messages)
 	// Add this session's user messages to recall, skipping any already present
 	// from the global cross-session seed (resume runs after that seed).
@@ -717,6 +725,7 @@ func (m *model) persist() {
 			return
 		}
 		m.sessionID = id
+		bashrun.SetMarkers(id, m.agent.Model)
 		m.agent.Tasks().SetSessionID(id) // publish before Save so a settling subagent records
 		m.agent.SetSessionID(id)         // scopes the per-session memory file
 	}
@@ -1381,6 +1390,25 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case titleMsg:
+		// only fill a title still at its auto placeholder (a /rename wins)
+		if m.store != nil && m.sessionID != "" {
+			if meta, _, err := m.store.Load(m.sessionID); err == nil {
+				first := ""
+				for _, msg := range m.agent.Messages {
+					if msg.Role == "user" && msg.Authored {
+						first = truncLine(strings.Join(strings.Fields(msg.TextContent()), " "), 64)
+						break
+					}
+				}
+				if meta.Title == first {
+					m.store.SetTitle(m.sessionID, msg.title)
+					m.append(dimStyle.Render("◎ session titled: " + msg.title))
+				}
+			}
+		}
+		return m, nil
+
 	case permRequest:
 		m.permDialog = &permDialog{req: msg.req, reply: msg.reply}
 		return m, nil
@@ -1659,6 +1687,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.cancel = nil
 		m.interrupt1 = false
 		m.turnStart = time.Time{}
+		m.maybeTitle()
 		// Cancellation arrives wrapped from the in-flight http request
 		// ("Post ...: context canceled"), so identity comparison misses it —
 		// which would strand the queue instead of draining it.
@@ -1713,6 +1742,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case catalogsMsg:
 		m.updateCatalogs(msg)
+		return m, nil
+
+	case authResultMsg:
+		m.applyAuthResult(msg)
 		return m, nil
 
 	case noticeMsg:
@@ -1885,6 +1918,21 @@ func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.taskVP != nil {
 		return m.taskViewKey(msg)
 	}
+	// Paste collapse (opt-in via config collapsePaste): a multi-line bracketed
+	// paste lands as a [Pasted ~N lines] placeholder in the input instead of
+	// spraying the textarea; the real text is held in pasteBuf and swapped in
+	// at submit. Off by default — a paste you can't see is a paste you can't
+	// trust.
+	if msg.Paste && m.cfg != nil && m.cfg.CollapsePaste != nil && *m.cfg.CollapsePaste {
+		if n := strings.Count(string(msg.Runes), "\n"); n >= 2 {
+			m.pasteBuf = string(msg.Runes)
+			m.input.SetValue(m.input.Value() + fmt.Sprintf("[Pasted ~%d lines]", n+1))
+			m.input.CursorEnd()
+			m.growInput()
+			return m, nil
+		}
+	}
+
 	switch msg.Type {
 	case tea.KeyCtrlT:
 		// focus the tasks dock (or unfocus it) — the persistent strip above
@@ -1933,8 +1981,13 @@ func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Dismissing UI takes priority and only arms the window.
 		dismissed := true
 		switch {
-		case m.namePrompt != nil: // cancel the inline fork/rename prompt
+		case m.namePrompt != nil: // cancel the inline fork/rename/auth prompt
+			masked := m.namePrompt.mask
 			m.closeNamePrompt()
+			if masked { // the draft stash must not record a key into history
+				m.escClr = false
+				return m, nil
+			}
 		case m.menu != nil:
 			if m.menu.cyc { // tab cycling previewed candidates: revert the input
 				m.input.SetValue(m.menu.base)
@@ -2158,13 +2211,20 @@ func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		text := strings.TrimSpace(m.input.Value())
+		// a collapsed paste swaps its real text back in at submit
+		if m.pasteBuf != "" {
+			text = strings.Replace(text, strings.TrimSpace(fmt.Sprintf("[Pasted ~%d lines]", strings.Count(m.pasteBuf, "\n")+1)), strings.TrimSpace(m.pasteBuf), 1)
+			m.pasteBuf = ""
+		}
 		if m.busy {
 			switch {
 			// settings commands don't touch the turn — run them now instead of
 			// queueing them as messages for the model
 			case text != "" && busyCmd(text):
-				m.hist = append(m.hist, text)
-				m.histIdx = len(m.hist)
+				if !strings.HasPrefix(text, "/auth ") { // keys stay out of ↑-recallable history
+					m.hist = append(m.hist, text)
+					m.histIdx = len(m.hist)
+				}
 				m.input.Reset()
 				m.menu = nil
 				return m.command(text)
@@ -2201,8 +2261,13 @@ func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.input.Reset()
 		m.menu = nil
-		m.hist = append(m.hist, text)
-		m.histIdx = len(m.hist)
+		// /auth with an inline key is kept out of input history: the key would
+		// otherwise be ↑-recallable and rendered in the clear. The masked
+		// prompt (bare /auth) is the recommended path.
+		if !strings.HasPrefix(text, "/auth ") {
+			m.hist = append(m.hist, text)
+			m.histIdx = len(m.hist)
+		}
 		m.draft = ""
 		if strings.HasPrefix(text, "/") {
 			return m.command(text)
@@ -2988,6 +3053,8 @@ func busyCmd(text string) bool {
 	switch fields[0] {
 	case "/help", "/theme", "/mouse", "/effort", "/tasks", "/cd", "/pwd", "/report":
 		return true
+	case "/auth": // must run now even while busy: an inline key queued as a chat message would be sent to the model
+		return true
 	case "/goal": // status, clear, and rounds are settings; resume/<text> submit turns
 		return len(fields) == 1 || fields[1] == "clear" || fields[1] == "rounds"
 	}
@@ -3259,6 +3326,8 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 		m.append(m.reportBlock())
 	case "/help":
 		m.append(dimStyle.Render(helpText()))
+	case "/auth":
+		m.authCommand(fields[1:])
 	case "/model":
 		if len(fields) < 2 {
 			m.openModelPicker()
@@ -3462,8 +3531,17 @@ func (m *model) View() string {
 	if m.iactive == nil {
 		if m.namePrompt != nil {
 			b.WriteString(m.namePrompt.label + " ")
+			if m.namePrompt.mask {
+				// Secrets never echo: render the mask instead of the input's
+				// live view (which would show the key in the clear). The "┃ "
+				// prompt matches how the textarea renders its own first line.
+				b.WriteString("┃ " + m.namePrompt.maskedValue(m.input.Value()))
+			} else {
+				b.WriteString(m.input.View())
+			}
+		} else {
+			b.WriteString(m.input.View())
 		}
-		b.WriteString(m.input.View())
 	}
 	if m.quit1 {
 		// first idle ctrl+c armed the quit; make the second press discoverable
