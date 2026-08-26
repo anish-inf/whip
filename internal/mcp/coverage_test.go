@@ -78,14 +78,16 @@ func TestHeaderTransport(t *testing.T) {
 	var gotAuth string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotAuth = r.Header.Get("Authorization")
-		w.WriteHeader(200)
+		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()
 	rt := headerTransport{"Authorization": "Bearer abc"}
-	req, _ := http.NewRequest("GET", srv.URL, nil)
-	if _, err := rt.RoundTrip(req); err != nil {
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, srv.URL, nil)
+	resp, err := rt.RoundTrip(req)
+	if err != nil {
 		t.Fatal(err)
 	}
+	resp.Body.Close()
 	if gotAuth != "Bearer abc" {
 		t.Errorf("header not injected: %q", gotAuth)
 	}
@@ -151,7 +153,7 @@ func TestDefaultTransportResolvesHeaderSecrets(t *testing.T) {
 		"X-Literal":     "plain",
 		"X-Dropped":     "$WHIP_MCP_SECRET_UNSET",
 	}}
-	tr, err := defaultTransport(cfg, nil)
+	tr, err := defaultTransport(context.Background(), cfg, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

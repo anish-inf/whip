@@ -47,7 +47,7 @@ func TestRenderMarkdownFallback(t *testing.T) {
 	if plain != "plain text" {
 		t.Errorf("content must survive the clamp, got %q", out)
 	}
-	for _, l := range strings.Split(out, "\n") {
+	for l := range strings.SplitSeq(out, "\n") {
 		if ansi.StringWidth(l) > 8 {
 			t.Errorf("clamped render must respect width 8: %q", l)
 		}

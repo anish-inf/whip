@@ -20,13 +20,10 @@ func browserStepLabel(argsJSON string) string {
 	if err := json.Unmarshal([]byte(argsJSON), &a); err != nil || a.Code == "" {
 		return ""
 	}
-	for _, line := range strings.Split(a.Code, "\n") {
+	for line := range strings.SplitSeq(a.Code, "\n") {
 		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "# ") {
-			return strings.TrimSpace(strings.TrimPrefix(line, "# "))
-		}
-		if strings.HasPrefix(line, "#") {
-			return strings.TrimSpace(strings.TrimPrefix(line, "#"))
+		if after, ok := strings.CutPrefix(line, "#"); ok {
+			return strings.TrimSpace(after)
 		}
 		if line != "" {
 			break // first non-comment line: no label

@@ -2,6 +2,7 @@ package browser
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -26,7 +27,7 @@ func TestDriverParity(t *testing.T) {
 	}
 	t.Setenv("ROD_BROWSER_BIN", bin)
 	if _, err := os.Stat("/tmp/chromelibs/usr/lib/x86_64-linux-gnu"); err == nil {
-		os.Setenv("LD_LIBRARY_PATH", "/tmp/chromelibs/usr/lib/x86_64-linux-gnu:"+os.Getenv("LD_LIBRARY_PATH"))
+		t.Setenv("LD_LIBRARY_PATH", "/tmp/chromelibs/usr/lib/x86_64-linux-gnu:"+os.Getenv("LD_LIBRARY_PATH"))
 	}
 
 	ln, _ := net.Listen("tcp", "0.0.0.0:0")
@@ -87,7 +88,7 @@ func TestDriverParity(t *testing.T) {
 		op("AXTree", func() error {
 			tree, err := b.AXTree(ctx)
 			if err == nil && !strings.Contains(tree, "hello") {
-				return fmt.Errorf("ax missing heading")
+				return errors.New("ax missing heading")
 			}
 			return err
 		})
@@ -130,14 +131,14 @@ func TestDriverParity(t *testing.T) {
 		op("WaitElement", func() error {
 			ok, err := b.WaitElement(ctx, "#h", false)
 			if err == nil && !ok {
-				return fmt.Errorf("not found")
+				return errors.New("not found")
 			}
 			return err
 		})
 		op("Tabs", func() error {
 			tabs, err := b.Tabs(ctx)
 			if err == nil && len(tabs) == 0 {
-				return fmt.Errorf("no tabs")
+				return errors.New("no tabs")
 			}
 			return err
 		})

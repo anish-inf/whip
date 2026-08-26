@@ -21,7 +21,7 @@ import (
 // instead of tmux's own (often unrelated) configured background. Requires
 // `set -g allow-passthrough on` in tmux ≥3.3; when that's off the query gets
 // no reply and we report !ok so the caller falls back to its default.
-func queryTerminalBackground(tty *os.File, inTmux bool) (light bool, ok bool) {
+func queryTerminalBackground(tty *os.File, inTmux bool) (light, ok bool) {
 	fd := int(tty.Fd())
 	if !isForegroundFd(fd) {
 		return false, false
@@ -44,7 +44,7 @@ func queryTerminalBackground(tty *os.File, inTmux bool) (light bool, ok bool) {
 	if err := unix.IoctlSetTermios(fd, ioctlWriteTermios, &raw); err != nil {
 		return false, false
 	}
-	defer unix.IoctlSetTermios(fd, ioctlWriteTermios, old) //nolint:errcheck
+	defer unix.IoctlSetTermios(fd, ioctlWriteTermios, old) //nolint:errcheck // best-effort restore of the original termios on exit
 
 	if _, err := tty.WriteString(query); err != nil {
 		return false, false
@@ -53,7 +53,7 @@ func queryTerminalBackground(tty *os.File, inTmux bool) (light bool, ok bool) {
 	// read replies with a deadline; the OSC 11 reply looks like
 	// "\x1b]11;rgb:RRRR/GGGG/BBBB\x1b\\" (or BEL-terminated)
 	_ = tty.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
-	defer tty.SetReadDeadline(time.Time{}) //nolint:errcheck
+	defer tty.SetReadDeadline(time.Time{}) //nolint:errcheck // best-effort deadline clear before the fd is handed back
 	r := bufio.NewReader(tty)
 	var buf strings.Builder
 	deadline := time.Now().Add(300 * time.Millisecond)
@@ -64,9 +64,9 @@ func queryTerminalBackground(tty *os.File, inTmux bool) (light bool, ok bool) {
 		}
 		buf.WriteByte(b)
 		s := buf.String()
-		if i := strings.Index(s, "\x1b]11;"); i >= 0 {
+		if _, after, ok := strings.Cut(s, "\x1b]11;"); ok {
 			// have the OSC reply start; find its terminator
-			rest := s[i+len("\x1b]11;"):]
+			rest := after
 			end := strings.Index(rest, "\x07")
 			if j := strings.Index(rest, "\x1b\\"); j >= 0 && (end < 0 || j < end) {
 				end = j
@@ -107,22 +107,25 @@ func bgQuery(inTmux bool) string {
 func parseOSCBg(payload string) bool {
 	payload = strings.TrimSpace(payload)
 	var r, g, b int
-	if strings.HasPrefix(payload, "rgb:") {
-		parts := strings.Split(strings.TrimPrefix(payload, "rgb:"), "/")
+	if after, ok := strings.CutPrefix(payload, "rgb:"); ok {
+		parts := strings.Split(after, "/")
 		if len(parts) != 3 {
 			return false
 		}
 		// components are 1–4 hex digits; normalize to 8-bit
 		comp := func(s string) int {
-			v, err := strconv.ParseUint(strings.TrimRight(s, "\x07"), 16, 32)
+			s = strings.TrimRight(s, "\x07")
+			// 4 hex digits max => v <= 0xffff, so the int conversion can't
+			// overflow; the ParseUint bitSize stays 16 to prove it.
+			v, err := strconv.ParseUint(s, 16, 16)
 			if err != nil {
 				return 0
 			}
-			max := (1 << (4 * uint(len(strings.TrimRight(s, "\x07"))))) - 1
-			if max <= 0 {
+			maxVal := (1 << (4 * uint(len(s)))) - 1
+			if maxVal <= 0 {
 				return 0
 			}
-			return int(v) * 255 / max
+			return int(v) * 255 / maxVal
 		}
 		r, g, b = comp(parts[0]), comp(parts[1]), comp(parts[2])
 	} else if strings.HasPrefix(payload, "#") && len(payload) >= 7 {

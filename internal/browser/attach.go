@@ -101,7 +101,7 @@ func parseDevToolsActivePort(data []byte) (port int, wsPath string, err error) {
 	}
 	wsPath = strings.TrimSpace(lines[1])
 	if wsPath == "" {
-		return 0, "", fmt.Errorf("DevToolsActivePort: empty ws path")
+		return 0, "", errors.New("DevToolsActivePort: empty ws path")
 	}
 	return port, wsPath, nil
 }
@@ -151,9 +151,10 @@ func portLive(port int) bool {
 // dev server squatting the port answers 404 HTML — a false positive here
 // would hand rod a bogus WebSocket URL).
 func chromeWSURL(ctx context.Context, base string) (string, error) {
+	//nolint:gosec // G704: base is a local browser debug endpoint discovered from the profile dir, not user input
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, base+"/json/version", nil)
 	client := &http.Client{Timeout: 2 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := client.Do(req) //nolint:gosec // G704: local browser debug endpoint (see above)
 	if err != nil {
 		return "", err
 	}
@@ -253,6 +254,7 @@ func resolveWSURL(ctx context.Context, scheme, host string, port int, wsPath str
 // DevToolsActivePort-file path still names a live DevTools endpoint and not
 // a squatter's HTTP server.
 func wsUpgradeAnswers(ctx context.Context, scheme, host string, port int, path string) bool {
+	//nolint:gosec // G704: probing the local DevTools endpoint named by the browser's own DevToolsActivePort file
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet,
 		scheme+"://"+net.JoinHostPort(host, strconv.Itoa(port))+path, nil)
 	req.Header.Set("Connection", "Upgrade")
@@ -260,7 +262,7 @@ func wsUpgradeAnswers(ctx context.Context, scheme, host string, port int, path s
 	req.Header.Set("Sec-WebSocket-Version", "13")
 	req.Header.Set("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==") // fixed probe key; we never read the socket
 	client := &http.Client{Timeout: time.Second}
-	resp, err := client.Do(req)
+	resp, err := client.Do(req) //nolint:gosec // G704: local DevTools probe (see above)
 	if err != nil {
 		return false
 	}
@@ -326,7 +328,7 @@ func DiscoverWSForProfile(ctx context.Context, base string) (ws string, ok bool)
 // verify the port answers and a live process holds the profile lock, then
 // resolve the WS URL. stale reports a port file whose browser is gone.
 func discoverProfileWS(ctx context.Context, base string) (ws string, stale bool, err error) {
-	data, err := os.ReadFile(filepath.Join(base, "DevToolsActivePort"))
+	data, err := os.ReadFile(filepath.Join(base, "DevToolsActivePort")) //nolint:gosec // G304: base is the browser profile dir whip itself resolved
 	if err != nil {
 		return "", false, err
 	}

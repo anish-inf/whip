@@ -32,7 +32,7 @@ func MePath() string {
 	}
 	path := filepath.Join(dir, "me.md")
 	if _, err := os.Stat(path); os.IsNotExist(err) {
-		if err := os.WriteFile(path, []byte(MeSeed), 0o644); err != nil {
+		if err := os.WriteFile(path, []byte(MeSeed), 0o600); err != nil {
 			return ""
 		}
 	}

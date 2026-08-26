@@ -48,7 +48,7 @@ func chromiumPath(t *testing.T) string {
 	// Unpacked Ubuntu debs for Chrome's shared libs (no sudo on this box).
 	libs := "/tmp/chromelibs/usr/lib/x86_64-linux-gnu"
 	if _, err := os.Stat(libs); err == nil {
-		os.Setenv("LD_LIBRARY_PATH", libs+":"+os.Getenv("LD_LIBRARY_PATH"))
+		t.Setenv("LD_LIBRARY_PATH", libs+":"+os.Getenv("LD_LIBRARY_PATH"))
 	}
 	home, _ := os.UserHomeDir()
 	for _, c := range chromiumCandidates {
@@ -75,8 +75,8 @@ func testPage(t *testing.T) string {
 		t.Fatal(err)
 	}
 	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/marker/") {
-			marker := strings.TrimPrefix(r.URL.Path, "/marker/")
+		if after, ok := strings.CutPrefix(r.URL.Path, "/marker/"); ok {
+			marker := after
 			fmt.Fprintf(w, `<!doctype html><title>marker-%s</title><h1>%s</h1>`, marker, marker)
 			return
 		}
@@ -293,7 +293,7 @@ func TestEvalImmediatelyAfterAttach(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		b, err := Open(ctx, ModeHeadless)
 		if err != nil {
 			t.Fatalf("iter %d open: %v", i, err)

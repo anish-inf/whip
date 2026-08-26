@@ -169,20 +169,18 @@ func mdStyle() glamouransi.StyleConfig {
 	var st glamouransi.StyleConfig
 	if mdLight {
 		st = styles.LightStyleConfig
-		st.Code.Color = strPtr("124")           // dark red
-		st.Code.BackgroundColor = strPtr("255") // lightest gray chip
+		st.Code.Color = new("124")           // dark red
+		st.Code.BackgroundColor = new("255") // lightest gray chip
 	} else {
 		st = styles.DarkStyleConfig
 	}
-	st.Table.ColumnSeparator = strPtr("│")
-	st.Table.CenterSeparator = strPtr("┼")
-	st.Table.RowSeparator = strPtr("─")
+	st.Table.ColumnSeparator = new("│")
+	st.Table.CenterSeparator = new("┼")
+	st.Table.RowSeparator = new("─")
 	zero := uint(0)
 	st.Table.Margin = &zero
 	return st
 }
-
-func strPtr(s string) *string { return &s }
 
 // mdRenderer returns a cached renderer per width (glamour builds a
 // style-traversed renderer per Render call otherwise).

@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
@@ -14,9 +15,6 @@ import (
 
 	"github.com/context-labs/whip/internal/config"
 )
-
-// imageExts are the clipboard image formats we accept, in preference order.
-var imageExts = []string{"png", "jpg", "jpeg", "gif", "webp", "bmp"}
 
 // readClipboardImage returns image bytes and their format extension from the
 // system clipboard, or ("", nil, nil) when the clipboard holds no image.
@@ -46,23 +44,20 @@ func readClipboardImage() (string, []byte, error) {
 
 // hasImageType reports whether types contains an image MIME type.
 func hasImageType(types []byte) (string, bool) {
-	for _, line := range strings.Split(string(types), "\n") {
+	for line := range strings.SplitSeq(string(types), "\n") {
 		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "image/") {
-			ext := strings.TrimPrefix(line, "image/")
-			for _, e := range imageExts {
-				if e == ext {
-					return ext, true
-				}
-			}
-			return ext, true // unknown image/*: keep its subtype as extension
+		if after, ok := strings.CutPrefix(line, "image/"); ok {
+			return after, true // keep the subtype as the file extension
 		}
 	}
 	return "", false
 }
 
 func run(name string, args ...string) ([]byte, error) {
-	return exec.Command(name, args...).Output()
+	// Clipboard tools can hang when no selection owner answers; bound them.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return exec.CommandContext(ctx, name, args...).Output()
 }
 
 func wlPasteImage() (string, []byte, error) {
@@ -105,9 +100,9 @@ func pngpasteImage() (string, []byte, error) {
 	if err != nil {
 		return "", nil, err
 	}
-	tmp.Close()
+	_ = tmp.Close() // pngpaste writes the path itself; the close error is not actionable
 	defer func() { _ = os.Remove(tmp.Name()) }()
-	if err := exec.Command("pngpaste", tmp.Name()).Run(); err != nil {
+	if err := exec.CommandContext(context.Background(), "pngpaste", tmp.Name()).Run(); err != nil {
 		return "", nil, nil // no image on the clipboard
 	}
 	data, err := os.ReadFile(tmp.Name())
@@ -122,7 +117,7 @@ func powershellImage() (string, []byte, error) {
 		`$img = [Windows.Forms.Clipboard]::GetImage(); ` +
 		`if ($img -eq $null) { exit 1 }; ` +
 		`$img.Save([Console]::OpenStandardOutput(), [System.Drawing.Imaging.ImageFormat]::Png)`
-	data, err := exec.Command("powershell.exe", "-NoProfile", "-Command", script).Output()
+	data, err := exec.CommandContext(context.Background(), "powershell.exe", "-NoProfile", "-Command", script).Output()
 	if err != nil || len(data) == 0 {
 		return "", nil, err
 	}

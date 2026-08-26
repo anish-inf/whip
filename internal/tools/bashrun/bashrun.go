@@ -146,14 +146,22 @@ func Run(ctx context.Context, opts Options) Result {
 // stall us. (We don't get the grandchild's later output, which is correct —
 // it outlived the command.)
 func runPiped(ctx context.Context, cmd *exec.Cmd) Result {
-	stdout, err := cmd.StdoutPipe()
+	// Hand-rolled pipes, NOT cmd.StdoutPipe: Wait() closes StdoutPipe's read
+	// ends the moment the child exits, discarding kernel-buffered output the
+	// drain goroutines haven't read yet (lost output on fast commands). With
+	// our own pipes Wait touches nothing and we control when reads end.
+	stdout, outW, err := os.Pipe()
 	if err != nil {
 		return Result{Exit: "pipe: " + err.Error()}
 	}
-	stderr, err := cmd.StderrPipe()
+	stderr, errW, err := os.Pipe()
 	if err != nil {
+		_ = stdout.Close()
+		_ = outW.Close()
 		return Result{Exit: "pipe: " + err.Error()}
 	}
+	cmd.Stdout = outW
+	cmd.Stderr = errW
 	if devNull := openDevNull(); devNull != nil {
 		cmd.Stdin = devNull
 		defer devNull.Close()
@@ -164,8 +172,16 @@ func runPiped(ctx context.Context, cmd *exec.Cmd) Result {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 
 	if err := cmd.Start(); err != nil {
+		_ = stdout.Close()
+		_ = outW.Close()
+		_ = stderr.Close()
+		_ = errW.Close()
 		return Result{Exit: exitString(err)}
 	}
+	// Drop our copies of the write ends: the drains must see EOF when the
+	// child (and any grandchildren holding the pipes) are done writing.
+	_ = outW.Close()
+	_ = errW.Close()
 	track(cmd) // register for KillAll on whip exit
 	defer untrack(cmd)
 
@@ -206,8 +222,20 @@ func runPiped(ctx context.Context, cmd *exec.Cmd) Result {
 	}()
 
 	waitErr := cmd.Wait()
-	// The process exited. Close our read ends so the drain goroutines see EOF
-	// even if a detached grandchild still holds the write end open.
+	// The direct child exited. On the common path the drains hit EOF at once
+	// (all write ends are closed) and finish having read everything. The timer
+	// bounds the detached-grandchild case only: a lingering writer holds the
+	// pipe open, so the drains never see EOF and we cut them off below.
+	drained := make(chan struct{})
+	go func() { wg.Wait(); close(drained) }()
+	graceTimer := time.NewTimer(500 * time.Millisecond)
+	select {
+	case <-drained:
+		graceTimer.Stop()
+	case <-graceTimer.C:
+	}
+	// Close our read ends so any still-blocked drain goroutines see EOF (a
+	// detached grandchild holding the write end must not stall us).
 	_ = stdout.Close()
 	_ = stderr.Close()
 	wg.Wait()
@@ -376,10 +404,7 @@ func runInteractive(ctx context.Context, cmd *exec.Cmd, opts Options) Result {
 				return res
 			}
 			if opts.OnAwaitInput != nil {
-				secs := int((opts.InactivityTimeout - idle + time.Second - 1) / time.Second)
-				if secs < 0 {
-					secs = 0
-				}
+				secs := max(int((opts.InactivityTimeout-idle+time.Second-1)/time.Second), 0)
 				opts.OnAwaitInput(secs)
 			}
 		}
@@ -392,8 +417,7 @@ func exitString(err error) string {
 	if err == nil {
 		return ""
 	}
-	var exitErr *exec.ExitError
-	if errors.As(err, &exitErr) {
+	if exitErr, ok := errors.AsType[*exec.ExitError](err); ok {
 		return fmt.Sprintf("(exit: %s)", exitErr)
 	}
 	return fmt.Sprintf("(exit: %v)", err)

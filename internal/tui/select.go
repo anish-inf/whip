@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"encoding/base64"
 	"fmt"
 	"os"
@@ -229,7 +230,7 @@ func copyText(s string) {
 		// DCS passthrough so the outer terminal sees it (allow-passthrough).
 		seq = "\x1bPtmux;" + strings.ReplaceAll(seq, "\x1b", "\x1b\x1b") + "\x1b\\"
 	}
-	fmt.Fprint(os.Stdout, seq) //nolint:errcheck
+	fmt.Fprint(os.Stdout, seq)
 	for _, c := range [][]string{
 		{"pbcopy"}, {"wl-copy"}, {"xclip", "-selection", "clipboard"},
 	} {
@@ -237,7 +238,7 @@ func copyText(s string) {
 		if err != nil {
 			continue
 		}
-		cmd := exec.Command(path, c[1:]...)
+		cmd := exec.CommandContext(context.Background(), path, c[1:]...)
 		cmd.Stdin = strings.NewReader(s)
 		if cmd.Run() == nil {
 			return

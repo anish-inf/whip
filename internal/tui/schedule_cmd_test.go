@@ -2,6 +2,7 @@ package tui
 
 import (
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -83,9 +84,9 @@ func TestScheduleFiresWakeup(t *testing.T) {
 	}
 	var wakeup llm.Message
 	for range 200 { // up to 2s for the turn goroutine to append
-		for i := len(m.agent.Messages) - 1; i >= 0; i-- {
-			if m.agent.Messages[i].Role == "user" {
-				wakeup = m.agent.Messages[i]
+		for _, v := range slices.Backward(m.agent.Messages) {
+			if v.Role == "user" {
+				wakeup = v
 				break
 			}
 		}

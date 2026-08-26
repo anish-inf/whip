@@ -70,7 +70,7 @@ func TestInputGrowsOnWrap(t *testing.T) {
 func TestInputCappedAtMaxHeight(t *testing.T) {
 	m := newGrowModel()
 	var lines []string
-	for i := 0; i < 50; i++ {
+	for range 50 {
 		lines = append(lines, "line")
 	}
 	m.input.SetValue(strings.Join(lines, "\n"))
@@ -131,7 +131,7 @@ func TestInputShowsAllLinesAfterGrowth(t *testing.T) {
 func TestCtrlJWorksAfterLargePaste(t *testing.T) {
 	m := newGrowModel()
 	var lines []string
-	for i := 0; i < m.input.MaxHeight+5; i++ {
+	for i := range m.input.MaxHeight + 5 {
 		lines = append(lines, fmt.Sprintf("pasted %d", i))
 	}
 	// bracketed paste arrives as one rune batch, like a real terminal paste
@@ -169,7 +169,7 @@ func TestCtrlJWorksAfterLargePaste(t *testing.T) {
 // newline behavior asserted here.
 func TestInputScrollsWhenCapped(t *testing.T) {
 	m := newGrowModel()
-	for i := 0; i < m.input.MaxHeight+5; i++ {
+	for i := range m.input.MaxHeight + 5 {
 		if i > 0 {
 			tm, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlJ})
 			m = tm.(*model)

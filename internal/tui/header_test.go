@@ -33,7 +33,7 @@ func TestHeaderShowsUsage(t *testing.T) {
 		}{CachedTokens: 4000},
 	})
 	m.width = 200 // wide enough for the full usage block (header truncates the tail)
-	head := strings.SplitN(m.View(), "\n", 2)[0]
+	head, _, _ := strings.Cut(m.View(), "\n")
 	for _, want := range []string{"kimi-k3-fast", "⚡ off", "12.3k in", "4.0k cached", "678 out", "% ctx"} {
 		if !strings.Contains(head, want) {
 			t.Errorf("header missing %q: %q", want, head)
@@ -45,7 +45,7 @@ func TestHeaderShowsUsage(t *testing.T) {
 func TestHeaderOmitsUsageUntilReported(t *testing.T) {
 	m := compactCmdModel()
 	m.width = 120
-	head := strings.SplitN(m.View(), "\n", 2)[0]
+	head, _, _ := strings.Cut(m.View(), "\n")
 	if strings.Contains(head, "⣿") {
 		t.Errorf("no usage should mean no token block: %q", head)
 	}

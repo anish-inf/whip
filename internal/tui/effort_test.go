@@ -277,10 +277,12 @@ func TestResumeRestoresUsage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cu := llm.Usage{PromptTokens: 1000, CompletionTokens: 200,
+	cu := llm.Usage{
+		PromptTokens: 1000, CompletionTokens: 200,
 		PromptTokensDetails: &struct {
 			CachedTokens int `json:"cached_tokens"`
-		}{CachedTokens: 600}}
+		}{CachedTokens: 600},
+	}
 	legacy := []llm.Message{
 		{Role: "system", Content: "sys"},
 		{Role: "user", Content: "q1", Authored: true},

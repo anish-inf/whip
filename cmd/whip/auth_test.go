@@ -25,8 +25,10 @@ func fakeOpenRouter(t *testing.T, goodKey string) *httptest.Server {
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"data": []map[string]any{
-				{"id": "openai/gpt-5", "context_length": 400000, "input_modalities": []string{"text", "image"},
-					"pricing": map[string]string{"prompt": "0.00000125", "completion": "0.00001"}},
+				{
+					"id": "openai/gpt-5", "context_length": 400000, "input_modalities": []string{"text", "image"},
+					"pricing": map[string]string{"prompt": "0.00000125", "completion": "0.00001"},
+				},
 				{"id": "anthropic/claude-sonnet-4.5", "context_length": 1000000, "input_modalities": []string{"text"}},
 			},
 		})
@@ -143,6 +145,7 @@ func TestAuthCLIDispatch(t *testing.T) {
 		t.Error("openrouter with no key should error, not hang or write config")
 	}
 }
+
 func TestShellRC(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

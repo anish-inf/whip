@@ -7,7 +7,6 @@ package computer
 import (
 	"context"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -27,7 +26,7 @@ func fakeHelper(t *testing.T, script string) *Helper {
 		src = strings.Replace(src, "// SCRIPT", "func init() {\n"+script+"\n}", 1)
 	}
 	// Build a tiny standalone main from the script.
-	main := fmt.Sprintf("package main\n\n%s", src)
+	main := "package main\n\n" + src
 	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte(main), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -64,6 +63,7 @@ func goBin(t *testing.T) string {
 }
 
 func runGo(t *testing.T, dir string, args ...string) (string, error) {
+	t.Helper()
 	return runCmd(dir, goBin(t), args...)
 }
 
@@ -116,8 +116,7 @@ func TestStaleGenerationMapping(t *testing.T) {
 		return nil, &rpcErr{Code: 4, Message: "state changed since generation 1"}
 	}`)
 	err := h.Call(context.Background(), "click", nil, nil)
-	var stale *StaleError
-	if !errors.As(err, &stale) {
+	if _, ok := errors.AsType[*StaleError](err); !ok {
 		t.Fatalf("want StaleError, got %T: %v", err, err)
 	}
 }

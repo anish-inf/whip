@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/context-labs/whip/internal/llm"
@@ -28,7 +29,7 @@ func memoryTools(a *Agent) []tools.Tool {
 			return inst, nil
 		case "session":
 			if sess.Path == "" {
-				return sess, fmt.Errorf("no session yet — use scope \"installation\"")
+				return sess, errors.New("no session yet — use scope \"installation\"")
 			}
 			return sess, nil
 		default:

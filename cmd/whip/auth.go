@@ -133,8 +133,8 @@ func saveOpenRouterCatalog(baseURL string, infos []llm.ModelInfo) {
 // falling back to a plain line read (piped input, tests).
 func promptKey(prompt string) (string, error) {
 	fmt.Fprint(os.Stderr, prompt)
-	if term.IsTerminal(int(syscall.Stdin)) {
-		b, err := term.ReadPassword(int(syscall.Stdin))
+	if term.IsTerminal(syscall.Stdin) {
+		b, err := term.ReadPassword(syscall.Stdin)
 		fmt.Fprintln(os.Stderr)
 		return config.TrimKey(string(b)), err
 	}
@@ -147,7 +147,7 @@ func promptKey(prompt string) (string, error) {
 func offerShellExport(key string) {
 	rc := shellRC()
 	fmt.Printf("export %s so whip can read the key on every run.\n", config.OpenRouterEnvVar)
-	if rc == "" || !term.IsTerminal(int(syscall.Stdin)) {
+	if rc == "" || !term.IsTerminal(syscall.Stdin) {
 		fmt.Printf("  add to your shell profile:  export %s=%s\n", config.OpenRouterEnvVar, key)
 		return
 	}
@@ -157,7 +157,7 @@ func offerShellExport(key string) {
 		fmt.Printf("  skipped — add it yourself:  export %s=%s\n", config.OpenRouterEnvVar, key)
 		return
 	}
-	f, err := os.OpenFile(rc, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0o600)
+	f, err := os.OpenFile(rc, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0o600) //nolint:gosec // G304: rc is the user's own shell profile, detected by shellRC
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "whip: couldn't open %s (%v) — add manually: export %s=%s\n", rc, err, config.OpenRouterEnvVar, key)
 		return

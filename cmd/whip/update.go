@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -15,7 +16,7 @@ const installURL = "https://raw.githubusercontent.com/context-labs/whip/main/ins
 // latest release.
 func updateCLI() error {
 	fmt.Printf("whip %s — updating to the latest release via\n  curl -fsSL %s | sh\n\n", version, installURL)
-	cmd := exec.Command("sh", "-c", "curl -fsSL "+installURL+" | sh")
+	cmd := exec.CommandContext(context.Background(), "sh", "-c", "curl -fsSL "+installURL+" | sh")
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {

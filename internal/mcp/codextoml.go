@@ -153,7 +153,7 @@ func LoadCodex(path string) (map[string]ServerConfig, error) {
 	if path == "" {
 		return nil, os.ErrNotExist
 	}
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) //nolint:gosec // G304: reading the caller-named config file is the function's contract
 	if err != nil {
 		return nil, err
 	}
@@ -212,7 +212,7 @@ func parseTOMLTables(doc string) (map[string]map[string]any, error) {
 func stripTOMLComment(s string) string {
 	var quote byte
 	escaped := false
-	for i := 0; i < len(s); i++ {
+	for i := range len(s) {
 		c := s[i]
 		switch {
 		case escaped:
@@ -237,7 +237,7 @@ func unquoteTOMLTableName(s string) string {
 	var parts []string
 	var cur strings.Builder
 	var quote byte
-	for i := 0; i < len(s); i++ {
+	for i := range len(s) {
 		c := s[i]
 		switch {
 		case quote != 0:
@@ -384,7 +384,7 @@ func splitTOMLList(s string) []string {
 	var quote byte
 	escaped := false
 	start := 0
-	for i := 0; i < len(s); i++ {
+	for i := range len(s) {
 		c := s[i]
 		switch {
 		case escaped:

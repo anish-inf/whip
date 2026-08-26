@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -145,10 +146,10 @@ type Config struct {
 	// disable the built-in registry (gopls).
 	LSPServers map[string]LSPServer `json:"lsp,omitempty"`
 	// Browser configures the native browser subsystem (internal/browser).
-	Browser BrowserConfig `json:"browser,omitempty"`
+	Browser BrowserConfig `json:"browser,omitzero"`
 	// Computer configures computer-use (internal/computer): which apps
 	// computer_exec may drive.
-	Computer ComputerConfig `json:"computer,omitempty"`
+	Computer ComputerConfig `json:"computer,omitzero"`
 }
 
 // ComputerConfig gates computer_exec per app (codex's per-bundle-id model).
@@ -234,7 +235,7 @@ type MCPServer struct {
 // far away from the real config.
 func Dir() (string, error) {
 	if d := os.Getenv("WHIP_HOME"); d != "" {
-		return d, os.MkdirAll(d, 0o700)
+		return d, os.MkdirAll(d, 0o700) //nolint:gosec // G703: WHIP_HOME is the user's own env override for the config dir
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -343,7 +344,7 @@ func (c *Config) Save() error {
 			logf("config.save", "before=(unparseable, %d bytes) after=(%s)", len(existing), c.fingerprint())
 		}
 		// best-effort backup before replacing
-		_ = os.WriteFile(p+".bak", existing, 0o600)
+		_ = os.WriteFile(p+".bak", existing, 0o600) //nolint:gosec // G703: p is the whip-owned config path
 	} else {
 		logf("config.save", "first write (%s)", c.fingerprint())
 	}
@@ -449,11 +450,8 @@ func (c *Config) resolveFromCatalog(model, provider string) (Model, string, erro
 		Context:   h.mi.ContextLength,
 		MaxOut:    h.mi.MaxCompletionTokens,
 	}
-	for _, mod := range h.mi.InputModalities {
-		if mod == "image" {
-			m.Vision = true
-			break
-		}
+	if slices.Contains(h.mi.InputModalities, "image") {
+		m.Vision = true
 	}
 	return m, h.prov, nil
 }
@@ -474,6 +472,7 @@ func Default() *Config {
 	return &Config{
 		DefaultModel: "kimi-k3-fast",
 		CompactModel: DefaultCompactModel,
+		//nolint:gosec // G101: APIKeyEnv holds env var NAMES, not credentials
 		Providers: map[string]Provider{
 			"inference": {
 				Name:      "Inference.net",

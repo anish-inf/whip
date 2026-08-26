@@ -19,6 +19,7 @@
 package memory
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -98,11 +99,11 @@ func (s Scope) Entries() []Entry {
 // cap — the model is told to forget something first.
 func (s Scope) Remember(text string) error {
 	if s.Path == "" {
-		return fmt.Errorf("no memory scope for this session yet")
+		return errors.New("no memory scope for this session yet")
 	}
 	text = strings.Join(strings.Fields(text), " ") // one line, no stray whitespace
 	if text == "" {
-		return fmt.Errorf("text is required")
+		return errors.New("text is required")
 	}
 	if len(text) > maxEntryLength {
 		return fmt.Errorf("keep it under %d chars; summarize it first", maxEntryLength)
@@ -116,27 +117,30 @@ func (s Scope) Remember(text string) error {
 	if open >= maxEntries {
 		return fmt.Errorf("memory is full (%d entries); forget something stale first", maxEntries)
 	}
-	if err := os.MkdirAll(filepath.Dir(s.Path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(s.Path), 0o750); err != nil {
 		return err
 	}
-	f, err := os.OpenFile(s.Path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(s.Path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
 	}
-	defer f.Close()
-	_, err = fmt.Fprintf(f, "- [ ] %s\n", text)
-	return err
+	_, werr := fmt.Fprintf(f, "- [ ] %s\n", text)
+	cerr := f.Close() // close flushes; a failed close can mean lost data
+	if werr != nil {
+		return werr
+	}
+	return cerr
 }
 
 // Forget marks entry n done ("- [x]"): a visible strike, not a deletion, so
 // the file keeps an audit trail the user can edit by hand.
 func (s Scope) Forget(n int) error {
 	if s.Path == "" {
-		return fmt.Errorf("no memory scope for this session yet")
+		return errors.New("no memory scope for this session yet")
 	}
 	data, err := os.ReadFile(s.Path)
 	if err != nil {
-		return fmt.Errorf("no memories yet")
+		return errors.New("no memories yet")
 	}
 	lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
 	seen := 0
@@ -148,7 +152,7 @@ func (s Scope) Forget(n int) error {
 					return fmt.Errorf("entry %d is already marked done", n)
 				}
 				lines[i] = "- [x] " + strings.TrimPrefix(line, "- [ ] ")
-				return os.WriteFile(s.Path, []byte(strings.Join(lines, "\n")+"\n"), 0o644)
+				return os.WriteFile(s.Path, []byte(strings.Join(lines, "\n")+"\n"), 0o600) //nolint:gosec // G703: s.Path is a whip-owned memory file
 			}
 		}
 	}

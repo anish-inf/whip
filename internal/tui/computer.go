@@ -19,5 +19,7 @@ func (m *model) computerConsent(app string) bool {
 }
 
 // ensure computer is referenced (policy install lives in tui.go init)
-var _ = computer.ApprovalNeeded{}
-var _ = strings.Contains
+var (
+	_ = computer.ApprovalNeeded{}
+	_ = strings.Contains
+)

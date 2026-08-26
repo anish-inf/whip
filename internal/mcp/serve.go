@@ -2,7 +2,6 @@ package mcp
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -21,13 +20,12 @@ import (
 func Serve(ctx context.Context, version string) error {
 	srv := sdkmcp.NewServer(&sdkmcp.Implementation{Name: "whip", Version: version}, nil)
 	for _, t := range tools.All() {
-		t := t
 		srv.AddTool(&sdkmcp.Tool{
 			Name:        t.Def.Function.Name,
 			Description: t.Def.Function.Description,
 			// The defs carry a JSON-schema string; the SDK wants any value
 			// that marshals to a schema, and json.RawMessage marshals verbatim.
-			InputSchema: json.RawMessage(t.Def.Function.Parameters),
+			InputSchema: t.Def.Function.Parameters,
 		}, func(ctx context.Context, req *sdkmcp.CallToolRequest) (*sdkmcp.CallToolResult, error) {
 			out, err := t.Run(ctx, req.Params.Arguments)
 			if err != nil {

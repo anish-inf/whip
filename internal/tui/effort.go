@@ -1,5 +1,7 @@
 package tui
 
+import "slices"
+
 import "github.com/context-labs/whip/internal/config"
 
 // defaultEfforts are the fallback levels when the provider doesn't advertise
@@ -87,17 +89,8 @@ func (m *model) updateCatalogs(cats map[string]config.Catalog) {
 	if n := m.contextLimitFor(m.provName, m.agent.Model); n != m.agent.ContextLimit {
 		m.agent.ContextLimit = n // /models is the source of truth
 	}
-	if !contains(m.effortsFor(), m.agent.Effort) {
+	if !slices.Contains(m.effortsFor(), m.agent.Effort) {
 		m.resetEffort("")
 		m.append(dimStyle.Render("⚡ effort reset to off: not supported by " + m.agent.Model))
 	}
-}
-
-func contains(xs []string, x string) bool {
-	for _, e := range xs {
-		if e == x {
-			return true
-		}
-	}
-	return false
 }

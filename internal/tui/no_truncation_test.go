@@ -19,7 +19,7 @@ func TestToolCallLineWrapsNotTruncates(t *testing.T) {
 
 	blk := m.blocks[len(m.blocks)-1]
 	rendered := ansi.Strip(blk.render(m.width))
-	for _, l := range strings.Split(rendered, "\n") {
+	for l := range strings.SplitSeq(rendered, "\n") {
 		if strings.Contains(l, "…") {
 			t.Fatalf("tool call line truncated: %q", rendered)
 		}
@@ -58,7 +58,7 @@ func TestResumedToolCallNotTruncated(t *testing.T) {
 		if strings.Contains(rendered, "…") {
 			t.Fatalf("resumed tool call truncated: %q", rendered)
 		}
-		for _, l := range strings.Split(rendered, "\n") {
+		for l := range strings.SplitSeq(rendered, "\n") {
 			if w := ansi.StringWidth(l); w > 50 {
 				t.Fatalf("line exceeds width 50 (%d): %q", w, l)
 			}

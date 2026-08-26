@@ -156,7 +156,8 @@ func TestCdAndPwd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = os.Chdir(orig) })
+	// Pin the cwd and restore it after the test's /cd calls move us around.
+	t.Chdir(orig)
 
 	m := shellModel()
 	m.command("/pwd")
@@ -199,7 +200,8 @@ func TestCdTilde(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = os.Chdir(orig) })
+	// /cd ~ moves the process cwd; restore it when the test ends.
+	t.Chdir(orig)
 	home, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)

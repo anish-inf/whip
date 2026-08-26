@@ -129,7 +129,7 @@ func TestStreamDoesNotRetryContextLimit(t *testing.T) {
 	var calls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
-		w.WriteHeader(400)
+		w.WriteHeader(http.StatusBadRequest)
 		fmt.Fprint(w, `{"error":{"code":"context_length_exceeded"}}`)
 	}))
 	defer srv.Close()
@@ -179,7 +179,7 @@ func TestMaxRetriesConfigurable(t *testing.T) {
 	var calls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
-		w.WriteHeader(500)
+		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	defer srv.Close()
 
@@ -206,7 +206,7 @@ func TestMaxRetriesConfigurable(t *testing.T) {
 func TestRetryEventCarriesMax(t *testing.T) {
 	noSleep(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(500)
+		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	defer srv.Close()
 
@@ -229,7 +229,7 @@ func TestCompleteRetriesTransientStatus(t *testing.T) {
 	var calls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if calls.Add(1) < 2 {
-			w.WriteHeader(429)
+			w.WriteHeader(http.StatusTooManyRequests)
 			fmt.Fprint(w, "rate limited")
 			return
 		}
@@ -249,7 +249,7 @@ func TestCompleteRetriesTransientStatus(t *testing.T) {
 // Caller cancellation during backoff must abort the retry loop promptly.
 func TestRetryRespectsCancellation(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(500)
+		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	defer srv.Close()
 

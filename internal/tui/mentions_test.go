@@ -29,9 +29,7 @@ func TestExpandMentions(t *testing.T) {
 		t.Fatalf("single line: %q", out)
 	}
 	// relative path resolves against cwd
-	oldWd, _ := os.Getwd()
-	os.Chdir(dir)
-	defer os.Chdir(oldWd)
+	t.Chdir(dir)
 	out = expandMentions("see @main.go here")
 	if !strings.Contains(out, f) {
 		t.Fatalf("relative: %q", out)
@@ -84,9 +82,7 @@ func TestSkillCompletion(t *testing.T) {
 
 func TestPrepareTurnReloadsSkillsEveryTurn(t *testing.T) {
 	dir := t.TempDir()
-	old, _ := os.Getwd()
-	os.Chdir(dir)
-	defer os.Chdir(old)
+	t.Chdir(dir)
 	t.Setenv("HOME", t.TempDir()) // isolate ~/.whip/skills
 
 	os.MkdirAll(filepath.Join(dir, ".agents/skills/demo"), 0o755)

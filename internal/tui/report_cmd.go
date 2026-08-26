@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"net/url"
 	"os"
@@ -72,7 +73,7 @@ func (m *model) envReport() envReport {
 	add("COLORFGBG", os.Getenv("COLORFGBG"))
 	if tm := os.Getenv("TMUX"); tm != "" {
 		v := tm
-		if out, err := exec.Command("tmux", "-V").Output(); err == nil {
+		if out, err := exec.CommandContext(context.Background(), "tmux", "-V").Output(); err == nil {
 			v = strings.TrimSpace(string(out))
 		}
 		add("tmux", v)
@@ -92,11 +93,11 @@ func (m *model) envReport() envReport {
 
 	// system
 	add("os", runtime.GOOS+"/"+runtime.GOARCH)
-	if out, err := exec.Command("uname", "-srm").Output(); err == nil {
+	if out, err := exec.CommandContext(context.Background(), "uname", "-srm").Output(); err == nil {
 		add("uname", strings.TrimSpace(string(out)))
 	}
 	if runtime.GOOS == "darwin" {
-		if out, err := exec.Command("sw_vers", "-productVersion").Output(); err == nil {
+		if out, err := exec.CommandContext(context.Background(), "sw_vers", "-productVersion").Output(); err == nil {
 			add("macOS", strings.TrimSpace(string(out)))
 		}
 	}

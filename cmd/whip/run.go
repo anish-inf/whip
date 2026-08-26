@@ -64,7 +64,7 @@ func runCLI(args []string) error {
 	}
 	if prompt == "" {
 		fs.Usage()
-		return fmt.Errorf("no prompt given (pass one as an argument or pipe it on stdin)")
+		return errors.New("no prompt given (pass one as an argument or pipe it on stdin)")
 	}
 
 	cfg, err := config.Load()

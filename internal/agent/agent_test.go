@@ -264,7 +264,7 @@ func TestUsageAccumulates(t *testing.T) {
 
 	ag := New(llm.New(srv.URL, "k"), "m", 100, "sys")
 	var fired int
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		if _, err := ag.Turn(context.Background(), "go", Events{
 			OnUsage: func(u llm.Usage) {
 				fired++
@@ -421,7 +421,7 @@ func TestTurnAutoCompactsOnContextLimit(t *testing.T) {
 
 	ag := New(llm.New(srv.URL, "k"), "m", 100, "sys")
 	// build a history that's compactable: system + enough turns
-	for i := 0; i < 8; i++ {
+	for i := range 8 {
 		ag.Messages = append(ag.Messages,
 			llm.Message{Role: "user", Content: fmt.Sprintf("q%d", i)},
 			llm.Message{Role: "assistant", Content: fmt.Sprintf("a%d", i)},
@@ -470,7 +470,7 @@ func TestCompactDoesNotLoopOnRepeatedContextLimit(t *testing.T) {
 	defer srv.Close()
 
 	ag := New(llm.New(srv.URL, "k"), "m", 100, "sys")
-	for i := 0; i < 8; i++ {
+	for i := range 8 {
 		ag.Messages = append(ag.Messages,
 			llm.Message{Role: "user", Content: fmt.Sprintf("q%d", i)},
 			llm.Message{Role: "assistant", Content: fmt.Sprintf("a%d", i)},
@@ -529,7 +529,7 @@ func TestProactiveCompactAtFiftyPercent(t *testing.T) {
 	ag := New(llm.New(srv.URL, "k"), "m", 100, "sys")
 	ag.ContextLimit = 1000 // default 50% = 500 estimated tokens
 	// 8 user messages × 120 chars ≈ 272 estimated tokens: under the threshold
-	for i := 0; i < 8; i++ {
+	for range 8 {
 		ag.Messages = append(ag.Messages, llm.Message{Role: "user", Content: strings.Repeat("x", 120)})
 	}
 	var compacted bool
@@ -556,7 +556,7 @@ func TestCompactThresholdExplicitOverride(t *testing.T) {
 	ag := New(llm.New(srv.URL, "m"), "m", 100, "sys")
 	ag.ContextLimit = 1000
 	ag.CompactThreshold = 0.8
-	for i := 0; i < 8; i++ {
+	for range 8 {
 		ag.Messages = append(ag.Messages, llm.Message{Role: "user", Content: strings.Repeat("x", 360)})
 	}
 	if _, err := ag.Turn(context.Background(), "hi", Events{}); err != nil {
@@ -570,7 +570,7 @@ func TestCompactThresholdExplicitOverride(t *testing.T) {
 	// would have compacted
 	ag2 := New(llm.New(srv.URL, "m"), "m", 100, "sys")
 	ag2.ContextLimit = 1000
-	for i := 0; i < 8; i++ {
+	for range 8 {
 		ag2.Messages = append(ag2.Messages, llm.Message{Role: "user", Content: strings.Repeat("x", 360)})
 	}
 	if err := ag2.maybeCompact(context.Background(), Events{}); err == nil {
@@ -617,7 +617,7 @@ func TestCompactUsesCompactModel(t *testing.T) {
 	ag := New(llm.New(main.URL, "k"), "conversation-model", 100, "sys")
 	ag.CompactClient = llm.New(sum.URL, "k")
 	ag.CompactModel = "summary-model"
-	for i := 0; i < 8; i++ {
+	for i := range 8 {
 		ag.Messages = append(ag.Messages,
 			llm.Message{Role: "user", Content: fmt.Sprintf("q%d", i)},
 			llm.Message{Role: "assistant", Content: fmt.Sprintf("a%d", i)},
@@ -648,7 +648,7 @@ func TestCompactKeepsToolCallPair(t *testing.T) {
 	defer srv.Close()
 	ag := New(llm.New(srv.URL, "k"), "m", 100, "sys")
 	// system, user, asst(with tool call "t1"), tool("t1" result), user, asst, user
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		ag.Messages = append(ag.Messages, llm.Message{Role: "user", Content: fmt.Sprintf("u%d", i)})
 		if i == 0 {
 			ag.Messages = append(ag.Messages,
@@ -693,7 +693,7 @@ func TestManualCompactFiresEvent(t *testing.T) {
 	}))
 	defer srv.Close()
 	ag := New(llm.New(srv.URL, "k"), "m", 100, "sys")
-	for i := 0; i < 8; i++ {
+	for i := range 8 {
 		ag.Messages = append(ag.Messages,
 			llm.Message{Role: "user", Content: fmt.Sprintf("q%d", i)},
 			llm.Message{Role: "assistant", Content: fmt.Sprintf("a%d", i)},
