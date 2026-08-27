@@ -131,10 +131,13 @@ as a **steered message**, so the model sees it on the next loop boundary.
   redraw live. `Tasks().OnRecord` — a second hook the TUI uses to upsert the
   task into the session store on start and settle.
 - `/subagents` (alias `/tasks`) lists running/done subagents with report previews; a `⚙ N sub`
-  header badge shows the running count. The persistent dock strip above the
-  input is mouse-clickable: `dockTop()` maps screen rows to task rows,
-  skipping the focused hint row (`dockSkip`) so a click opens the row
-  actually clicked.
+  header badge shows the running count. The persistent dock strip renders
+  **below the input** (above the status line), so focus follows the cursor's
+  geometry: ↓ on an empty input (or ctrl+t) moves focus into the list, ↑ past
+  its top row — or simply typing — hands focus back, and esc is never
+  consumed by the dock (it stays the interrupt/rewind key). The strip is
+  mouse-clickable: `dockTop()` maps screen rows to task rows, skipping the
+  focused hint row (`dockSkip`) so a click opens the row actually clicked.
 - **Persisted across resume.** The session store's `tasks` table records
   every start/settle; `resume()` seeds the registry via `RestoreTask`
   (settled, `Done` pre-closed, marked `Restored`). A row still `running` on

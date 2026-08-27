@@ -1,12 +1,14 @@
 // tasks.go: the persistent background-subagent area and the per-task detail
 // view.
 //
-// The dock is a strip rendered above the input box (below the queue) whenever
-// background tasks exist — running or recently settled — so the user always
-// knows how many subagents are in flight without running /tasks. ctrl+t
-// focuses it; ↑/↓ (or the mouse wheel over the strip) moves the selection,
-// enter opens the selected task's detail view, and esc backs out: detail →
-// dock → main thread. The detail view is a scrollback pane filled from the
+// The dock is a strip rendered below the input box (above the status line)
+// whenever background tasks exist — running or recently settled — so the user
+// always knows how many subagents are in flight without running /subagents.
+// ctrl+t focuses it, and so does ↓ on an empty input (the strip sits right
+// under the cursor); ↑/↓ (or the mouse wheel over the strip) moves the
+// selection, ↑ off the top row hands focus back to the input, enter opens the
+// selected task's detail view, and esc backs out: detail → dock → main
+// thread. The detail view is a scrollback pane filled from the
 // task's live event stream (registry.Subscribe) while it runs, and from the
 // stored Report once it settles.
 package tui
@@ -115,7 +117,7 @@ func (m *model) tasksDock() string {
 
 	rows := make([]string, 0, len(tasks)+2)
 	if m.tasksFocus {
-		rows = append(rows, dimStyle.Render(" ⚙ subagents — ↑/↓ select · enter open · x cancel · esc back"))
+		rows = append(rows, dimStyle.Render(" ⚙ subagents — ↑/↓ select (↑ past top: back to input) · enter open"))
 	}
 
 	budget := tasksDockHeight - len(rows)
@@ -280,7 +282,7 @@ func (m *model) taskViewKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.Type {
 	case tea.KeyEsc:
 		m.taskVP = nil
-		m.tasksFocus = true // land on the dock so ↑/↓ keep working; esc again unfocuses
+		m.tasksFocus = true // land on the dock so ↑/↓ keep working; ↑ past the top returns to the input
 		return m, nil
 	case tea.KeyCtrlT:
 		m.taskVP = nil

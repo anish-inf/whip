@@ -313,9 +313,13 @@ func TestCtrlTFocusesDockAndArrowsSelect(t *testing.T) {
 	if m.taskSel != 0 {
 		t.Fatalf("↑ should move the selection back up, got %d", m.taskSel)
 	}
-	m.key(mkKey("esc"))
+	m.key(mkKey("esc")) // esc is not a dock key: it stays the interrupt/rewind shortcut
+	if !m.tasksFocus {
+		t.Fatal("esc must not consume dock focus")
+	}
+	m.key(mkKey("up")) // the dock sits below the input: ↑ past the top hands focus back
 	if m.tasksFocus {
-		t.Fatal("esc should unfocus the dock")
+		t.Fatal("↑ past the top row should return focus to the input")
 	}
 }
 
@@ -345,9 +349,9 @@ func TestEnterOpensTaskViewAndEscBacksOut(t *testing.T) {
 	if !m.tasksFocus {
 		t.Fatal("esc from a task view should land on the focused dock")
 	}
-	m.key(mkKey("esc"))
+	m.key(mkKey("up")) // ↑ past the dock's top row returns to the input (esc no longer does)
 	if m.tasksFocus {
-		t.Fatal("second esc should return to the main thread")
+		t.Fatal("↑ past the top row should return to the main thread")
 	}
 }
 
@@ -413,7 +417,7 @@ func TestDockClickOpensClickedRow(t *testing.T) {
 	// render at stripTop+1 (past the hint) and stripTop+2.
 	m.tasksFocus = true
 	m.layout()
-	stripTop := m.height - 2 - m.input.Height() - m.dockRows
+	stripTop := m.height - 2 - m.dockRows // the strip renders below the input, above blank+status
 	m2 = click(stripTop + 2).(*model)
 	if m2.taskVP == nil || m2.taskVP.id != t1.ID {
 		t.Fatalf("clicking the second task row should open %s, got %+v", t1.ID, m2.taskVP)
@@ -528,12 +532,13 @@ func TestLayoutReservesDockHeight(t *testing.T) {
 	if m.vp.Height != base-dockRows {
 		t.Fatalf("viewport should shrink by exactly the dock rows: base=%d now=%d dock=%d", base, m.vp.Height, dockRows)
 	}
-	// and the dock renders on its own row above the input, not glued to it
+	// and the dock renders on its own row below the input (above the status
+	// line), so ↓ from an empty input lands on it naturally
 	v := stripAll(m.View())
 	di := strings.Index(v, "probe")
 	ii := strings.Index(v, "Ask whip")
-	if di < 0 || ii < 0 || di > ii {
-		t.Fatalf("dock must render above the input: dock@%d input@%d\n%s", di, ii, v)
+	if di < 0 || ii < 0 || di < ii {
+		t.Fatalf("dock must render below the input: dock@%d input@%d\n%s", di, ii, v)
 	}
 	if m.dockTop() < 0 || m.dockTop() >= m.height {
 		t.Fatalf("dockTop out of screen: %d (height %d)", m.dockTop(), m.height)

@@ -198,7 +198,7 @@ type model struct {
 	perms      permRules   // saved allow-always rules
 	permDialog *permDialog // open permission modal; the turn is paused on it
 
-	tasksFocus bool      // the tasks dock owns ↑/↓/enter/esc instead of the input
+	tasksFocus bool      // the tasks dock owns ↑/↓/enter (never esc); typing or ↑ past the top returns to the input
 	taskSel    int       // selected row in the dock (index into newest-first tasks)
 	dockSkip   int       // non-task rows at the dock's top (focused hint) — click math skips them
 	taskVP     *taskView // open per-task detail view; nil when on the main thread
@@ -1525,18 +1525,18 @@ func (m *model) layout() {
 }
 
 // dockTop returns the screen row of the first TASK row in the dock: the dock
-// renders as the last dockRows rows above the input box and bottom pad, but
-// dockSkip non-task rows (the focused hint) sit on top of the task rows.
-// layout() keeps both in sync with what View renders. The row is an absolute
-// screen row: counted up from the view's bottom (viewTop+viewH), which equals
-// the terminal bottom while the view is bottom-anchored but stays correct
-// when a shrunk view floats above it.
+// renders below the input as the last dockRows rows above the blank + status
+// line, but dockSkip non-task rows (the focused hint) sit on top of the task
+// rows. layout() keeps both in sync with what View renders. The row is an
+// absolute screen row: counted up from the view's bottom (viewTop+viewH),
+// which equals the terminal bottom while the view is bottom-anchored but
+// stays correct when a shrunk view floats above it.
 func (m *model) dockTop() int {
 	bottom := m.height
 	if m.viewH > 0 {
 		bottom = m.viewTop + m.viewH
 	}
-	return bottom - 2 - m.input.Height() - m.dockRows + m.dockSkip
+	return bottom - 2 - m.dockRows + m.dockSkip
 }
 
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -2161,8 +2161,8 @@ func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	switch msg.Type {
 	case tea.KeyCtrlT:
-		// focus the tasks dock (or unfocus it) — the persistent strip above
-		// the input listing background subagents
+		// focus the tasks dock (or unfocus it) — the persistent strip below
+		// the input listing background subagents (↓ on an empty input works too)
 		if len(m.dockTasks()) == 0 {
 			return m, nil
 		}
@@ -2221,8 +2221,9 @@ func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.menu = nil
 		case m.queueSel >= 0: // leave queue navigation
 			m.queueSel = -1
-		case m.tasksFocus: // leave dock navigation, back to the main thread
-			m.tasksFocus = false
+		// NOTE: dock focus deliberately does NOT consume esc — esc stays the
+		// interrupt/rewind key. Leave the dock with ↑ past its top row (it
+		// sits below the input), ctrl+t, or just typing.
 		default:
 			dismissed = false
 		}
@@ -2314,6 +2315,13 @@ func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
+		// empty input + a visible dock below it: ↓ moves focus into the
+		// subagent list (↑ from its top row hands focus back)
+		if m.input.Value() == "" && len(m.dockTasks()) > 0 {
+			m.tasksFocus = true
+			m.taskSel = 0
+			return m, nil
+		}
 		// move within the textarea unless the cursor already sits on the
 		// last (soft-wrapped) row, where ↓ falls through to history recall
 		if !m.cursorOnLastLine() {
@@ -2337,7 +2345,11 @@ func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if m.tasksFocus {
-			m.taskSel = max(m.taskSel-1, 0)
+			if m.taskSel == 0 { // the dock sits below the input: ↑ off its top row hands focus back
+				m.tasksFocus = false
+				return m, nil
+			}
+			m.taskSel--
 			return m, nil
 		}
 		// while busy with a queue and an empty input, ↑ selects queued messages
@@ -2505,6 +2517,9 @@ func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.submit(text)
 	}
 
+	// Typing hands focus back from the dock to the input implicitly — without
+	// this, enter after typing would open the selected task, not submit.
+	m.tasksFocus = false
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
 	m.refreshMenu()
@@ -3782,10 +3797,6 @@ func (m *model) viewBody() string {
 		}
 	}
 	b.WriteString("\n")
-	// the persistent background-subagent strip sits just above the input box
-	if dock := m.tasksDock(); dock != "" {
-		b.WriteString(dock + "\n")
-	}
 	if m.rew != nil {
 		b.WriteString(m.rewindView() + "\n\n")
 	}
@@ -3815,6 +3826,11 @@ func (m *model) viewBody() string {
 	}
 	if m.menu != nil {
 		b.WriteString("\n" + m.menuView())
+	}
+	// the persistent background-subagent strip sits just below the input box
+	// (above the status line): ↓ on an empty input moves focus into it
+	if dock := m.tasksDock(); dock != "" {
+		b.WriteString("\n" + dock)
 	}
 	b.WriteString("\n\n" + m.statusView()) // persistent status line, with a blank line above
 	return b.String()

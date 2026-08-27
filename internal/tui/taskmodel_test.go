@@ -144,3 +144,30 @@ func TestTaskViewRestoredReadOnly(t *testing.T) {
 		t.Fatal("the view should say it is read-only")
 	}
 }
+
+// The dock renders below the input: ↓ on an empty input moves focus into it,
+// typing hands focus back implicitly (so enter submits instead of opening a
+// task), and ↓ with a draft in the input never steals focus.
+func TestDownArrowFocusesDockBelowInput(t *testing.T) {
+	srv := sseTextServer(t, "ok")
+	defer srv.Close()
+	m := tasksModel(srv.URL)
+	task := m.agent.StartBackground("probe", "p", agent.SubModel{})
+	defer m.agent.Tasks().Cancel(task.ID)
+
+	m.key(mkKey("down"))
+	if !m.tasksFocus || m.taskSel != 0 {
+		t.Fatalf("↓ on empty input should focus the dock at its top row, focus=%v sel=%d", m.tasksFocus, m.taskSel)
+	}
+	m.key(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("h")})
+	if m.tasksFocus {
+		t.Fatal("typing should hand focus back to the input")
+	}
+	if m.input.Value() != "h" {
+		t.Fatalf("the typed rune should land in the input, got %q", m.input.Value())
+	}
+	m.key(mkKey("down"))
+	if m.tasksFocus {
+		t.Fatal("↓ with a draft in the input must not steal focus")
+	}
+}
