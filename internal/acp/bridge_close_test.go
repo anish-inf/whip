@@ -211,7 +211,7 @@ func TestLoadSessionGuards(t *testing.T) {
 func TestEventLogHook(t *testing.T) {
 	t.Cleanup(func() { SetEventLog(nil) })
 	var got strings.Builder
-	SetEventLog(func(format string, args ...any) { got.WriteString(fmt.Sprintf(format, args...)) })
+	SetEventLog(func(format string, args ...any) { fmt.Fprintf(&got, format, args...) })
 	config_logf("loaded %d servers", 3)
 	if !strings.Contains(got.String(), "loaded 3 servers") {
 		t.Errorf("event log = %q", got.String())
