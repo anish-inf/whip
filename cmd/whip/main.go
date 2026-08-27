@@ -10,6 +10,7 @@ import (
 	"github.com/context-labs/whip/internal/config"
 	"github.com/context-labs/whip/internal/llm"
 	"github.com/context-labs/whip/internal/tui"
+	"github.com/context-labs/whip/internal/update"
 )
 
 var version = "dev" // set via -ldflags "-X main.version=..."
@@ -110,6 +111,11 @@ func main() {
 		_ = agent.New(llm.New(prov.BaseURL, "bench"), id, mdl.MaxTokens, systemPrompt())
 		return
 	}
+
+	// Update check: concurrent with the trust prompt and agent setup, so its
+	// ~1 RTT is usually free — and when startup wins the race, the recorded
+	// notice still shows on the next launch.
+	go update.Check(version)
 	tui.Version = version // /report names the build in the bug-report bundle
 	sessionID, err := tui.Run(cfg, *modelFlag, *providerFlag, systemPrompt(), *resumeFlag, *cautiousFlag)
 	if err != nil {
