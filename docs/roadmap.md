@@ -40,8 +40,8 @@ parallel tool calls and background subagents).
 ## Transcript & rendering
 
 - [x] Markdown rendering for assistant messages (glamour, hardcoded dark style — no OSC background query; finalized segments + resumed transcripts render rich, in-flight streaming stays plain text; right-padding stripped, body aligned under the "● " marker)
-- [x] Diff view for `edit` tool results (pi edit tool returns `details: {diff, patch, firstChangedLine}` — `packages/agent/src/harness/tools/edit.ts`; opencode picks split vs unified by terminal width >120)
-- [x] Tool rows: icon + present-participle verb while running ("Reading file…"), collapse to one line on completion, red + expandable on failure (opencode `routes/session/index.tsx:1836`, `util/collapse-tool-output.ts` — 19 lines)
+- [x] Diff view for `edit` tool results (pi edit tool returns `details: {diff, patch, firstChangedLine}` — `packages/agent/src/harness/tools/edit.ts`; opencode picks split vs unified by terminal width >120) — claude-style: line-numbered diffs from the tools (`edit` and overwriting `write`), rendered with red/green bands under a "⎿ Added N lines, removed M lines" summary; diffs re-render on resume
+- [x] Tool rows: icon + present-participle verb while running ("Reading file…"), collapse on completion to a claude-style `● Verb(subject)` header that keeps the path/command visible, result under a `⎿` marker, red on failure (opencode `routes/session/index.tsx:1836`; claude-code header/summary shape)
 - [x] Render tool calls as they stream, before execution starts (pi: `message_update` spawns `ToolExecutionComponent` keyed by tool-call id)
 - [x] Spinner with elapsed time + token count (% of context window) in status line (opencode `routes/session/footer.tsx`) — cost part done (status line shows session spend when the provider advertises pricing)
 - [ ] Toast-style transient notifications for command success/failure (opencode `ui/toast.tsx` — 102 lines)

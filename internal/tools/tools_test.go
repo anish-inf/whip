@@ -182,3 +182,41 @@ func TestBashToolInteractiveHook(t *testing.T) {
 		t.Fatalf("non-interactive output wrong: %q", out)
 	}
 }
+
+// editDiff numbers rows from the file's absolute line when startLine > 0,
+// renders unnumbered rows at 0, and caps runaway diffs.
+func TestEditDiffLineNumbers(t *testing.T) {
+	d := editDiff("ctx\nold\ntail", "ctx\nnew\ntail", 10)
+	want := "10   ctx\n11 - old\n11 + new\n12   tail"
+	if d != want {
+		t.Fatalf("numbered diff:\n%s\nwant:\n%s", d, want)
+	}
+	if d := editDiff("old", "new", 0); d != "- old\n+ new" {
+		t.Fatalf("unnumbered diff: %q", d)
+	}
+	if editDiff("same", "same", 5) != "" {
+		t.Fatal("identical strings should yield no diff")
+	}
+	big := strings.Repeat("x\n", editDiffMaxLines+50)
+	if d := editDiff("", big, 1); !strings.Contains(d, "more lines") {
+		t.Fatal("oversized diff should carry the cap marker")
+	}
+}
+
+// An overwrite carries an absolute-numbered diff; a fresh file does not.
+func TestWriteToolDiffOnOverwrite(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "f.txt")
+	w := writeTool()
+	out, err := w.Run(context.Background(), json.RawMessage(`{"path":"`+p+`","content":"a\nb\n"}`))
+	if err != nil || strings.Contains(out, "```diff") {
+		t.Fatalf("fresh write should carry no diff: %q, %v", out, err)
+	}
+	out, err = w.Run(context.Background(), json.RawMessage(`{"path":"`+p+`","content":"a\nc\n"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "```diff") || !strings.Contains(out, "2 - b") || !strings.Contains(out, "2 + c") {
+		t.Fatalf("overwrite should diff with absolute line numbers: %q", out)
+	}
+}

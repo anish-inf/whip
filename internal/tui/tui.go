@@ -771,14 +771,20 @@ func (m *model) seedTranscript(msgs []llm.Message, base int) {
 				m.blocks = append(m.blocks, block{kind: blockAssistant, text: strings.TrimRight(msg.TextContent(), "\n")})
 			}
 			for _, tc := range msg.ToolCalls {
-				m.blocks = append(m.blocks, block{kind: blockText, text: toolStyle.Render("⚒ "+tc.Function.Name+" ") + dimStyle.Render(tc.Function.Arguments)})
+				m.blocks = append(m.blocks, block{kind: blockText, text: toolHeaderRow(tc.Function.Name, tc.Function.Arguments, false)})
 			}
 		case "tool":
 			// Synthetic results synthesized at load for interrupted calls get
-			// an inline row so the user sees what the model sees; real tool
-			// results stay folded under their assistant block.
-			if strings.HasPrefix(msg.Content, "Error: tool call interrupted") {
+			// an inline row so the user sees what the model sees; diffs from
+			// write/edit results re-render so a resumed transcript still shows
+			// what changed; other results stay folded under their call row.
+			switch {
+			case strings.HasPrefix(msg.Content, "Error: tool call interrupted"):
 				m.blocks = append(m.blocks, block{kind: blockText, text: errStyle.Render("⚒ "+msg.Name+" ") + dimStyle.Render("— interrupted: session ended before a result was recorded")})
+			default:
+				if diff, _ := extractDiff(strings.TrimRight(msg.Content, "\n")); diff != "" {
+					m.blocks = append(m.blocks, block{kind: blockTool, text: msg.Content})
+				}
 			}
 		}
 		for len(m.msgBlock) <= base+i {
@@ -1048,6 +1054,11 @@ type block struct {
 	toolID      string
 	toolRunning bool
 	toolFailed  bool
+	// toolName/toolArgs are the raw call, kept so the completed row can render
+	// the claude-style "Verb(subject)" header (the collapse must not lose the
+	// path/command the call was about).
+	toolName string
+	toolArgs string
 	// live is the latest partial-output snapshot for a running bash call,
 	// rendered under the verb line; cleared when the tool ends.
 	live string
@@ -1086,43 +1097,36 @@ func (b block) render(width int) string {
 		body := indentLines(renderMarkdown(b.text, w), 2)
 		return botStyle.Render("● ") + strings.TrimPrefix(body, "  ")
 	case blockTool:
+		// A result carrying a fenced diff (write/edit) renders claude-style:
+		// "⎿ Added N lines, removed M lines" over a colored, line-numbered
+		// diff — the change IS the collapsed view, not hidden behind expand.
+		if diff, rest := extractDiff(strings.TrimRight(b.text, "\n")); diff != "" {
+			return renderDiffResult(diff, rest, b.expanded, width)
+		}
 		lines := strings.Split(strings.TrimRight(b.text, "\n"), "\n")
+		lines[0] = "⎿ " + lines[0] // tie the result to its header row above
+		style := dimStyle
+		if strings.HasPrefix(b.text, "Error") {
+			style = errStyle // failures read at a glance, like the red header
+		}
 		if b.expanded || len(lines) <= toolPreviewLines {
-			return wrap(dimStyle.Render("  "+strings.Join(lines, "\n  ")), width)
+			return wrap(style.Render("  "+strings.Join(lines, "\n  ")), width)
 		}
 		preview := lines[:toolPreviewLines]
-		// An edit-style result carries a fenced diff at the tail; surface its
-		// -/+ lines in the collapsed preview so the change shows without
-		// expanding.
-		if strings.HasSuffix(lines[len(lines)-1], "```") {
-			var diffs []string
-			for _, l := range lines {
-				if strings.HasPrefix(l, "-") || strings.HasPrefix(l, "+") {
-					diffs = append(diffs, l)
-				}
-			}
-			if len(diffs) > 0 {
-				preview = append(preview, diffs...)
-			}
-		}
-		out := dimStyle.Render("  " + strings.Join(preview, "\n  "))
+		out := style.Render("  " + strings.Join(preview, "\n  "))
 		hint := fmt.Sprintf("\n  … +%d lines (ctrl+e or click to expand)", len(lines)-toolPreviewLines)
 		return wrap(out+dimStyle.Render(hint), width)
 	case blockToolRun:
 		// While running, the verb line shows in full with the live output
 		// tail under it. On completion the same block collapses in place to
-		// one line (red on failure); ctrl+e expands.
+		// its header row ("● Update(path)" — styles baked in by toolEndMsg).
 		if b.toolRunning || b.expanded {
 			if b.live != "" && b.toolRunning {
 				return wrap(b.text, width) + "\n" + wrap(dimStyle.Render("  "+b.live), width)
 			}
 			return wrap(b.text, width)
 		}
-		line := ansi.Truncate(b.text, width, "…")
-		if b.toolFailed {
-			return wrap(errStyle.Render(line), width)
-		}
-		return wrap(dimStyle.Render(line), width)
+		return ansi.Truncate(b.text, width, "…")
 	default:
 		return wrap(b.text, width)
 	}
@@ -1733,7 +1737,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// command being run is always fully visible). On toolEndMsg the same
 		// block collapses in place to one line.
 		row := toolStyle.Render("⚒ "+toolVerb(msg.name)+" ") + dimStyle.Render(args)
-		m.blocks = append(m.blocks, block{kind: blockToolRun, text: row, toolID: msg.id, toolRunning: true})
+		m.blocks = append(m.blocks, block{kind: blockToolRun, text: row, toolID: msg.id, toolRunning: true, toolName: msg.name, toolArgs: msg.args})
 		m.refreshVP()
 		return m, nil
 
@@ -1766,7 +1770,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				b.toolRunning = false
 				b.toolFailed = strings.HasPrefix(msg.result, "Error:")
 				b.live = ""
-				b.text = toolStyle.Render("⚒ "+msg.name+" ") + dimStyle.Render(firstLine(msg.result))
+				// the completed row keeps the call visible ("Update(path)",
+				// "Bash(cmd)") — the result renders in the blockTool below it
+				b.text = toolHeaderRow(msg.name, b.toolArgs, b.toolFailed)
 				b.stale = true
 				break
 			}
