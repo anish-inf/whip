@@ -34,6 +34,42 @@ Tests: `parallel_test.go` — `TestToolCallsRunInParallel` (overlap measured via
 a concurrency counter), `TestSamePathEditsSerialize`, `TestToolMutationPath`,
 `TestCanonicalPathKey`.
 
+### Bash output feedback: live streaming + truncation spill
+
+Two ways a bash command stops being a black box (pi's bash tool has both):
+
+- **Streamed partial output.** `bashrun.Options.OnUpdate` reports the
+  accumulated combined stdout/stderr at most every 100ms
+  (`bashrun.updateInterval`) from a snapshot ticker goroutine owned by the
+  run — it snapshots the shared buffer under the drains' mutex and exits on a
+  done-channel close when `runPiped` returns (one trailing tick may land after
+  return; the TUI's `toolRunning` check makes it a no-op). The TUI callback
+  uses a detached `go p.Send(...)`, so a wedged UI queue can never park the
+  ticker goroutine (docs/concurrency.md's ABBA rule). The bash
+  tool receives the callback through a **per-call context value**
+  (`tools.WithOnUpdate`), not a package var, so parallel tool calls can't
+  cross wires; `agent.runTools` attaches it when `Events.OnToolOutput` is set
+  and the call is bash. The TUI (`toolOutputMsg`) renders the last three
+  non-empty lines under the running tool row's verb line (`block.live`);
+  `toolEndMsg` clears it and collapses the row as before. The final output
+  still arrives via the tool result — snapshots are progress, never state.
+- **Truncation spill.** When combined output exceeds `maxOutput` (50KB) and
+  `TruncateTail` fires, `bashrun.Spill` writes the **full** bytes to
+  `$TMPDIR/whip-bash-<pid>/*.log` (0600, OS-reaped) and the tool result
+  appends `[full output (N bytes): <path>]` so the model can read/grep the
+  head it never saw. Spill failure degrades silently — a broken temp dir must
+  not cost the tool result.
+
+Tests: `internal/tools/bashrun/feedback_test.go` — `TestOnUpdateThrottle`
+(≥95ms between fires, prefix-growing snapshots), `TestOnUpdateNil`,
+`TestOnUpdateFastCommand`, `TestSpill` (content round-trip + 0600 perms);
+`internal/tools/bash_feedback_test.go` — `TestBashToolSpillOnTruncation`
+(notice + file holds the truncated-away head), `TestBashToolNoSpillUnderCap`,
+`TestBashToolOnUpdateCtx`; `internal/agent/tool_output_test.go` —
+`TestOnToolOutputStreamsBash` (event carries the tool-call id, fires mid-run);
+`internal/tui/tool_output_test.go` — `TestToolOutputMsgUpdatesRunningRow`
+(unknown id ignored, tail replaces, end clears), `TestLastLines`.
+
 ### Compaction
 
 When the conversation fills the context window, old turns fold into an

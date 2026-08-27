@@ -16,15 +16,18 @@ import (
 
 // Events receives streaming callbacks during a turn. All fields are optional.
 type Events struct {
-	OnText      func(delta string)               // assistant text as it streams
-	OnThink     func(delta string)               // reasoning/thinking tokens as they stream
-	OnToolStart func(id, name, args string)      // a tool call is about to run
-	OnToolEnd   func(id, name, result string)    // a tool call finished
-	OnSteer     func(text string)                // a steered message was injected
-	OnCompact   func(took, kept int)             // context was auto-compacted (messages removed/kept)
-	OnCompacted func(summary string, cutoff int) // a compaction ran; record it (raw log survives)
-	OnUsage     func(u llm.Usage)                // a request reported its token usage
-	OnRetry     func(ev llm.RetryEvent)          // a transient request failure is being retried
+	OnText      func(delta string)            // assistant text as it streams
+	OnThink     func(delta string)            // reasoning/thinking tokens as they stream
+	OnToolStart func(id, name, args string)   // a tool call is about to run
+	OnToolEnd   func(id, name, result string) // a tool call finished
+	// OnToolOutput streams partial output for a running tool call (bash only —
+	// throttled snapshots, ~100ms apart). Fires from tool worker goroutines.
+	OnToolOutput func(id, outputSoFar string)
+	OnSteer      func(text string)                // a steered message was injected
+	OnCompact    func(took, kept int)             // context was auto-compacted (messages removed/kept)
+	OnCompacted  func(summary string, cutoff int) // a compaction ran; record it (raw log survives)
+	OnUsage      func(u llm.Usage)                // a request reported its token usage
+	OnRetry      func(ev llm.RetryEvent)          // a transient request failure is being retried
 }
 
 // Agent holds one conversation.
@@ -424,7 +427,13 @@ func (a *Agent) runTools(ctx context.Context, calls []llm.ToolCall, ev Events) [
 				ev.OnToolStart(tc.ID, name, args)
 			}
 			start := time.Now()
-			out := tools.Execute(ctx, a.AllTools(), name, json.RawMessage(args))
+			callCtx := ctx
+			if ev.OnToolOutput != nil && name == "bash" {
+				callCtx = tools.WithOnUpdate(ctx, func(soFar string) {
+					ev.OnToolOutput(tc.ID, soFar)
+				})
+			}
+			out := tools.Execute(callCtx, a.AllTools(), name, json.RawMessage(args))
 			ms := time.Since(start).Milliseconds()
 			if ev.OnToolEnd != nil {
 				ev.OnToolEnd(tc.ID, name, out)

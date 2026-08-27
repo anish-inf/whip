@@ -50,6 +50,18 @@ func All() []Tool {
 	return []Tool{bashTool(), readTool(), writeTool(), editTool()}
 }
 
+// updateKey carries a per-tool-call partial-output callback. The agent layer
+// attaches it to the ctx for one call (a context value, not a package var, so
+// parallel tool calls can't cross wires); the bash tool forwards it to
+// bashrun's OnUpdate. Non-callers (whip run, tests) simply don't set it.
+type updateKey struct{}
+
+// WithOnUpdate returns a ctx that makes the bash tool report throttled partial
+// output snapshots for this one call.
+func WithOnUpdate(ctx context.Context, onUpdate func(outputSoFar string)) context.Context {
+	return context.WithValue(ctx, updateKey{}, onUpdate)
+}
+
 // Defs returns the llm.Tool definitions for a tool set.
 func Defs(ts []Tool) []llm.Tool {
 	defs := make([]llm.Tool, len(ts))
@@ -155,12 +167,24 @@ func bashTool() Tool {
 				return TruncateTail(out), nil
 			}
 
+			var onUpdate func(string)
+			if cb, ok := ctx.Value(updateKey{}).(func(string)); ok {
+				onUpdate = cb
+			}
 			res := bashrun.Run(ctx, bashrun.Options{
-				Command: a.Command,
-				Timeout: dur,
+				Command:  a.Command,
+				Timeout:  dur,
+				OnUpdate: onUpdate,
 			})
 
 			s := TruncateTail(res.Output)
+			if len(res.Output) > maxOutput {
+				// The model only sees the tail; give it a way to reach the
+				// rest (pi spills truncated bash output to a file too).
+				if path := bashrun.Spill(res.Output); path != "" {
+					s += fmt.Sprintf("\n[full output (%d bytes): %s]", len(res.Output), path)
+				}
+			}
 			if res.TimedOut {
 				return s + "\n(command timed out)", nil
 			}
