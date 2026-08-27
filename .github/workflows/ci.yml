@@ -57,7 +57,7 @@ jobs:
         run: go vet ./...
 
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v8
+        uses: golangci/golangci-lint-action@v9
         with:
           # Pinned: "latest" is a moving target and older releases can't parse
           # Go 1.27 export data. Bump deliberately alongside the Go toolchain.
