@@ -43,7 +43,7 @@ func TestStreamStripsAuthoredFlag(t *testing.T) {
 
 	sent := time.Now()
 	msgs := []Message{{Role: "user", Content: "typed by me", Authored: true, SentAt: &sent}}
-	if _, _, err := New(srv.URL, "test-key").Stream(context.Background(), Request{Model: "m", Messages: msgs}, nil, nil); err != nil {
+	if _, _, err := New(srv.URL, "test-key").Stream(context.Background(), Request{Model: "m", Messages: msgs}, nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(string(body), "authored") {
@@ -113,7 +113,7 @@ func TestStreamTextAndToolCalls(t *testing.T) {
 	defer srv.Close()
 
 	var streamed strings.Builder
-	msg, _, err := New(srv.URL, "test-key").Stream(context.Background(), Request{Model: "m"}, func(d string) { streamed.WriteString(d) }, nil)
+	msg, _, err := New(srv.URL, "test-key").Stream(context.Background(), Request{Model: "m"}, func(d string) { streamed.WriteString(d) }, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,6 +129,39 @@ func TestStreamTextAndToolCalls(t *testing.T) {
 	}
 }
 
+// onToolCall fires for each streaming tool-call delta once the call has an
+// id, with the id/name/args snapshot at that point — so the UI can render a
+// pending row before execution. A nil onToolCall must not panic.
+func TestStreamOnToolCallFiresPerDelta(t *testing.T) {
+	srv := sseServer(t,
+		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","type":"function","function":{"name":"ba","arguments":"{\"comm"}}]}}]}`,
+		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"name":"sh","arguments":"and\":\"ls\"}"}}]}}]}`,
+		`data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}`,
+		`data: [DONE]`,
+	)
+	defer srv.Close()
+
+	type snap struct{ id, name, args string }
+	var got []snap
+	_, _, err := New(srv.URL, "test-key").Stream(context.Background(), Request{Model: "m"}, nil, nil,
+		func(id, name, args string) { got = append(got, snap{id, name, args}) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) < 2 {
+		t.Fatalf("onToolCall should fire per delta once the id exists, got %d calls: %+v", len(got), got)
+	}
+	for _, s := range got {
+		if s.id != "c1" {
+			t.Fatalf("snapshot missing id: %+v", s)
+		}
+	}
+	last := got[len(got)-1]
+	if last.name != "bash" || last.args != `{"command":"ls"}` {
+		t.Fatalf("final snapshot should have the assembled name+args, got %+v", last)
+	}
+}
+
 func TestStreamLengthDiscardsToolCalls(t *testing.T) {
 	srv := sseServer(t,
 		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"bash","arguments":"{\"comm"}}]}}]}`,
@@ -137,7 +170,7 @@ func TestStreamLengthDiscardsToolCalls(t *testing.T) {
 	)
 	defer srv.Close()
 
-	msg, _, err := New(srv.URL, "test-key").Stream(context.Background(), Request{Model: "m"}, nil, nil)
+	msg, _, err := New(srv.URL, "test-key").Stream(context.Background(), Request{Model: "m"}, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +185,7 @@ func TestStreamLengthDiscardsToolCalls(t *testing.T) {
 func TestStreamAPIError(t *testing.T) {
 	srv := sseServer(t, `data: {"error":{"message":"boom"}}`)
 	defer srv.Close()
-	_, _, err := New(srv.URL, "test-key").Stream(context.Background(), Request{Model: "m"}, nil, nil)
+	_, _, err := New(srv.URL, "test-key").Stream(context.Background(), Request{Model: "m"}, nil, nil, nil)
 	if err == nil || !strings.Contains(err.Error(), "boom") {
 		t.Fatalf("expected api error, got %v", err)
 	}
@@ -170,7 +203,7 @@ func TestStreamReasoningRoutedToOnThink(t *testing.T) {
 
 	var think, text strings.Builder
 	msg, _, err := New(srv.URL, "test-key").Stream(context.Background(), Request{Model: "m"},
-		func(d string) { text.WriteString(d) }, func(d string) { think.WriteString(d) })
+		func(d string) { text.WriteString(d) }, func(d string) { think.WriteString(d) }, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,7 +220,7 @@ func TestStreamHTTPError(t *testing.T) {
 	srv := sseServer(t)
 	defer srv.Close()
 	c.BaseURL = srv.URL
-	_, _, err := c.Stream(context.Background(), Request{Model: "m"}, nil, nil)
+	_, _, err := c.Stream(context.Background(), Request{Model: "m"}, nil, nil, nil)
 	if err == nil || !strings.Contains(err.Error(), "401") {
 		t.Fatalf("expected 401 error, got %v", err)
 	}
@@ -202,12 +235,12 @@ func TestNewTool(t *testing.T) {
 
 func TestStreamTransportErrors(t *testing.T) {
 	noSleep(t) // connection-refused is retryable; don't burn real backoff
-	if _, _, err := New("http://\x7f", "k").Stream(context.Background(), Request{}, nil, nil); err == nil {
+	if _, _, err := New("http://\x7f", "k").Stream(context.Background(), Request{}, nil, nil, nil); err == nil {
 		t.Fatal("expected bad-url error")
 	}
 	srv := sseServer(t)
 	srv.Close() // connection refused
-	if _, _, err := New(srv.URL, "test-key").Stream(context.Background(), Request{}, nil, nil); err == nil {
+	if _, _, err := New(srv.URL, "test-key").Stream(context.Background(), Request{}, nil, nil, nil); err == nil {
 		t.Fatal("expected connection error")
 	}
 }
@@ -269,7 +302,7 @@ func TestStreamUsageParsed(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, u, err := New(srv.URL, "k").Stream(context.Background(), Request{Model: "m"}, nil, nil)
+	_, u, err := New(srv.URL, "k").Stream(context.Background(), Request{Model: "m"}, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
