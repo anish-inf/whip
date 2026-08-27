@@ -34,6 +34,7 @@ import (
 	"github.com/context-labs/whip/internal/skills"
 	"github.com/context-labs/whip/internal/tools"
 	"github.com/context-labs/whip/internal/tools/bashrun"
+	"github.com/context-labs/whip/internal/update"
 
 	"github.com/charmbracelet/x/ansi"
 	"github.com/muesli/termenv"
@@ -176,6 +177,10 @@ type model struct {
 	themeHow     string // how auto theme detection resolved (env var, OSC query, …) — captured at startup/theme change for /report; never re-queried
 	compactModel string // config model name for compaction summaries; "" = the built-in default
 	compactProv  string
+	// updateLatest is a pending newer release tag ("" when none), picked up
+	// from update.Pending at startup; the notice it renders is durable, so a
+	// check that lands after the report still shows next launch.
+	updateLatest string
 	effortX      int                       // screen column where the clickable ⚡ effort control starts
 	catalogs     map[string]config.Catalog // provider model lists (capabilities)
 	mcpMgr       *mcp.Manager              // MCP server connections; nil when none configured
@@ -378,6 +383,11 @@ func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string, ca
 			return "", err
 		}
 	}
+	// Pick up whatever the update check recorded: a notice from an earlier
+	// launch always shows; one discovered by main's background check shows
+	// this launch if its 1 RTT beats startup (first-run trust prompt), else
+	// next launch — the record is durable either way.
+	m.updateLatest = update.Pending(Version)
 	m.startupReport()
 
 	// Inline rendering (no alt-screen): the transcript lives in the normal
@@ -498,6 +508,10 @@ func (m *model) startupReport() {
 		if len(parts) > 0 {
 			line("mcp: %s", strings.Join(parts, " · "))
 		}
+	}
+	if m.updateLatest != "" {
+		line("update available: %s (run: whip update)", m.updateLatest)
+		warned = true
 	}
 	if b.Len() == 0 {
 		return

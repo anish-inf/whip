@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+
+	"github.com/context-labs/whip/internal/update"
 )
 
 // installURL is the same curl-pipe-sh installer the README documents; update
@@ -22,6 +24,7 @@ func updateCLI() error {
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("update failed: %w", err)
 	}
+	update.Acknowledge() // the pending startup notice is now satisfied
 	fmt.Println("\nwhip updated — restart any running sessions to use the new version.")
 	return nil
 }
