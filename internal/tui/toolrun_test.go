@@ -30,14 +30,24 @@ func TestToolRowCollapsesOnCompletion(t *testing.T) {
 	if row.toolRunning {
 		t.Fatal("completion should stop the run state")
 	}
-	if got := ansi.Strip(row.render(m.width)); strings.Count(got, "\n") > 0 {
+	got := ansi.Strip(row.render(m.width))
+	if strings.Count(got, "\n") > 0 {
 		t.Fatalf("completed row should collapse to one line, got %q", got)
 	}
-	if !row.toggle() {
-		t.Fatal("ctrl+e should expand the collapsed row")
+	// the collapse keeps the call visible, claude-style: Verb(subject)
+	if !strings.Contains(got, "Read(foo.go)") {
+		t.Fatalf("completed row should keep the call header, got %q", got)
 	}
-	if got := ansi.Strip(row.render(m.width)); !strings.Contains(got, "file body") {
-		t.Fatalf("expanded row should show the result, got %q", got)
+	// the result renders in the blockTool below, tied by the ⎿ marker
+	res := m.blocks[len(m.blocks)-1]
+	if res.kind != blockTool {
+		t.Fatal("the result block should follow the run row")
+	}
+	if got := ansi.Strip(res.render(m.width)); !strings.Contains(got, "⎿ file body") {
+		t.Fatalf("result block should show the result under ⎿, got %q", got)
+	}
+	if !row.toggle() {
+		t.Fatal("ctrl+e should still toggle the collapsed row")
 	}
 }
 
@@ -56,8 +66,12 @@ func TestToolRowFailureIsRed(t *testing.T) {
 	if run == nil || !run.toolFailed {
 		t.Fatal("a failed tool should mark the collapsed row")
 	}
-	if got := run.render(m.width); !strings.Contains(got, "31") && !strings.Contains(got, "Error") {
-		// errStyle is red (ansi 31) in most themes; at minimum the text shows
-		t.Fatalf("failed row should render the error, got %q", got)
+	if got := ansi.Strip(run.render(m.width)); !strings.Contains(got, "Bash(false)") {
+		t.Fatalf("failed row should keep the call header, got %q", got)
+	}
+	// the error text renders red in the result block below
+	res := m.blocks[len(m.blocks)-1]
+	if got := ansi.Strip(res.render(m.width)); !strings.Contains(got, "Error: exit status 1") {
+		t.Fatalf("result block should carry the error text, got %q", got)
 	}
 }

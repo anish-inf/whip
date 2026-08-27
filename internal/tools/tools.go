@@ -252,6 +252,8 @@ func writeTool() Tool {
 			if deny := checkGate("write", a.Path); deny != "" {
 				return "", errors.New(deny)
 			}
+			// old content (if any) so an overwrite reports what changed
+			old, oldErr := os.ReadFile(a.Path)
 			//nolint:gosec // workspace files get the user default perms
 			if err := os.MkdirAll(filepath.Dir(a.Path), 0o755); err != nil {
 				return "", err
@@ -260,7 +262,16 @@ func writeTool() Tool {
 			if err := os.WriteFile(a.Path, []byte(a.Content), 0o644); err != nil {
 				return "", err
 			}
-			return fmt.Sprintf("Wrote %d bytes to %s", len(a.Content), a.Path) + lspDiagnostics(ctx, a.Path), nil
+			out := fmt.Sprintf("Wrote %d bytes to %s", len(a.Content), a.Path)
+			// overwrites carry a diff so the change is reviewable (a fresh file
+			// is all-new — the content itself is right above in the call args).
+			// The whole file diffs from line 1, so the numbers are absolute.
+			if oldErr == nil {
+				if d := editDiff(string(old), a.Content, 1); d != "" {
+					out += "\n```diff\n" + d + "\n```"
+				}
+			}
+			return out + lspDiagnostics(ctx, a.Path), nil
 		},
 	}
 }
@@ -301,7 +312,13 @@ func editTool() Tool {
 				return "", err
 			}
 			out := fmt.Sprintf("Replaced %d occurrence(s) in %s", n, a.Path)
-			if d := editDiff(a.OldString, a.NewString); d != "" {
+			// line numbers are only meaningful for a single occurrence; a
+			// replace_all diff renders unnumbered (startLine 0)
+			startLine := 0
+			if n == 1 {
+				startLine = 1 + strings.Count(string(data)[:strings.Index(string(data), a.OldString)], "\n")
+			}
+			if d := editDiff(a.OldString, a.NewString, startLine); d != "" {
 				out += "\n```diff\n" + d + "\n```"
 			}
 			return out + lspDiagnostics(ctx, a.Path), nil
@@ -312,7 +329,13 @@ func editTool() Tool {
 // editDiff renders the changed region of an edit as a compact unified-ish
 // diff: one line of common context on each side of the first/last changed
 // lines, "- old"/"+ new" pairs in between. "" when old and new are identical.
-func editDiff(oldS, newS string) string {
+//
+// startLine is the 1-based file line the old snippet starts on; when > 0
+// every row is prefixed with its absolute line number ("1528 - old",
+// "1528 + new", "1527   ctx" — removed lines numbered in the old file, added
+// lines in the new one). 0 renders the unnumbered form ("- old" / "+ new").
+// The diff is capped at editDiffMaxLines rows; the marker names the rest.
+func editDiff(oldS, newS string, startLine int) string {
 	o := strings.Split(strings.TrimSuffix(oldS, "\n"), "\n")
 	n := strings.Split(strings.TrimSuffix(newS, "\n"), "\n")
 	p := 0
@@ -327,23 +350,40 @@ func editDiff(oldS, newS string) string {
 		return ""
 	}
 	var b strings.Builder
-	ctxLine := func(prefix, line string) {
+	rows := 0
+	row := func(num int, mark, line string) {
+		rows++
+		if rows > editDiffMaxLines {
+			return
+		}
 		if len(line) > 200 {
 			line = line[:200] + "…"
 		}
-		b.WriteString(prefix + line + "\n")
+		if startLine > 0 {
+			fmt.Fprintf(&b, "%d %s %s\n", num, mark, line)
+		} else {
+			fmt.Fprintf(&b, "%s %s\n", mark, line)
+		}
 	}
 	if p > 0 {
-		ctxLine(" ", o[p-1])
+		row(startLine+p-1, " ", o[p-1])
 	}
-	for _, l := range o[p : len(o)-s] {
-		ctxLine("-", l)
+	for i, l := range o[p : len(o)-s] {
+		row(startLine+p+i, "-", l)
 	}
-	for _, l := range n[p : len(n)-s] {
-		ctxLine("+", l)
+	for i, l := range n[p : len(n)-s] {
+		row(startLine+p+i, "+", l)
 	}
 	if s > 0 {
-		ctxLine(" ", o[len(o)-1])
+		row(startLine+len(o)-1, " ", o[len(o)-1])
 	}
-	return strings.TrimSuffix(b.String(), "\n")
+	out := strings.TrimSuffix(b.String(), "\n")
+	if rows > editDiffMaxLines {
+		out += fmt.Sprintf("\n… +%d more lines", rows-editDiffMaxLines)
+	}
+	return out
 }
+
+// editDiffMaxLines bounds a diff so a whole-file rewrite can't flood the tool
+// result (the full content is already in the call args).
+const editDiffMaxLines = 200

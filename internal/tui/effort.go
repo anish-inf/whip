@@ -1,8 +1,10 @@
 package tui
 
-import "slices"
+import (
+	"slices"
 
-import "github.com/context-labs/whip/internal/config"
+	"github.com/context-labs/whip/internal/config"
+)
 
 // defaultEfforts are the fallback levels when the provider doesn't advertise
 // supported reasoning efforts; "" means off (parameter omitted from requests).

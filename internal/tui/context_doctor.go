@@ -54,7 +54,7 @@ func (m *model) doctorReport() string {
 		dir  string // the skills dir the SKILL.md lives under
 		n    int
 	}
-	var per []sc
+	per := make([]sc, 0, len(sk))
 	for _, s := range sk {
 		n := len(s.Name) + min(len(s.Description), 300) + len(s.Path) + 8
 		per = append(per, sc{s.Name, filepath.Dir(filepath.Dir(s.Path)), n})
