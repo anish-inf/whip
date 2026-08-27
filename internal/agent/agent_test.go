@@ -196,7 +196,12 @@ func TestTurnAPIError(t *testing.T) {
 		http.Error(w, "nope", http.StatusInternalServerError)
 	}))
 	defer srv.Close()
-	ag := New(llm.New(srv.URL, "k"), "m", 100, "sys")
+	// Single attempt: this test is about the error surfacing from Turn, not
+	// about the retry ladder (covered in internal/llm/retry_test.go). Leaving
+	// retries on made it sleep through the full backoff — ~80s for one assert.
+	c := llm.New(srv.URL, "k")
+	c.MaxRetries = 1
+	ag := New(c, "m", 100, "sys")
 	if _, err := ag.Turn(context.Background(), "go", Events{}); err == nil {
 		t.Fatal("expected error")
 	}
@@ -568,7 +573,12 @@ func TestCompactThresholdExplicitOverride(t *testing.T) {
 
 	// CompactThreshold wins over the default: same history at the default 50%
 	// would have compacted
-	ag2 := New(llm.New(srv.URL, "m"), "m", 100, "sys")
+	// The compaction call fails here by design (textServer speaks SSE, compact
+	// uses the non-streaming Complete) — that failure is the signal compaction
+	// was attempted. Single attempt so the assert doesn't wait out the backoff.
+	c2 := llm.New(srv.URL, "m")
+	c2.MaxRetries = 1
+	ag2 := New(c2, "m", 100, "sys")
 	ag2.ContextLimit = 1000
 	for range 8 {
 		ag2.Messages = append(ag2.Messages, llm.Message{Role: "user", Content: strings.Repeat("x", 360)})
@@ -687,6 +697,178 @@ func TestCompactKeepsToolCallPair(t *testing.T) {
 	}
 }
 
+// SteerImages queues a multimodal user message: the turn continues past it
+// and the injected message carries both the text and the image parts.
+func TestSteerImagesInjectsParts(t *testing.T) {
+	srv := textServer(t, func(n int, req llm.Request) string {
+		if n == 2 {
+			return "ok2"
+		}
+		return "ok1"
+	})
+	defer srv.Close()
+
+	ag := New(llm.New(srv.URL, "k"), "m", 100, "sys")
+	ag.SteerImages("see the screenshot", []llm.ContentPart{llm.ImagePart("png", []byte("img-bytes"))})
+	final, err := ag.Turn(context.Background(), "go", Events{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if final != "ok2" {
+		t.Fatalf("turn should continue after the steered images, got %q", final)
+	}
+	var steered *llm.Message
+	for i := range ag.Messages {
+		if ag.Messages[i].Role == "user" && ag.Messages[i].Content == "see the screenshot" {
+			steered = &ag.Messages[i]
+		}
+	}
+	if steered == nil {
+		t.Fatal("steered message not in the conversation")
+	}
+	if len(steered.Parts) != 1 || steered.Parts[0].Type != "image_url" {
+		t.Fatalf("steered message should carry the image part: %+v", steered.Parts)
+	}
+}
+
+// AppendUser adds an unauthored user message outside a turn (the `!` shell
+// escape path).
+func TestAppendUser(t *testing.T) {
+	ag := New(llm.New("http://unused", "k"), "m", 100, "sys")
+	ag.AppendUser("shell output: ok")
+	last := ag.Messages[len(ag.Messages)-1]
+	if last.Role != "user" || last.Content != "shell output: ok" {
+		t.Fatalf("appended message: %+v", last)
+	}
+	if last.Authored {
+		t.Error("shared shell output is not an authored message")
+	}
+}
+
+// SetUsage seeds a resumed session's totals so AddUsage keeps counting from
+// there; ResetUsage zeroes them for /clear.
+func TestSetAndResetUsage(t *testing.T) {
+	ag := New(llm.New("http://unused", "k"), "m", 100, "sys")
+	ag.SetUsage(llm.Usage{PromptTokens: 11, CompletionTokens: 7})
+	ag.AddUsage(llm.Usage{PromptTokens: 4, CompletionTokens: 1})
+	if u := ag.Usage(); u.PromptTokens != 15 || u.CompletionTokens != 8 {
+		t.Fatalf("seeded totals should keep counting: %+v", u)
+	}
+	ag.ResetUsage()
+	if u := ag.Usage(); u.PromptTokens != 0 || u.CompletionTokens != 0 || u.Cached() != 0 {
+		t.Fatalf("reset should zero the totals: %+v", u)
+	}
+}
+
+// TurnWithImages is an authored submission carrying vision parts.
+func TestTurnWithImagesMarksAuthoredAndCarriesParts(t *testing.T) {
+	srv := textServer(t, func(n int, req llm.Request) string { return "done" })
+	defer srv.Close()
+
+	ag := New(llm.New(srv.URL, "k"), "m", 100, "sys")
+	parts := []llm.ContentPart{llm.ImagePart("png", []byte("shot"))}
+	final, err := ag.TurnWithImages(context.Background(), "what's in this image?", parts, Events{})
+	if err != nil || final != "done" {
+		t.Fatalf("%q %v", final, err)
+	}
+	user := ag.Messages[1]
+	if !user.Authored || user.SentAt == nil {
+		t.Errorf("an image submission is authored and timestamped: %+v", user)
+	}
+	if len(user.Parts) != 1 || user.Parts[0].Type != "image_url" {
+		t.Errorf("image parts lost: %+v", user.Parts)
+	}
+}
+
+// SetMCPTools makes the MCP set visible via AllTools and installs the
+// tools.Suggester, so a typo'd mcp__ call gets a "did you mean?" nudge.
+func TestSetMCPToolsInstallsSuggester(t *testing.T) {
+	orig := tools.Suggester
+	tools.Suggester = nil
+	t.Cleanup(func() { tools.Suggester = orig })
+
+	ag := New(llm.New("http://unused", "k"), "m", 100, "sys")
+	mt := tools.Tool{Def: llm.NewTool("mcp__srv__hello", "h", `{"type":"object"}`)}
+	ag.SetMCPTools([]tools.Tool{mt})
+
+	var found bool
+	for _, tl := range ag.AllTools() {
+		if tl.Def.Function.Name == "mcp__srv__hello" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("MCP tool missing from AllTools")
+	}
+	if tools.Suggester == nil {
+		t.Fatal("SetMCPTools should install the suggester")
+	}
+	// a near-miss call self-corrects through Execute's unknown-tool path
+	out := tools.Execute(context.Background(), ag.AllTools(), "mcp__srv__helo", json.RawMessage(`{}`))
+	if !strings.Contains(out, "did you mean") || !strings.Contains(out, "mcp__srv__hello") {
+		t.Fatalf("typo'd MCP call should suggest the live name, got %q", out)
+	}
+}
+
+// GoalFromContextMessages windows the conversation tail, never including the
+// system prompt, defaulting and clamping n.
+func TestGoalFromContextMessages(t *testing.T) {
+	if _, err := GoalFromContextMessages(nil, 0); err == nil {
+		t.Error("empty history should error")
+	}
+	sys := llm.Message{Role: "system", Content: "sys"}
+	if _, err := GoalFromContextMessages([]llm.Message{sys, {Role: "user", Content: "u"}}, 0); err == nil {
+		t.Error("a single message is not enough context")
+	}
+
+	msgs := []llm.Message{sys}
+	for i := range 12 {
+		msgs = append(msgs, llm.Message{Role: "user", Content: fmt.Sprintf("m%d", i)})
+	}
+	tail, err := GoalFromContextMessages(msgs, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tail) != GoalFromContextDefaultWindow || tail[0].Content != "m4" || tail[len(tail)-1].Content != "m11" {
+		t.Fatalf("default window wrong: %+v", tail)
+	}
+	if tail, _ = GoalFromContextMessages(msgs, 3); len(tail) != 3 || tail[0].Content != "m9" {
+		t.Fatalf("explicit window wrong: %+v", tail)
+	}
+	tail, err = GoalFromContextMessages(msgs, 100)
+	if err != nil || len(tail) != 12 {
+		t.Fatalf("oversized n should clamp to the conversation: %d %v", len(tail), err)
+	}
+	if tail[0].Role == "system" {
+		t.Error("the system prompt must never be in the goal window")
+	}
+}
+
+// BuildGoalFromContextPrompt renders the tail as a transcript inside the
+// goal-formulation instructions.
+func TestBuildGoalFromContextPrompt(t *testing.T) {
+	var tc llm.ToolCall
+	tc.Function.Name = "bash"
+	tc.Function.Arguments = `{"command":"go test"}`
+	tail := []llm.Message{
+		{Role: "user", Content: "fix the flaky test"},
+		{Role: "assistant", Content: "working on internal/foo", ToolCalls: []llm.ToolCall{tc}},
+		{Role: "tool", Content: "exit 1"},
+	}
+	p := BuildGoalFromContextPrompt(tail)
+	for _, want := range []string{
+		"user: fix the flaky test",
+		"assistant: working on internal/foo",
+		"assistant called bash(",
+		"tool result: exit 1",
+		"Write the goal now.",
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("goal prompt missing %q:\n%s", want, p)
+		}
+	}
+}
+
 func TestManualCompactFiresEvent(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(`{"choices":[{"message":{"content":"sim"}}]}`))
@@ -700,10 +882,48 @@ func TestManualCompactFiresEvent(t *testing.T) {
 		)
 	}
 	var fired bool
-	if err := ag.ManualCompact(context.Background(), Events{OnCompact: func(took, kept int) { fired = true }}); err != nil {
+	var gotSummary string
+	ev := Events{
+		OnCompact:   func(took, kept int) { fired = true },
+		OnCompacted: func(summary string, cutoff int) { gotSummary = summary },
+	}
+	if err := ag.ManualCompact(context.Background(), ev); err != nil {
 		t.Fatalf("manual compact: %v", err)
 	}
 	if !fired {
 		t.Fatal("OnCompact should fire for ManualCompact")
+	}
+	if gotSummary != "sim" {
+		t.Fatalf("OnCompacted summary = %q", gotSummary)
+	}
+
+	// Too little history: the error surfaces instead of a silent no-op.
+	empty := New(llm.New(srv.URL, "k"), "m", 100, "sys")
+	if err := empty.ManualCompact(context.Background(), Events{}); err == nil {
+		t.Fatal("ManualCompact on a fresh agent should report too little history")
+	}
+}
+
+// MessagesSnapshot hands out a copy — mutating it must not touch the agent's
+// transcript (the TUI reads it while a turn runs).
+func TestMessagesSnapshotIsACopy(t *testing.T) {
+	ag := New(nil, "m", 0, "sys")
+	ag.AppendUser("hello")
+	snap := ag.MessagesSnapshot()
+	if len(snap) != len(ag.Messages) {
+		t.Fatalf("snapshot len %d, agent %d", len(snap), len(ag.Messages))
+	}
+	snap[0].Content = "clobbered"
+	if ag.Messages[0].Content == "clobbered" {
+		t.Fatal("snapshot must not alias the agent's messages")
+	}
+}
+
+func TestTruncateField(t *testing.T) {
+	if got := truncateField("  a\nb  ", 10); got != "a b" {
+		t.Errorf("newlines/trim: %q", got)
+	}
+	if got := truncateField("abcdefghij", 5); got != "abcd…" {
+		t.Errorf("truncation: %q", got)
 	}
 }

@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/context-labs/whip/internal/config"
@@ -146,6 +148,24 @@ func TestAuthCLIDispatch(t *testing.T) {
 	}
 }
 
+// Without a terminal (tests, pipes) offerShellExport prints the manual
+// export line and never touches the rc file — appending needs a confirmed
+// [y/N], which needs a TTY.
+func TestOfferShellExportNonTTY(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	for _, shell := range []string{"/bin/zsh", "/bin/fish"} { // known rc target and none
+		t.Setenv("SHELL", shell)
+		out := captureStdout(t, func() { offerShellExport("sk-or-test") })
+		if !strings.Contains(out, "export "+config.OpenRouterEnvVar+"=sk-or-test") {
+			t.Errorf("SHELL=%s: manual export line missing:\n%s", shell, out)
+		}
+	}
+	if _, err := os.Stat(home + "/.zshrc"); !os.IsNotExist(err) {
+		t.Error("non-tty run must not create or modify the rc file")
+	}
+}
+
 func TestShellRC(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -160,5 +180,78 @@ func TestShellRC(t *testing.T) {
 		if got := shellRC(); got != c.want {
 			t.Errorf("SHELL=%q: got %q, want %q", c.shell, got, c.want)
 		}
+	}
+
+	// no home directory: nothing to append to, whatever the shell is
+	t.Setenv("HOME", "")
+	t.Setenv("SHELL", "/bin/zsh")
+	if got := shellRC(); got != "" {
+		t.Errorf("without a home directory shellRC should be empty, got %q", got)
+	}
+}
+
+// withStdin replaces os.Stdin with a pipe holding data for the test.
+func withStdin(t *testing.T, data string) {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.WriteString(data); err != nil {
+		t.Fatal(err)
+	}
+	w.Close()
+	old := os.Stdin
+	os.Stdin = r
+	t.Cleanup(func() { os.Stdin = old; r.Close() })
+}
+
+// An unparseable flag fails before anything is read or written, and an empty
+// answer at the prompt reports the missing key rather than calling the API.
+func TestAuthOpenRouterCLIArgs(t *testing.T) {
+	t.Setenv("WHIP_HOME", t.TempDir())
+	t.Setenv(config.OpenRouterEnvVar, "")
+
+	if err := authOpenRouterCLI([]string{"-nosuchflag"}); err == nil {
+		t.Error("an unknown flag should error")
+	}
+
+	withStdin(t, "\n") // prompt answered with a bare newline
+	err := authCLI([]string{"openrouter"})
+	if err == nil || !strings.Contains(err.Error(), "no API key provided") {
+		t.Errorf("an empty key should be reported, got %v", err)
+	}
+	if cfg, lerr := config.Load(); lerr == nil {
+		if _, ok := cfg.Providers["openrouter"]; ok {
+			t.Error("an empty key must not write a provider entry")
+		}
+	}
+}
+
+// A valid key still fails cleanly when the config can't be read, and nothing
+// is written.
+func TestAuthOpenRouterUnreadableConfig(t *testing.T) {
+	srv := fakeOpenRouter(t, "sk-or-good")
+	defer srv.Close()
+	unusableHome(t)
+
+	if err := authOpenRouter(srv.URL, "sk-or-good", false); err == nil {
+		t.Error("an unusable config dir should surface as an error")
+	}
+}
+
+// A validated key that can't be persisted is an error, not a silent no-op.
+func TestAuthOpenRouterUnwritableConfig(t *testing.T) {
+	srv := fakeOpenRouter(t, "sk-or-good")
+	defer srv.Close()
+	home := t.TempDir()
+	t.Setenv("WHIP_HOME", home)
+	if _, err := config.Load(); err != nil { // materialize the default config
+		t.Fatal(err)
+	}
+	freezeHome(t, home)
+
+	if err := authOpenRouter(srv.URL, "sk-or-good", false); err == nil {
+		t.Error("an unwritable config dir should surface as an error")
 	}
 }

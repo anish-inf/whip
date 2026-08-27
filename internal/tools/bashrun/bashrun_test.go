@@ -192,3 +192,24 @@ func TestUserShellResolution(t *testing.T) {
 		t.Fatalf("run via user shell: %+v", res)
 	}
 }
+
+func TestKeyBytes(t *testing.T) {
+	cases := map[string]string{
+		"enter":     KeyEnter,
+		"esc":       KeyEsc,
+		"tab":       KeyTab,
+		"backspace": KeyBS,
+		"delete":    KeyBS,
+		"up":        KeyUp,
+		"down":      KeyDown,
+		"right":     KeyRight,
+		"left":      KeyLeft,
+		"bogus":     "",
+		"":          "",
+	}
+	for name, want := range cases {
+		if got := KeyBytes(name); got != want {
+			t.Errorf("KeyBytes(%q) = %q, want %q", name, got, want)
+		}
+	}
+}

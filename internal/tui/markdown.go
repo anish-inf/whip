@@ -17,9 +17,9 @@ import (
 // Falls back to the raw input when parsing fails — a degraded transcript is
 // never worth a broken one.
 //
-// The style is a hardcoded dark variant (never WithEnvironmentConfig): an
-// OSC background query mid-session can hang over mosh/tmux, and the TUI
-// already commits to plain ANSI colors everywhere else.
+// The style is picked by mdStyle from the background detected at startup
+// (never WithEnvironmentConfig: an OSC background query mid-session can hang
+// over mosh/tmux — see detectColorScheme).
 func renderMarkdown(s string, width int) string {
 	if strings.TrimSpace(s) == "" {
 		return s
@@ -59,16 +59,34 @@ var padStripRE = regexp.MustCompile(`(?:\x1b\[[0-9;]*m[ \t]*)+(\x1b\[[0-9;]*m)?$
 // transcript 10-20x and breaks terminal select/copy. Lines whose visible
 // content is empty (blank separators) become truly empty — no styled blank
 // rows. Leading indentation and styled content are untouched.
+//
+// Every surviving styled line is made SELF-TERMINATING (ends in \x1b[0m):
+// glamour often places a line's closing reset inside the padding we just
+// stripped (heading lines especially), and a line left un-reset bleeds its
+// color into every following line until the next SGR — a blue heading painted
+// a whole table blue. cleanLine owns both steps so sanitizeView (the per-frame
+// pass) applies the same rule via selfTerminate.
 func stripLinePadding(s string) string {
 	lines := strings.Split(s, "\n")
 	for i, l := range lines {
 		l = padStripRE.ReplaceAllString(l, "$1")
 		if ansi.StringWidth(l) == 0 || strings.TrimSpace(ansi.Strip(l)) == "" {
 			l = "" // blank separator line: drop any leftover styling entirely
+		} else {
+			l = selfTerminate(l)
 		}
 		lines[i] = l
 	}
 	return strings.Join(lines, "\n")
+}
+
+// selfTerminate closes any styled line with a full reset so its style can
+// never bleed into the line below.
+func selfTerminate(l string) string {
+	if strings.Contains(l, "\x1b[") && !strings.HasSuffix(l, "\x1b[0m") {
+		l += "\x1b[0m"
+	}
+	return l
 }
 
 var (
@@ -99,10 +117,10 @@ func SetLightTheme(light bool) {
 }
 
 // SetUnknownTheme records that the terminal background could NOT be determined
-// (auto mode with no reliable signal: tmux without passthrough, a terminal that
-// ignores OSC 11). Markdown then renders in the neutral default style — no
-// forced dark/light guess — so text stays at the terminal's own default colors
-// instead of being inverted by a wrong assumption.
+// (auto mode with no reliable signal: tmux without passthrough, mosh, a
+// terminal that ignores OSC 11). Markdown then renders in neutralStyle — full
+// markdown structure, but only terminal-palette ANSI colors — so nothing is
+// inverted by a wrong dark/light assumption.
 func SetUnknownTheme() {
 	mdMu.Lock()
 	mdKnown = false
@@ -151,9 +169,8 @@ func unregisterChromaStyle() {
 // variant gets a higher-contrast inline-code treatment: stock Light uses
 // salmon (203) on near-white (254), which is nearly unreadable — dark red on
 // a light-gray chip instead. When the background is unknown (mdKnown false —
-// auto mode with no reliable signal), it uses the neutral ASCII style so text
-// stays at the terminal's own default colors rather than being inverted by a
-// wrong dark/light guess.
+// auto mode with no reliable signal), it uses neutralStyle so nothing assumes
+// a dark or light background.
 //
 // Tables: stock Dark/Light ship an empty StyleTable, leaving separator
 // choice to lipgloss defaults. Pin the separators explicitly (column pipes +
@@ -161,17 +178,16 @@ func unregisterChromaStyle() {
 // silently unformat tables, and drop the per-cell margin to one space —
 // glamour's default cell padding wastes ~4 columns per cell, which is the
 // difference between a readable table and wrapped mush at narrow widths.
-// (The ASCII fallback style already carries its own separators.)
 func mdStyle() glamouransi.StyleConfig {
-	if !mdKnown {
-		return styles.ASCIIStyleConfig
-	}
 	var st glamouransi.StyleConfig
-	if mdLight {
+	switch {
+	case !mdKnown:
+		st = neutralStyle()
+	case mdLight:
 		st = styles.LightStyleConfig
 		st.Code.Color = new("124")           // dark red
 		st.Code.BackgroundColor = new("255") // lightest gray chip
-	} else {
+	default:
 		st = styles.DarkStyleConfig
 	}
 	st.Table.ColumnSeparator = new("│")
@@ -179,6 +195,37 @@ func mdStyle() glamouransi.StyleConfig {
 	st.Table.RowSeparator = new("─")
 	zero := uint(0)
 	st.Table.Margin = &zero
+	return st
+}
+
+// neutralStyle is the unknown-background style: auto mode with no reliable
+// signal — e.g. mosh+tmux, where the OSC 11 query is structurally unanswerable
+// (mosh's terminal emulator doesn't implement it, so neither tmux nor the
+// passthrough copy ever gets a reply). The old fallback here was glamour's
+// ASCII style, which reads as broken: literal ## headings, kept ** markers,
+// raw table pipes, zero color.
+//
+// This keeps the dark style's STRUCTURE (styled headings, italic/bold, • items,
+// box-drawing tables) but drops or remaps every color that assumes a dark
+// background to a basic ANSI color (0–15) — those come from the terminal's own
+// palette, so they stay legible on any background. Code blocks render without
+// syntax highlighting: chroma's fixed hex palettes need a known background.
+func neutralStyle() glamouransi.StyleConfig {
+	st := styles.DarkStyleConfig
+	st.Document.Color = nil // terminal default foreground
+	st.Heading.Color = new("4")
+	st.H1.Color, st.H1.BackgroundColor = nil, nil // no color chip
+	st.H1.Prefix, st.H1.Suffix = "# ", ""
+	st.H6.Color = nil
+	st.HorizontalRule.Color = new("8")
+	st.Link.Color = new("4")
+	st.LinkText.Color = new("6")
+	st.Image.Color = new("4")
+	st.ImageText.Color = new("8")
+	st.Code.Color = new("1") // inline code: ANSI red, no chip
+	st.Code.BackgroundColor = nil
+	st.CodeBlock.Color = nil
+	st.CodeBlock.Chroma = nil
 	return st
 }
 
@@ -223,13 +270,17 @@ func mdRenderer(width int) *glamour.TermRenderer {
 var bareSGR = strings.NewReplacer("\x1b[m", "\x1b[0m")
 
 // sanitizeView cleans one rendered screen: bare SGR escapes become real
-// resets and trailing style+space tails (lipgloss/viewport padding) are
-// trimmed from each line.
+// resets, trailing style+space tails (lipgloss/viewport padding) are trimmed
+// from each line, and every styled line is re-closed with a reset — the trim
+// can eat a line's own closing reset (glamour/lipgloss put padding after it),
+// and an un-reset line bleeds its style into the rest of the frame. Unlike
+// stripLinePadding this never blanks whitespace-only lines: a frame can carry
+// intentionally styled blank rows (e.g. the drag-selection highlight).
 func sanitizeView(s string) string {
 	s = bareSGR.Replace(s)
 	lines := strings.Split(s, "\n")
 	for i, l := range lines {
-		lines[i] = padStripRE.ReplaceAllString(l, "$1")
+		lines[i] = selfTerminate(padStripRE.ReplaceAllString(l, "$1"))
 	}
 	return strings.Join(lines, "\n")
 }

@@ -42,7 +42,7 @@ Two workflows gate pull requests: **ci** and **security**.
 - **go test -race -shuffle=on** — the portable package set (internal/browser
   and internal/tui need a Chromium sandbox / tty that hosted runners don't
   have; they stay local).
-- **coverage floor (70%)** — total statement coverage of the portable set must
+- **coverage floor (90%)** — total statement coverage of the portable set must
   stay at or above the floor. It's a self-contained `go tool cover` check (no
   external service), so it works identically on fork PRs. The floor is a
   ratchet: it only goes up as coverage improves. New code should come with

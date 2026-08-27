@@ -85,3 +85,13 @@ func TestBrowserExecNoManager(t *testing.T) {
 		t.Fatalf("want error string, got %q", out)
 	}
 }
+
+func TestHelperStmtString(t *testing.T) {
+	prog, err := parseHelperProgram(`goto("https://example.com")`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := prog[0].String(); got != `goto("https://example.com")` {
+		t.Errorf("String must return the raw statement text: %q", got)
+	}
+}
