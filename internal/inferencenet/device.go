@@ -21,19 +21,27 @@ type deviceCodeResponse struct {
 	Interval   int    `json:"interval"`
 }
 
+// Team is one of the user's workspaces (organizations).
+type Team struct {
+	ID   string
+	Name string
+	Slug string
+}
+
 // session is the outcome of a completed device login: the identity plus the
-// session token the control-plane calls authorize with.
+// session token the control-plane calls authorize with, and the workspaces
+// the user can pick from.
 type session struct {
 	Token  string
 	Email  string
 	UserID string
-	TeamID string
+	Teams  []Team
 }
 
 // Login runs the OAuth device-authorization flow: request a device code,
 // report the approval URL/code via onCode (the CLI opens the browser there),
 // and poll until the user approves, denies, or the code expires. It resolves
-// the signed-in identity and active team before returning.
+// the signed-in identity and lists the workspaces for the caller to choose.
 func Login(ctx context.Context, onCode func(verificationURL, userCode string)) (session, error) {
 	code, err := requestDeviceCode(ctx)
 	if err != nil {
@@ -51,11 +59,14 @@ func Login(ctx context.Context, onCode func(verificationURL, userCode string)) (
 	if err != nil {
 		return session{}, err
 	}
-	teamID, err := selectOrganization(ctx, token, identity.UserID)
+	teams, err := listOrganizations(ctx, token)
 	if err != nil {
 		return session{}, err
 	}
-	return session{Token: token, Email: identity.Email, UserID: identity.UserID, TeamID: teamID}, nil
+	if len(teams) == 0 {
+		return session{}, errors.New("no workspace was found for this account; finish signup in the dashboard, then try again")
+	}
+	return session{Token: token, Email: identity.Email, UserID: identity.UserID, Teams: teams}, nil
 }
 
 func requestDeviceCode(ctx context.Context) (deviceCodeResponse, error) {
@@ -137,34 +148,47 @@ func getSessionIdentity(ctx context.Context, token string) (struct {
 	}{resp.User.Email, resp.User.ID}, err
 }
 
-// selectOrganization picks the user's personal workspace (falling back to the
-// first) and marks it active, returning its team id.
-func selectOrganization(ctx context.Context, token, userID string) (string, error) {
+// listOrganizations returns the user's workspaces (personal first when the
+// org id matches the user id).
+func listOrganizations(ctx context.Context, token string) ([]Team, error) {
 	var orgs []struct {
-		ID string `json:"id"`
+		ID   string `json:"id"`
+		Name string `json:"name"`
+		Slug string `json:"slug"`
 	}
 	h := bearerHeaders(token, dashboardURL)
 	if err := doJSON(ctx, http.MethodGet, relayURL+"/api/auth/organization/list", nil, h, &orgs); err != nil {
-		return "", err
+		return nil, err
 	}
-	orgID := ""
-	for _, o := range orgs {
-		if o.ID == userID {
-			orgID = o.ID
-			break
-		}
+	teams := make([]Team, len(orgs))
+	for i, o := range orgs {
+		teams[i] = Team{ID: o.ID, Name: o.Name, Slug: o.Slug}
 	}
-	if orgID == "" && len(orgs) > 0 {
-		orgID = orgs[0].ID
+	return teams, nil
+}
+
+// setActiveOrganization marks orgID the session's active workspace. The
+// relay's project/API-key procedures resolve the team from the session, so
+// this must run before listing/creating under the chosen workspace.
+func setActiveOrganization(ctx context.Context, token, orgID string) error {
+	return doJSON(ctx, http.MethodPost, relayURL+"/api/auth/organization/set-active",
+		map[string]string{"organizationId": orgID}, bearerHeaders(token, dashboardURL), nil)
+}
+
+// ListProjects returns the projects under teamID (marks it active first).
+func ListProjects(ctx context.Context, token string, team Team) ([]Project, error) {
+	if err := setActiveOrganization(ctx, token, team.ID); err != nil {
+		return nil, err
 	}
-	if orgID == "" {
-		return "", errors.New("no workspace was found for this account; finish signup in the dashboard, then try again")
+	return getProjects(ctx, token, team.ID)
+}
+
+// CreateProject makes a project named name under teamID and returns it.
+func CreateProject(ctx context.Context, token string, team Team, name string) (Project, error) {
+	if err := setActiveOrganization(ctx, token, team.ID); err != nil {
+		return Project{}, err
 	}
-	if err := doJSON(ctx, http.MethodPost, relayURL+"/api/auth/organization/set-active",
-		map[string]string{"organizationId": orgID}, h, nil); err != nil {
-		return "", err
-	}
-	return orgID, nil
+	return createProject(ctx, token, team.ID, name)
 }
 
 // SignOut closes the remote session; a 401 (already gone) is not an error.

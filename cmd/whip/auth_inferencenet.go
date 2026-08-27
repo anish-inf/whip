@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"flag"
@@ -8,6 +9,8 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/context-labs/whip/internal/config"
@@ -57,7 +60,16 @@ func inferenceNetLoginCLI(args []string) error {
 	if k == "" {
 		k = config.TrimKey(os.Getenv(config.InferenceNetEnvVar))
 	}
-	if k != "" || *envMode {
+	// An explicit --key (even empty) or --env, or an env-provided key, takes the
+	// BYOK path — so we never surprise the user with a browser flow they didn't
+	// ask for (and a missing key errors instead of polling the device endpoint).
+	keyFlagSet := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "key" {
+			keyFlagSet = true
+		}
+	})
+	if keyFlagSet || *envMode || k != "" {
 		return inferenceNetBYOK(k, *envMode)
 	}
 	return inferenceNetDeviceLogin()
@@ -95,7 +107,8 @@ func inferenceNetBYOK(key string, envMode bool) error {
 	return nil
 }
 
-// inferenceNetDeviceLogin runs the browser device flow, mints a machine API
+// inferenceNetDeviceLogin runs the browser device flow, prompts for the
+// team/project (creating a project on the spot if asked), mints a machine API
 // key, and registers the provider — the user never touches a key.
 func inferenceNetDeviceLogin() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
@@ -113,7 +126,7 @@ func inferenceNetDeviceLogin() error {
 		} else {
 			fmt.Println("  Open the URL manually. Waiting for approval…")
 		}
-	})
+	}, cliChooser)
 	if err != nil {
 		return err
 	}
@@ -143,6 +156,41 @@ func inferenceNetDeviceLogin() error {
 	fmt.Printf("  Machine key: %s\n", auth.MachineKeyName)
 	fmt.Println("  inference-net provider configured — run `whip`, then /model.")
 	return nil
+}
+
+// cliChooser is the interactive picker for team/project selection. For a list
+// it prints a numbered menu and reads a number (default 1); for a name prompt
+// (no options) it reads free text.
+func cliChooser(kind, title string, options []string) (string, error) {
+	fmt.Println("\n" + title + ":")
+	if len(options) == 0 {
+		fmt.Print("  name: ")
+		return readLine()
+	}
+	for i, o := range options {
+		fmt.Printf("  %d) %s\n", i+1, o)
+	}
+	fmt.Printf("  pick [1-%d, default 1]: ", len(options))
+	line, err := readLine()
+	if err != nil {
+		return "", err
+	}
+	if line == "" {
+		return options[0], nil
+	}
+	n, err := strconv.Atoi(line)
+	if err != nil || n < 1 || n > len(options) {
+		return "", fmt.Errorf("invalid choice %q", line)
+	}
+	return options[n-1], nil
+}
+
+func readLine() (string, error) {
+	line, err := bufio.NewReader(os.Stdin).ReadString('\n')
+	if err != nil && line == "" {
+		return "", err
+	}
+	return strings.TrimSpace(line), nil
 }
 
 func inferenceNetStatusCLI() error {

@@ -25,10 +25,25 @@ var (
 	baseURL = BaseURL
 )
 
-// trpcEndpoint is where the relay mounts the rich appRouter (project, apiKey,
-// …): the host root, superjson transport. ("/api/trpc" is a separate, narrow
-// relay-compat router that does NOT have these procedures.)
-const trpcEndpoint = ""
+// SetURLsForTest points the package's endpoints at a stub server (tests only)
+// and returns a restore func. Production code never calls this.
+func SetURLsForTest(relay, dashboard, gateway string) func() {
+	oldRelay, oldDash, oldBase := relayURL, dashboardURL, baseURL
+	if relay != "" {
+		relayURL = relay
+	}
+	if dashboard != "" {
+		dashboardURL = dashboard
+	}
+	if gateway != "" {
+		baseURL = gateway
+	}
+	return func() { relayURL, dashboardURL, baseURL = oldRelay, oldDash, oldBase }
+}
+
+// restEndpoint is the relay's public REST surface (trpc-to-openapi, INF-4438),
+// reusing the same session/API-key auth as tRPC. Plain JSON — no superjson.
+const restEndpoint = "/api/rest"
 
 // teamIDHeader carries the active team on relay tRPC calls.
 const teamIDHeader = "x-inference-team-id"

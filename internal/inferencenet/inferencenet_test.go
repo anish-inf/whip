@@ -49,28 +49,31 @@ func stubRelay(t *testing.T) *httptest.Server {
 	mux.HandleFunc("/api/auth/organization/set-active", func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{})
 	})
-	mux.HandleFunc("/project.getProjects", func(w http.ResponseWriter, r *http.Request) {
+	// REST surface (/api/rest): plain JSON, no superjson envelope.
+	mux.HandleFunc("/api/rest/projects", func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer sess-tok" {
 			w.WriteHeader(http.StatusUnauthorized)
-			_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]any{"message": "auth required"}})
+			_ = json.NewEncoder(w).Encode(map[string]any{"message": "auth required"})
 			return
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"result": map[string]any{"data": map[string]any{
-				"json": []map[string]any{{"id": "proj-1", "name": "Primary"}},
-			}},
-		})
+		_ = json.NewEncoder(w).Encode([]map[string]any{{"id": "proj-1", "name": "Primary"}})
 	})
-	mux.HandleFunc("/apiKey.create", func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("X-Inference-Team-Id") != "user-1" {
+	mux.HandleFunc("/api/rest/projects/create", func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			Name string `json:"name"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&in)
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": "proj-new", "name": in.Name})
+	})
+	mux.HandleFunc("/api/rest/api-keys", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Inference-Team-Id") == "" {
 			http.Error(w, "missing team header", http.StatusBadRequest)
 			return
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"result": map[string]any{"data": map[string]any{
-				"json": map[string]any{"id": "key-1", "key": "inf-machine-secret"},
-			}},
-		})
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": "key-1", "key": "inf-machine-secret"})
+	})
+	mux.HandleFunc("/api/rest/api-keys/key-1", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": "key-1", "enabled": false})
 	})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
@@ -93,7 +96,7 @@ func TestCompleteLoginAndMachineKey(t *testing.T) {
 	t.Cleanup(func() { pollSleepOverride = nil })
 
 	var gotURL, gotCode string
-	auth, err := CompleteLogin(context.Background(), func(vu, uc string) { gotURL, gotCode = vu, uc })
+	auth, err := CompleteLogin(context.Background(), func(vu, uc string) { gotURL, gotCode = vu, uc }, nil)
 	if err != nil {
 		t.Fatalf("CompleteLogin: %v", err)
 	}
@@ -120,6 +123,28 @@ func TestCompleteLoginAndMachineKey(t *testing.T) {
 	// A second call returns the stored key without re-minting.
 	if k, _ := auth.EnsureMachineKey(context.Background()); k != key {
 		t.Errorf("EnsureMachineKey re-minted: %q", k)
+	}
+}
+
+func TestCompleteLoginCreateProjectOnTheSpot(t *testing.T) {
+	srv := stubRelay(t)
+	useStub(t, srv)
+	pollSleepOverride = func(context.Context, time.Duration) error { return nil }
+	t.Cleanup(func() { pollSleepOverride = nil })
+
+	// The chooser picks "create new project" then supplies a name.
+	choose := func(kind, title string, options []string) (string, error) {
+		if kind == "project" {
+			return CreateProjectOption, nil
+		}
+		return "my-new-project", nil // project-name prompt
+	}
+	auth, err := CompleteLogin(context.Background(), nil, choose)
+	if err != nil {
+		t.Fatalf("CompleteLogin: %v", err)
+	}
+	if auth.ProjectID != "proj-new" || auth.ProjectName != "my-new-project" {
+		t.Errorf("created project not selected: %+v", auth)
 	}
 }
 
