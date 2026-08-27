@@ -97,14 +97,13 @@ func (m *model) taskCommand(rest string) {
 	model, prov := "", ""
 	if strings.HasPrefix(rest, "-m ") {
 		rest = strings.TrimSpace(rest[3:])
-		sp := strings.IndexByte(rest, ' ')
-		if sp < 0 {
+		spec, tail, found := strings.Cut(rest, " ")
+		if !found {
 			rest = "" // "-m model" with no prompt: fall through to usage
 		} else {
-			spec := rest[:sp]
-			rest = strings.TrimSpace(rest[sp+1:])
-			if at := strings.IndexByte(spec, '@'); at >= 0 {
-				model, prov = spec[:at], spec[at+1:]
+			rest = strings.TrimSpace(tail)
+			if at, prov2, ok := strings.Cut(spec, "@"); ok {
+				model, prov = at, prov2
 			} else {
 				model = spec
 			}

@@ -138,8 +138,10 @@ func TestSteerTaskReachesRunningSubagent(t *testing.T) {
 
 	ag := New(llm.New(srv.URL, "k"), "m", 100, "sys")
 	task := ag.StartBackground("d", "p", SubModel{})
-	if err := ag.SteerTask(task.ID, "change course"); err != nil {
-		t.Fatal(err)
+	out, err := findTool(t, ag, "subagent_steer").Run(context.Background(),
+		json.RawMessage(fmt.Sprintf(`{"id":%q,"message":"change course"}`, task.ID)))
+	if err != nil || !strings.HasPrefix(out, "Steered") {
+		t.Fatalf("steer via tool: %q, %v", out, err)
 	}
 	close(release)
 	select {
@@ -163,7 +165,7 @@ func TestSteerTaskReachesRunningSubagent(t *testing.T) {
 	if err := ag.SteerTask(task.ID, "x"); err == nil {
 		t.Fatal("steering a settled task should error")
 	}
-	out, err := findTool(t, ag, "subagent_steer").Run(context.Background(),
+	out, err = findTool(t, ag, "subagent_steer").Run(context.Background(),
 		json.RawMessage(`{"id":"task-nope","message":"x"}`))
 	if err != nil || !strings.HasPrefix(out, "Error:") {
 		t.Fatalf("subagent_steer errors must be tool output, got %q, %v", out, err)
@@ -211,5 +213,72 @@ func TestClearSettledKeep(t *testing.T) {
 	}
 	if _, ok := r.Get("task-b"); ok {
 		t.Fatal("unkept settled id must be swept")
+	}
+}
+
+// The subagent tool's background branch reports the task id immediately and
+// the report arrives later as a steered message; malformed args on both tools
+// surface as real errors (the loop turns them into tool output).
+func TestSubagentToolBackgroundAndBadArgs(t *testing.T) {
+	srv, _ := modelRecorder(t, "bg-report")
+	defer srv.Close()
+
+	ag := New(llm.New(srv.URL, "k"), "m", 100, "sys")
+	out, err := findTool(t, ag, "subagent").Run(context.Background(),
+		json.RawMessage(`{"prompt":"go","background":true}`))
+	if err != nil || !strings.Contains(out, "Started background subagent") {
+		t.Fatalf("background start: %q, %v", out, err)
+	}
+	var settled bool
+	for _, task := range ag.Tasks().List() {
+		select {
+		case <-task.Done:
+			settled = true
+		case <-time.After(5 * time.Second):
+			t.Fatal("background task never settled")
+		}
+	}
+	if !settled {
+		t.Fatal("the tool should have registered a background task")
+	}
+
+	if _, err := findTool(t, ag, "subagent_steer").Run(context.Background(), json.RawMessage(`{bad`)); err == nil {
+		t.Fatal("malformed subagent_steer args should error")
+	}
+}
+
+// FollowupTask refuses while the task is still running (steer instead).
+func TestFollowupTaskRefusesWhileRunning(t *testing.T) {
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		<-release
+		fmt.Fprint(w, `data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}`+"\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer srv.Close()
+
+	ag := New(llm.New(srv.URL, "k"), "m", 100, "sys")
+	task := ag.StartBackground("d", "p", SubModel{})
+	if _, err := ag.FollowupTask(context.Background(), task.ID, "x", Events{}); err == nil {
+		t.Fatal("follow-up on a running task should error")
+	}
+	close(release)
+	<-task.Done
+}
+
+// Edge branches: settling an unknown id is a no-op, and a registry row that
+// is "running" but has no live subagent refuses steering.
+func TestSettleUnknownAndSteerNotLive(t *testing.T) {
+	r := newTaskRegistry()
+	r.settle("task-nope", TaskDone, "x") // unknown id: no-op, no panic
+
+	ag := New(llm.New("http://unused", "k"), "m", 100, "sys")
+	reg := ag.Tasks()
+	reg.mu.Lock()
+	reg.tasks["sub-x"] = &BackgroundTask{ID: "sub-x", Status: TaskRunning, Done: make(chan struct{}), cancel: func() {}}
+	reg.mu.Unlock()
+	if err := ag.SteerTask("sub-x", "hi"); err == nil {
+		t.Fatal("a running row with no live subagent must refuse steering")
 	}
 }

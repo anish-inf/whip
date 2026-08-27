@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -148,14 +149,7 @@ func (r *taskRegistry) ClearSettled(keep ...string) int {
 	defer r.mu.Unlock()
 	n := 0
 	for id, t := range r.tasks {
-		kept := false
-		for _, k := range keep {
-			if id == k {
-				kept = true
-				break
-			}
-		}
-		if !kept && t.Status != TaskRunning {
+		if !slices.Contains(keep, id) && t.Status != TaskRunning {
 			delete(r.tasks, id)
 			delete(r.subs, id)
 			n++

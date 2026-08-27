@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 
@@ -57,7 +58,7 @@ func (a *Agent) resolveSub(model, provider string) (SubModel, error) {
 		return SubModel{}, nil
 	}
 	if a.ResolveModel == nil {
-		return SubModel{}, fmt.Errorf("per-task model overrides are not available in this session")
+		return SubModel{}, errors.New("per-task model overrides are not available in this session")
 	}
 	return a.ResolveModel(model, provider)
 }
@@ -91,6 +92,7 @@ func taskTool(parent *Agent) tools.Tool {
 			}
 			o, err := parent.resolveSub(a.Model, a.Provider)
 			if err != nil {
+				//nolint:nilerr // tool contract: failures are tool output the model reads, never loop aborts
 				return "Error: model override: " + err.Error(), nil
 			}
 			if a.Background {
@@ -122,6 +124,7 @@ func taskSteerTool(parent *Agent) tools.Tool {
 				return "", err
 			}
 			if err := parent.SteerTask(a.ID, a.Message); err != nil {
+				//nolint:nilerr // tool contract: failures are tool output the model reads, never loop aborts
 				return "Error: " + err.Error(), nil
 			}
 			return fmt.Sprintf("Steered %s; the guidance lands at the subagent's next loop boundary.", a.ID), nil

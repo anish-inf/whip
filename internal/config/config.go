@@ -4,6 +4,7 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -527,13 +528,9 @@ func (c *Config) resolveFromCatalog(model, provider string) (Model, string, erro
 func (c *Config) Snapshot() *Config {
 	snap := *c
 	snap.Providers = make(map[string]Provider, len(c.Providers))
-	for k, v := range c.Providers {
-		snap.Providers[k] = v
-	}
+	maps.Copy(snap.Providers, c.Providers)
 	snap.Models = make(map[string]Model, len(c.Models))
-	for k, v := range c.Models {
-		snap.Models[k] = v
-	}
+	maps.Copy(snap.Models, c.Models)
 	return &snap
 }
 
