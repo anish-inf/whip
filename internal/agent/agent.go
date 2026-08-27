@@ -53,6 +53,15 @@ type Agent struct {
 	// proactively; 0 uses defaultCompactThreshold.
 	CompactThreshold float64
 
+	// TaskDefault is the default subagent route (config taskModel); the zero
+	// value runs subagents on the conversation's own client and model.
+	TaskDefault SubModel
+	// ResolveModel resolves a per-task model override named in a task call.
+	// Installed by the front-end (TUI or `whip run`) so the agent stays
+	// config-free; nil rejects overrides. It runs on tool worker goroutines,
+	// so implementations must not share mutable state with the UI.
+	ResolveModel func(model, provider string) (SubModel, error)
+
 	// MaxTurns caps the tool-call loop (rounds of model→tools→model) so a
 	// scripted run can't run away. 0 = uncapped (the TUI default).
 	MaxTurns int
@@ -199,7 +208,7 @@ func New(client *llm.Client, model string, maxTokens int, systemPrompt string) *
 	if !a.ComputerDisabled {
 		a.Tools = append(a.Tools, tools.ComputerExec())
 	}
-	a.Tools = append(a.Tools, taskTool(a))
+	a.Tools = append(a.Tools, taskTool(a), taskSteerTool(a))
 	a.Tools = append(a.Tools, todoTool(a))
 	a.Tools = append(a.Tools, memoryTools(a)...)
 	a.files = newFileLocks()

@@ -315,6 +315,7 @@ func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string, ca
 		skillScan: func() []skills.Skill { return skills.Scan(skills.DefaultDirs()...) },
 	}
 	m.applyCompactModel()
+	m.applyTaskModel()
 	m.agent.CompactThreshold = compactThresholdFor(cfg)
 	m.wireTasks() // redraw the UI when background subagents start/settle
 
@@ -652,6 +653,7 @@ func (m *model) resume(id string) error {
 		m.agent.ContextLimit = m.contextLimitFor(m.provName, m.agent.Model)
 	}
 	m.applyCompactModel()
+	m.applyTaskModel()
 	m.agent.CompactThreshold = compactThresholdFor(m.cfg)
 	m.wireTasks()
 	// Publish before restoring so the settled rows record against this session.
@@ -2041,6 +2043,15 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				preview = append(preview[:4], fmt.Sprintf("… +%d lines", len(msg.s2)-4))
 			}
 			fmt.Fprintf(&tv.buf, "%s\n", dimStyle.Render("  "+strings.Join(preview, "\n  ")))
+		case 3: // a steered message reached the running subagent (task_steer / chat)
+			fmt.Fprintf(&tv.buf, "\n%s %s\n", youStyle.Render("↪ steered:"), msg.s)
+		case 4: // follow-up turn settled; unlock the chat input
+			tv.busy, tv.followCancel = false, nil
+			if msg.s != "" {
+				fmt.Fprintf(&tv.buf, "\n%s\n", errStyle.Render(msg.s))
+			} else {
+				tv.buf.WriteString("\n")
+			}
 		}
 		m.refreshTaskVP()
 		return m, nil
@@ -2753,6 +2764,7 @@ func (m *model) switchModel(name, prov string) {
 	ag.CompactClient, ag.CompactModel = m.agent.CompactClient, m.agent.CompactModel
 	ag.CompactThreshold = m.agent.CompactThreshold
 	m.agent, m.modelName, m.provName = ag, mn, pn
+	m.applyTaskModel()
 	m.wireTasks()
 	if !slices.Contains(m.effortsFor(), ag.Effort) {
 		m.resetEffort("") // the new model doesn't support the current level
@@ -3145,9 +3157,14 @@ func (m *model) submitTurn(text string, authored bool) (tea.Model, tea.Cmd) {
 	}
 	m.discardFuture() // new activity while rewound kills the redo stack
 	// settled subagents already reported into the transcript; clear them off
-	// the dock strip so a new turn starts with only what's still running
+	// the dock strip so a new turn starts with only what's still running —
+	// except a task whose chat pane is open (its retained subagent is in use)
 	if m.agent != nil {
-		m.agent.Tasks().ClearSettled()
+		var keep []string
+		if m.taskVP != nil {
+			keep = append(keep, m.taskVP.id)
+		}
+		m.agent.Tasks().ClearSettled(keep...)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancel = cancel
@@ -3265,7 +3282,7 @@ func busyCmd(text string) bool {
 		return false
 	}
 	switch fields[0] {
-	case "/help", "/theme", "/mouse", "/effort", "/tasks", "/cd", "/pwd", "/report":
+	case "/help", "/theme", "/mouse", "/effort", "/subagents", "/tasks", "/subagent", "/cd", "/pwd", "/report":
 		return true
 	case "/auth": // must run now even while busy: an inline key queued as a chat message would be sent to the model
 		return true
@@ -3348,8 +3365,11 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 	case "/pwd":
 		m.append(dimStyle.Render(cwd()))
 		return m, nil
-	case "/tasks":
-		if len(fields) > 1 { // /tasks <id>: jump straight into the detail view
+	case "/subagent": // user-spawned background subagent — the LLM isn't the only driver
+		m.taskCommand(strings.TrimSpace(strings.TrimPrefix(text, "/subagent")))
+		return m, nil
+	case "/subagents", "/tasks": // /tasks kept as an alias
+		if len(fields) > 1 { // /subagents <id>: jump straight into the detail view
 			m.openTask(fields[1])
 			return m, nil
 		}

@@ -9,8 +9,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"github.com/context-labs/whip/internal/tools"
 )
 
 // TaskStatus is the lifecycle of a background subagent.
@@ -42,6 +40,12 @@ type BackgroundTask struct {
 
 	Done   chan struct{}      // closed on settle; <-Done() wakes all waiters
 	cancel context.CancelFunc // cancels the subagent's turn
+
+	// sub is the retained subagent: while running it receives SteerTask
+	// guidance, and after settle FollowupTask keeps chatting on its preserved
+	// context. nil on restored tasks (their process died). Set before the
+	// task is published, never reassigned — snapshots copy the pointer safely.
+	sub *Agent
 }
 
 // taskRegistry tracks background subagents for one parent agent. It is the
@@ -115,10 +119,11 @@ func (r *taskRegistry) List() []BackgroundTask {
 	return out
 }
 
-// taskIDNum parses the monotonic counter out of a "task-N" id (0 on
-// malformed ids, which sort first — fine for a tiebreak).
+// taskIDNum parses the monotonic counter out of a "sub-N" id ("task-N" on
+// rows restored from sessions that predate the rename; 0 on malformed ids,
+// which sort first — fine for a tiebreak).
 func taskIDNum(id string) int64 {
-	n, _ := strconv.ParseInt(strings.TrimPrefix(id, "task-"), 10, 64)
+	n, _ := strconv.ParseInt(strings.TrimPrefix(strings.TrimPrefix(id, "sub-"), "task-"), 10, 64)
 	return n
 }
 
@@ -136,13 +141,21 @@ func (r *taskRegistry) Get(id string) (BackgroundTask, bool) {
 // ClearSettled drops every done/error/cancelled task, keeping the running
 // ones. The TUI calls this when a new turn starts: settled tasks have already
 // reported into the transcript, so the dock strip makes room instead of
-// accumulating stale rows forever. Returns the number cleared.
-func (r *taskRegistry) ClearSettled() int {
+// accumulating stale rows forever. keep protects specific ids from the sweep
+// (a task whose chat pane is open must survive). Returns the number cleared.
+func (r *taskRegistry) ClearSettled(keep ...string) int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	n := 0
 	for id, t := range r.tasks {
-		if t.Status != TaskRunning {
+		kept := false
+		for _, k := range keep {
+			if id == k {
+				kept = true
+				break
+			}
+		}
+		if !kept && t.Status != TaskRunning {
 			delete(r.tasks, id)
 			delete(r.subs, id)
 			n++
@@ -179,13 +192,17 @@ func (r *taskRegistry) settle(id string, status TaskStatus, report string) {
 	}
 	t.Status, t.Report, t.EndedAt = status, report, time.Now()
 	r.mu.Unlock()
-	close(t.Done) // broadcast to all waiters
+	// Notify and persist BEFORE closing Done: a waiter woken by the close must
+	// be able to read the recorded final state (the session store row) — with
+	// the old order a reader could see a settled task still persisted as
+	// "running". Callbacks run on the worker goroutine and are cheap.
 	if r.OnChange != nil {
 		r.OnChange(t)
 	}
 	if r.OnRecord != nil {
 		r.OnRecord(r.recordSession(), t)
 	}
+	close(t.Done) // broadcast to all waiters
 }
 
 var taskIDCounter atomic.Int64
@@ -196,16 +213,20 @@ var taskIDCounter atomic.Int64
 // tool-call half of the background-subagent novelty: instead of blocking the
 // turn on a subagent, the parent keeps working and the registry's Done channel
 // delivers the report back through Steer when the subagent settles.
-func (a *Agent) StartBackground(ctx context.Context, description, prompt string) *BackgroundTask {
+// o overrides the subagent's model route (zero = TaskDefault → parent model).
+// There is no ctx parameter on purpose: a background task outlives the turn
+// that started it, so it owns its own cancellable context.
+func (a *Agent) StartBackground(description, prompt string, o SubModel) *BackgroundTask {
 	if a.bg == nil {
 		a.bg = newTaskRegistry()
 	}
-	id := fmt.Sprintf("task-%d", taskIDCounter.Add(1))
-	taskCtx, cancel := context.WithCancel(context.Background()) // NOT tied to the turn's ctx: a background task outlives the current turn
+	id := fmt.Sprintf("sub-%d", taskIDCounter.Add(1))
+	taskCtx, cancel := context.WithCancel(context.Background())
 	t := &BackgroundTask{
 		ID: id, Description: description, Prompt: prompt,
 		Status: TaskRunning, StartedAt: time.Now(),
 		Done: make(chan struct{}), cancel: cancel,
+		sub: a.newSub(o),
 	}
 	a.bg.mu.Lock()
 	a.bg.tasks[id] = t
@@ -218,11 +239,7 @@ func (a *Agent) StartBackground(ctx context.Context, description, prompt string)
 	}
 
 	go func() {
-		sub := New(a.Client, a.Model, a.MaxTokens, subagentPrompt())
-		sub.Effort = a.Effort
-		sub.ContextLimit = a.ContextLimit
-		sub.Tools = tools.All()
-		report, err := sub.Turn(taskCtx, prompt, FanIn(a.bg.emitter(id), Events{OnUsage: a.AddUsage}))
+		report, err := t.sub.Turn(taskCtx, prompt, FanIn(a.bg.emitter(id), Events{OnUsage: a.AddUsage}))
 		status := TaskDone
 		text := report
 		switch {
@@ -240,7 +257,7 @@ func (a *Agent) StartBackground(ctx context.Context, description, prompt string)
 		// Fan the result back into the parent as a steered message so the model
 		// sees it on the next loop boundary — channel-close (settle) → Steer.
 		// text/status are locals (not the shared task struct), so no race.
-		a.Steer(fmt.Sprintf("[background task %s %s] %s\n\n%s", id, status, description, text))
+		a.Steer(fmt.Sprintf("[subagent %s %s] %s\n\n%s", id, status, description, text))
 	}()
 	return t
 }

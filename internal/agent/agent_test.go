@@ -353,13 +353,13 @@ func TestTaskToolSpawnsSubagent(t *testing.T) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		switch call {
 		case 1: // outer agent delegates
-			fmt.Fprint(w, `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"t1","type":"function","function":{"name":"task","arguments":"{\"description\":\"probe\",\"prompt\":\"find the answer\"}"}}]}}]}`+"\n\n")
+			fmt.Fprint(w, `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"t1","type":"function","function":{"name":"subagent","arguments":"{\"description\":\"probe\",\"prompt\":\"find the answer\"}"}}]}}]}`+"\n\n")
 		case 2: // inner subagent: fresh context, no task tool, gets the prompt
 			if len(req.Messages) != 2 || req.Messages[1].Content != "find the answer" {
 				t.Errorf("subagent context wrong: %+v", req.Messages)
 			}
 			for _, tl := range req.Tools {
-				if tl.Function.Name == "task" {
+				if tl.Function.Name == "subagent" {
 					t.Error("subagent must not have the task tool")
 				}
 			}
@@ -387,7 +387,7 @@ func TestTaskToolSpawnsSubagent(t *testing.T) {
 
 func TestTaskToolBadArgs(t *testing.T) {
 	ag := New(llm.New("http://unused", "k"), "m", 100, "sys")
-	out := tools.Execute(context.Background(), ag.Tools, "task", json.RawMessage(`{bad`))
+	out := tools.Execute(context.Background(), ag.Tools, "subagent", json.RawMessage(`{bad`))
 	if !strings.HasPrefix(out, "Error") {
 		t.Fatalf("expected error, got %q", out)
 	}

@@ -72,10 +72,13 @@ parallel tool calls and background subagents).
 ## Skills & subagents
 
 - [x] Skills: scan `.agents/skills/*/SKILL.md` (project) and `~/.whip/skills/` (user), inject name+description into the system prompt as an `<available_skills>` block; the model reads a SKILL.md with its own read tool when relevant (pi's approach — no skill tool needed, `packages/coding-agent/src/core/skills.ts`)
-- [x] Subagents: a `task` tool that runs a self-contained prompt in a fresh agent with the same tools (minus `task` — no recursion) and returns its final report
+- [x] Subagents: a `subagent` tool (né `task`) that runs a self-contained prompt in a fresh agent with the same tools (minus `subagent` — no recursion) and returns its final report
 - [x] `$skill-name` invocation (codex-style) with live completion dropdown; skills re-indexed every turn and every `$` keystroke, so new skills load without restarting the harness
 - [ ] Custom agent definitions (`.agents/*.md` with model/tools/prompt frontmatter; opencode agents config `packages/core/src/config/agent.ts`)
-- [x] Parallel/background subagents (pi streams tool `onUpdate`; opencode `background-job.ts`) — `task` with `background:true` runs concurrently and reports back via a steered message; a `taskRegistry` keyed by id holds a `Done` channel whose single close broadcasts completion to every waiter; `/tasks` lists them, a `⚙ N sub` header badge shows running count, `/tasks` updates live via `OnChange`; tasks persist in the session store and are restored on `--resume` (a stale "running" row comes back as interrupted-error)
+- [x] Parallel/background subagents (pi streams tool `onUpdate`; opencode `background-job.ts`) — `subagent` with `background:true` runs concurrently and reports back via a steered message; a `taskRegistry` keyed by id holds a `Done` channel whose single close broadcasts completion to every waiter; `/subagents` (alias `/tasks`) lists them, a `⚙ N sub` header badge shows running count and updates live via `OnChange`; tasks persist in the session store and are restored on `--resume` (a stale "running" row comes back as interrupted-error)
+- [x] Subagent model routing (claude's Agent-tool `model` override) — subagents default to the cheap `deepseek-v4-flash-0731` route like compaction (`config.DefaultTaskModel`, catalog suffix scan covers openrouter's vendor-prefixed id); pin with config `taskModel`/`taskProvider`; the main model picks per call via the `subagent` tool's `model`/`provider` params
+- [x] User-spawned subagents: `/subagent [-m model[@provider]] <prompt>` starts one by hand, mid-turn too — the LLM isn't the only driver
+- [x] Chat with a subagent (claude's "subagents are full sessions" UX) — the task pane has a chat input: enter steers a running subagent (`SteerTask`, same primitive the model gets as `subagent_steer`) and runs follow-up turns on a settled one's retained context (`FollowupTask`, live-only)
 - [ ] `@agent` mentions to target a named subagent (opencode autocomplete)
 
 ## Models & providers

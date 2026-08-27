@@ -1,7 +1,7 @@
 # Features
 
 whip is a minimal coding-agent harness: an interactive bubbletea TUI driving an
-LLM tool-use loop (bash / read / write / edit / task) with provider-routable
+LLM tool-use loop (bash / read / write / edit / subagent) with provider-routable
 models. This document is the map of what's shipped and where it lives. Each
 section links the behavior to the code and its tests.
 
@@ -114,7 +114,7 @@ Tests: `agent_test.go` — `TestTurnAutoCompactsOnContextLimit`,
 
 ### Background subagents
 
-`internal/agent/background.go` — `task` with `background: true` launches a
+`internal/agent/background.go` — the `subagent` tool with `background: true` launches a
 subagent that runs **concurrently with the parent** instead of blocking the
 turn. This is the channel-native port of opencode's `background-job.ts`
 registry.
@@ -122,7 +122,7 @@ registry.
 Each task is a `BackgroundTask` with a `Done chan struct{}`. When the subagent
 settles, the registry `settle()`s and **closes `Done` once** — closing a
 channel broadcasts to every waiter at once, so the tool caller, the TUI, and
-`/tasks` all wake together with no per-waiter state (opencode needs a per-job
+`/subagents` (alias `/tasks`) all wake together with no per-waiter state (opencode needs a per-job
 `Deferred` for the same thing). On settle the report fans back into the parent
 as a **steered message**, so the model sees it on the next loop boundary.
 
@@ -130,7 +130,7 @@ as a **steered message**, so the model sees it on the next loop boundary.
 - `Tasks().OnChange` — the TUI installs a callback that sends a message to
   redraw live. `Tasks().OnRecord` — a second hook the TUI uses to upsert the
   task into the session store on start and settle.
-- `/tasks` lists running/done subagents with report previews; a `⚙ N sub`
+- `/subagents` (alias `/tasks`) lists running/done subagents with report previews; a `⚙ N sub`
   header badge shows the running count. The persistent dock strip above the
   input is mouse-clickable: `dockTop()` maps screen rows to task rows,
   skipping the focused hint row (`dockSkip`) so a click opens the row
@@ -140,20 +140,59 @@ as a **steered message**, so the model sees it on the next loop boundary.
   (settled, `Done` pre-closed, marked `Restored`). A row still `running` on
   disk means the subagent died with the last process exit, so it comes back
   as `error` — "interrupted — whip exited". Restored tasks are history:
-  `/tasks` lists them with a `(restored)` marker; the dock never shows them.
+  `/subagents` (alias `/tasks`) lists them with a `(restored)` marker; the dock never shows them.
   The dock itself shows running tasks plus ones settled within a one-minute
   grace window (`dockSettledGrace`) — long enough to notice the ✓, then the
   strip cleans itself.
 
 Background tasks use a context **not** tied to the current turn — they outlive
-it by design. Cancelling a task cancels its subagent's turn.
+it by design. Cancelling a task cancels its subagent's turn. `settle()`
+notifies/persists **before** closing `Done`, so a waiter woken by the close
+always sees the recorded final state.
+
+**Subagent model routing** (`internal/agent/subagent.go` `SubModel`,
+`internal/tui/taskmodel.go`): subagents default to the cheap fast
+`deepseek-v4-flash-0731` route (`config.DefaultTaskModel`, same default as
+compaction); config `taskModel`/`taskProvider` pins a different one; the main
+model overrides per call via the `subagent` tool's optional `model`/`provider`
+params. Resolution chain: taskModel → built-in default → catalog id ending in
+`/<default>` (openrouter-style vendor prefixes) → silently fall back to the
+session model. The agent stays config-free: the TUI/`whip run` inject a
+`ResolveModel` closure over a `cfg.Snapshot()` (the resolver runs on tool
+worker goroutines while `/auth` mutates live config on the UI goroutine).
+
+**User-spawned subagents**: `/subagent [-m model[@provider]] <prompt>` starts a
+background task by hand — it runs mid-turn too (listed with the
+works-while-busy commands), so the LLM isn't the only driver.
+
+**Chat with a subagent** — a task IS a session. The retained subagent lives on
+its `BackgroundTask`; the detail view (enter from the dock) has a chat input:
+
+- while the task **runs**, enter **steers** it (`Agent.SteerTask` → the
+  child's own `pendingSteer` queue — the parent→child pipe reuses the existing
+  steer primitive, no new synchronization); the model gets the same power via
+  the `subagent_steer` tool (`{id, message}`).
+- once it **settles**, enter runs **follow-up turns** on its preserved context
+  (`Agent.FollowupTask`) — status/report/`Done` stay as they settled, usage
+  rolls into the parent session. ctrl+x cancels the running task or the
+  in-flight follow-up. Follow-up chats are live-only by design (not
+  persisted); restored tasks are read-only — their process died.
+  `ClearSettled(keep…)` protects a task whose pane is open from the new-turn
+  dock sweep.
 
 Tests: `TestBackgroundTaskDeliversReport`, `TestBackgroundTaskBroadcastsToManyWaiters`
 (8 waiters all woken by one channel close), `TestBackgroundTaskCancel`;
 persistence: `session.TestTaskRoundTrip`, `TestRestoreTaskSettledAndVisible`,
 `TestResumeRestoresTasks`, `TestTaskPersistsOnStartAndSettle`;
 dock click hit-testing: `TestDockClickOpensClickedRow`,
-`TestDockClickIgnoredWhilePaletteOpen`.
+`TestDockClickIgnoredWhilePaletteOpen`; routing: `submodel_test.go` —
+`TestTaskModelOverride`, `TestTaskDefaultRoutesSubagents`,
+`TestTaskModelOverrideErrors`; chat: `TestSteerTaskReachesRunningSubagent`,
+`TestFollowupTaskChatsOnRetainedContext`, `TestClearSettledKeep`;
+TUI: `taskmodel_test.go` — `TestTaskDefaultForResolvesDefault`,
+`TestTaskDefaultForFallbacks`, `TestTaskDefaultForCatalogSuffix`,
+`TestTaskCommandSpawns`, `TestTaskViewChat`, `TestTaskViewRestoredReadOnly`,
+`TestTaskViewCtrlXCancels`.
 
 ## Models & providers
 
@@ -278,7 +317,7 @@ relay: full device login + key mint, store round-trip, key validation),
 - Queueing (enter while busy), steering (empty enter), history recall (↑/↓),
   `@file` mentions, `$skill` invocation, `/goal` loop, `/resume` session
   picker, `/effort` reasoning levels — see the roadmap for the full list.
-- **Settings commands run mid-turn.** `/theme`, `/mouse`, `/effort`, `/tasks`,
+- **Settings commands run mid-turn.** `/theme`, `/mouse`, `/effort`, `/subagents` (alias `/tasks`),
   `/help`, `/cd`, `/pwd`, and the non-submitting `/goal` forms (bare, `clear`,
   `rounds`) execute immediately while busy instead of queueing — queued text
   is sent to the model verbatim after the turn, which is nonsense for a

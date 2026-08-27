@@ -47,7 +47,7 @@ order because the chat API matches tool results to call IDs. A `sync.WaitGroup`
 
 ## 2. Background subagents = one channel close, many waiters
 
-`task` with `background: true` launches a subagent that runs concurrently with
+the `subagent` tool with `background: true` launches a subagent that runs concurrently with
 the parent and reports back later. The registry (`internal/agent/background.go`)
 is opencode's `BackgroundJob` translated to channels.
 
@@ -68,7 +68,7 @@ func (r *taskRegistry) settle(id string, s TaskStatus, report string) {
 ```
 
 Closing a channel is the one operation that wakes **all** receivers at once, so
-the tool caller, the TUI's `OnChange` redraw, and `/tasks` all observe
+the tool caller, the TUI's `OnChange` redraw, and `/subagents` all observe
 completion for free — there's no per-waiter state to manage. Cancellation is
 `context.WithCancel` on the subagent's turn; the result is delivered back into
 the parent as a **steered message** (channel close → `Steer`), so the model

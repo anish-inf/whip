@@ -103,6 +103,7 @@ func (m *model) applyAuthResult(res authResultMsg) {
 			ag.CompactClient, ag.CompactModel = m.agent.CompactClient, m.agent.CompactModel
 			ag.CompactThreshold = m.agent.CompactThreshold
 			m.agent = ag
+			m.applyTaskModel()
 			m.wireTasks()
 		}
 	}
