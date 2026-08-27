@@ -2,6 +2,7 @@ package acp
 
 import (
 	"encoding/base64"
+	"strings"
 	"testing"
 
 	acp "github.com/coder/acp-go-sdk"
@@ -18,6 +19,24 @@ func TestToolKindMap(t *testing.T) {
 	for name, k := range want {
 		if got := toolKind(name); got != k {
 			t.Errorf("toolKind(%q) = %v, want %v", name, got, k)
+		}
+	}
+}
+
+// pathArg only extracts a path for the file tools; other tools and bad JSON
+// yield "".
+func TestPathArg(t *testing.T) {
+	cases := []struct{ name, args, want string }{
+		{"read", `{"path":"/a/b.go"}`, "/a/b.go"},
+		{"write", `{"path":"/a/b.go","content":"x"}`, "/a/b.go"},
+		{"edit", `{"path":"/a/b.go"}`, "/a/b.go"},
+		{"bash", `{"command":"ls"}`, ""}, // not a file tool
+		{"read", `{bad json`, ""},        // unparseable args
+		{"read", `{"notpath":"x"}`, ""},  // missing path field
+	}
+	for _, c := range cases {
+		if got := pathArg(c.name, c.args); got != c.want {
+			t.Errorf("pathArg(%q, %q) = %q, want %q", c.name, c.args, got, c.want)
 		}
 	}
 }
@@ -108,6 +127,31 @@ func TestPromptFromBlocks(t *testing.T) {
 	}
 	if len(parts) != 0 {
 		t.Errorf("parts = %d, want 0", len(parts))
+	}
+}
+
+// promptFromBlocks: blob resources, audio, and image-without-vision all fall
+// back to inline text markers (only vision images become parts).
+func TestPromptFromBlocksFallbacks(t *testing.T) {
+	blocks := []acp.ContentBlock{
+		{Resource: &acp.ContentBlockResource{Type: "resource", Resource: acp.EmbeddedResourceResource{
+			BlobResourceContents: &acp.BlobResourceContents{Uri: "file:///bin.dat"},
+		}}},
+		{Audio: &acp.ContentBlockAudio{Type: "audio", MimeType: "audio/mpeg"}},
+		{Image: &acp.ContentBlockImage{Type: "image", Data: "AAAA", MimeType: "image/png"}},
+	}
+	text, parts := promptFromBlocks(blocks, false) // vision off
+	if !strings.Contains(text, "[binary resource: file:///bin.dat]") {
+		t.Errorf("blob resource marker missing: %q", text)
+	}
+	if !strings.Contains(text, "[audio: audio/mpeg — not supported]") {
+		t.Errorf("audio marker missing: %q", text)
+	}
+	if !strings.Contains(text, "[image: image/png]") {
+		t.Errorf("non-vision image marker missing: %q", text)
+	}
+	if len(parts) != 0 {
+		t.Errorf("parts = %d, want 0 with vision off", len(parts))
 	}
 }
 
