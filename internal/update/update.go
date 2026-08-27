@@ -10,6 +10,7 @@ package update
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -220,7 +221,7 @@ func fetchLatestGitHub() (string, error) {
 		return "", err
 	}
 	if rel.TagName == "" {
-		return "", fmt.Errorf("github: empty tag_name")
+		return "", errors.New("github: empty tag_name")
 	}
 	return rel.TagName, nil
 }
