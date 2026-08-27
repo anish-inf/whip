@@ -196,7 +196,12 @@ func TestTurnAPIError(t *testing.T) {
 		http.Error(w, "nope", http.StatusInternalServerError)
 	}))
 	defer srv.Close()
-	ag := New(llm.New(srv.URL, "k"), "m", 100, "sys")
+	// Single attempt: this test is about the error surfacing from Turn, not
+	// about the retry ladder (covered in internal/llm/retry_test.go). Leaving
+	// retries on made it sleep through the full backoff — ~80s for one assert.
+	c := llm.New(srv.URL, "k")
+	c.MaxRetries = 1
+	ag := New(c, "m", 100, "sys")
 	if _, err := ag.Turn(context.Background(), "go", Events{}); err == nil {
 		t.Fatal("expected error")
 	}
@@ -568,7 +573,12 @@ func TestCompactThresholdExplicitOverride(t *testing.T) {
 
 	// CompactThreshold wins over the default: same history at the default 50%
 	// would have compacted
-	ag2 := New(llm.New(srv.URL, "m"), "m", 100, "sys")
+	// The compaction call fails here by design (textServer speaks SSE, compact
+	// uses the non-streaming Complete) — that failure is the signal compaction
+	// was attempted. Single attempt so the assert doesn't wait out the backoff.
+	c2 := llm.New(srv.URL, "m")
+	c2.MaxRetries = 1
+	ag2 := New(c2, "m", 100, "sys")
 	ag2.ContextLimit = 1000
 	for range 8 {
 		ag2.Messages = append(ag2.Messages, llm.Message{Role: "user", Content: strings.Repeat("x", 360)})
