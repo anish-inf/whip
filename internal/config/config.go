@@ -4,6 +4,7 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -136,6 +137,13 @@ func (m Model) ContextWindow() int {
 // conversation's model when it's not in the user's config.
 const DefaultCompactModel = "deepseek-v4-flash-0731"
 
+// DefaultTaskModel is the built-in subagent-model default: subagents are
+// high-volume, self-contained work, so they run on the same cheap fast route
+// compaction uses unless the user pins taskModel or the main model overrides
+// per task. Falls back to the conversation's model when it's not resolvable
+// (an openrouter-only config resolves it via a catalog suffix match first).
+const DefaultTaskModel = DefaultCompactModel
+
 // DefaultCompactPct is the built-in compaction threshold: compact once the
 // estimated context use crosses this percent of the model's context window.
 // 50% keeps compaction deterministic instead of letting the context bloat.
@@ -149,6 +157,8 @@ type Config struct {
 	CompactModel    string              `json:"compactModel,omitempty"`    // model for compaction summaries; "" = the built-in default
 	CompactProvider string              `json:"compactProvider,omitempty"` // provider for the compaction model; "" = the model's default routing
 	CompactPct      int                 `json:"compactPct,omitempty"`      // compact at this % of the context window; 0 = DefaultCompactPct
+	TaskModel       string              `json:"taskModel,omitempty"`       // model subagents (the task tool) run on; "" = the built-in default
+	TaskProvider    string              `json:"taskProvider,omitempty"`    // provider for the subagent model; "" = the model's default routing
 	Theme           string              `json:"theme,omitempty"`           // "light", "dark", or "" (auto-detect at startup)
 	Mouse           *bool               `json:"mouse,omitempty"`           // false disables capture so native terminal selection works
 	Thinking        *bool               `json:"thinking,omitempty"`        // nil defaults to on; false hides reasoning tokens (ctrl+o)
@@ -508,6 +518,20 @@ func (c *Config) resolveFromCatalog(model, provider string) (Model, string, erro
 		m.Vision = true
 	}
 	return m, h.prov, nil
+}
+
+// Snapshot returns a copy of the config safe to read from another goroutine
+// while the original keeps being mutated on the UI goroutine (the subagent
+// model resolver runs on tool workers). Maps are copied one level deep —
+// their struct values are plain data; nested slices are never mutated in
+// place, only replaced wholesale with the map entry.
+func (c *Config) Snapshot() *Config {
+	snap := *c
+	snap.Providers = make(map[string]Provider, len(c.Providers))
+	maps.Copy(snap.Providers, c.Providers)
+	snap.Models = make(map[string]Model, len(c.Models))
+	maps.Copy(snap.Models, c.Models)
+	return &snap
 }
 
 func keys[V any](m map[string]V) string {

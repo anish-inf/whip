@@ -120,7 +120,7 @@ func TestBackgroundTaskDeliversReport(t *testing.T) {
 	defer srv.Close()
 
 	ag := New(llm.New(srv.URL, "k"), "m", 100, "sys")
-	task := ag.StartBackground(context.Background(), "probe", "do the thing")
+	task := ag.StartBackground("probe", "do the thing", SubModel{})
 
 	// wait on the Done channel — closes exactly once on settle
 	select {
@@ -160,7 +160,7 @@ func TestBackgroundTaskBroadcastsToManyWaiters(t *testing.T) {
 	defer srv.Close()
 
 	ag := New(llm.New(srv.URL, "k"), "m", 100, "sys")
-	task := ag.StartBackground(context.Background(), "d", "p")
+	task := ag.StartBackground("d", "p", SubModel{})
 
 	const waiters = 8
 	var woken atomic.Int32
@@ -190,7 +190,7 @@ func TestBackgroundTaskCancel(t *testing.T) {
 	defer srv.Close()
 
 	ag := New(llm.New(srv.URL, "k"), "m", 100, "sys")
-	task := ag.StartBackground(context.Background(), "d", "p")
+	task := ag.StartBackground("d", "p", SubModel{})
 	if !ag.Tasks().Cancel(task.ID) {
 		t.Fatal("cancel should succeed on a running task")
 	}
@@ -355,7 +355,7 @@ func TestBackgroundTaskSubscribersSeeLiveStream(t *testing.T) {
 	defer srv.Close()
 
 	ag := New(llm.New(srv.URL, "k"), "m", 100, "sys")
-	task := ag.StartBackground(context.Background(), "d", "p")
+	task := ag.StartBackground("d", "p", SubModel{})
 
 	var got atomic.Int32
 	ok := ag.Tasks().Subscribe(task.ID, Events{OnText: func(s string) { got.Add(int32(len(s))) }})
@@ -420,7 +420,7 @@ func TestBackgroundTaskSubscriberSeesToolEvents(t *testing.T) {
 	defer srv.Close()
 
 	ag := New(llm.New(srv.URL, "k"), "m", 100, "sys")
-	task := ag.StartBackground(context.Background(), "d", "p")
+	task := ag.StartBackground("d", "p", SubModel{})
 
 	var mu sync.Mutex
 	var seq []string
@@ -457,7 +457,7 @@ func TestBackgroundTaskManySubscribers(t *testing.T) {
 	defer srv.Close()
 
 	ag := New(llm.New(srv.URL, "k"), "m", 100, "sys")
-	task := ag.StartBackground(context.Background(), "d", "p")
+	task := ag.StartBackground("d", "p", SubModel{})
 
 	const subs = 4
 	var counts [subs]atomic.Int32
@@ -498,7 +498,7 @@ func TestBackgroundTaskUsageRollsIntoParent(t *testing.T) {
 	defer srv.Close()
 
 	ag := New(llm.New(srv.URL, "k"), "m", 100, "sys")
-	task := ag.StartBackground(context.Background(), "d", "p")
+	task := ag.StartBackground("d", "p", SubModel{})
 	select {
 	case <-task.Done:
 	case <-time.After(5 * time.Second):
@@ -559,7 +559,7 @@ func TestBroadcastBlockingSubscriberCannotDeadlock(t *testing.T) {
 	defer srv.Close()
 
 	ag := New(llm.New(srv.URL, "k"), "m", 100, "sys")
-	task := ag.StartBackground(context.Background(), "probe", "p")
+	task := ag.StartBackground("probe", "p", SubModel{})
 
 	inCallback := make(chan struct{})
 	notify := sync.OnceFunc(func() { close(inCallback) })

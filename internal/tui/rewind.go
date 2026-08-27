@@ -103,7 +103,7 @@ func toolVerb(name string) string {
 		return "Editing"
 	case "bash":
 		return "Running"
-	case "task":
+	case "subagent", "task": // "task" was the tool's pre-rename name (old sessions)
 		return "Delegating"
 	case "remember", "forget":
 		return "Remembering"

@@ -84,7 +84,7 @@ func TestScheduleFiresWakeup(t *testing.T) {
 	}
 	var wakeup llm.Message
 	for range 200 { // up to 2s for the turn goroutine to append
-		for _, v := range slices.Backward(m.agent.Messages) {
+		for _, v := range slices.Backward(m.agent.MessagesSnapshot()) {
 			if v.Role == "user" {
 				wakeup = v
 				break

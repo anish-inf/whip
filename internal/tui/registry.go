@@ -45,7 +45,8 @@ var registry = []registryEntry{
 	{Name: "/report", Hint: "— bug-report bundle: prefilled GitHub-issue link + copy-pastable environment snippet (terminal, theme, versions)", Category: "App"},
 	{Name: "/resume", Hint: "[id] — resume a previous session", Category: "Session"},
 	{Name: "/schedule", Hint: "@every 10m|<@at time> <prompt> — schedule a wakeup turn; list | cancel <n>", Category: "Session"},
-	{Name: "/tasks", Hint: "[id] — background subagents: focus the dock, or open one subagent's live view", Keybind: "ctrl+t", Category: "Session"},
+	{Name: "/subagent", Hint: "[-m model[@provider]] <prompt> — spawn a background subagent yourself (works mid-turn)", Category: "Session"},
+	{Name: "/subagents", Hint: "[id] — background subagents: focus the dock, or open one subagent's live view (alias /tasks)", Keybind: "ctrl+t", Category: "Session"},
 	{Name: "/theme", Hint: "[light|dark|auto] — color scheme (bare opens the switcher)", Category: "Display"},
 	{Name: "!cmd", Hint: "— run a shell command locally; output lands in the transcript and the conversation", Category: "App"},
 }

@@ -172,7 +172,7 @@ func TestTaskPersistsOnStartAndSettle(t *testing.T) {
 	m.sessionID = id
 	m.agent.Tasks().SetSessionID(id) // what persist() publishes
 
-	task := m.agent.StartBackground(t.Context(), "probe", "p")
+	task := m.agent.StartBackground("probe", "p", agent.SubModel{})
 	defer m.agent.Tasks().Cancel(task.ID)
 
 	// the start lands a running row (OnRecord fires synchronously)
@@ -217,7 +217,7 @@ func TestTaskPersistsWhenSessionIDAssignedMidFlight(t *testing.T) {
 	m.wireTasks()
 	// no session id published: the start's OnRecord must no-op, not fail
 
-	task := m.agent.StartBackground(t.Context(), "probe", "p")
+	task := m.agent.StartBackground("probe", "p", agent.SubModel{})
 	defer m.agent.Tasks().Cancel(task.ID)
 
 	id, err := m.store.Create("/tmp", "m", "p")
@@ -277,7 +277,7 @@ func TestTasksDockListsTasks(t *testing.T) {
 	srv := sseTextServer(t, "ok")
 	defer srv.Close()
 	m := tasksModel(srv.URL)
-	task := m.agent.StartBackground(t.Context(), "probe grafana", "look around")
+	task := m.agent.StartBackground("probe grafana", "look around", agent.SubModel{})
 	defer m.agent.Tasks().Cancel(task.ID)
 
 	dock := stripAll(m.tasksDock())
@@ -293,9 +293,9 @@ func TestCtrlTFocusesDockAndArrowsSelect(t *testing.T) {
 	srv := sseTextServer(t, "ok")
 	defer srv.Close()
 	m := tasksModel(srv.URL)
-	t1 := m.agent.StartBackground(t.Context(), "first", "p")
+	t1 := m.agent.StartBackground("first", "p", agent.SubModel{})
 	defer m.agent.Tasks().Cancel(t1.ID)
-	t2 := m.agent.StartBackground(t.Context(), "second", "p")
+	t2 := m.agent.StartBackground("second", "p", agent.SubModel{})
 	defer m.agent.Tasks().Cancel(t2.ID)
 
 	m.key(mkKey("ctrl+t"))
@@ -313,9 +313,13 @@ func TestCtrlTFocusesDockAndArrowsSelect(t *testing.T) {
 	if m.taskSel != 0 {
 		t.Fatalf("↑ should move the selection back up, got %d", m.taskSel)
 	}
-	m.key(mkKey("esc"))
+	m.key(mkKey("esc")) // esc is not a dock key: it stays the interrupt/rewind shortcut
+	if !m.tasksFocus {
+		t.Fatal("esc must not consume dock focus")
+	}
+	m.key(mkKey("up")) // the dock sits below the input: ↑ past the top hands focus back
 	if m.tasksFocus {
-		t.Fatal("esc should unfocus the dock")
+		t.Fatal("↑ past the top row should return focus to the input")
 	}
 }
 
@@ -323,7 +327,7 @@ func TestEnterOpensTaskViewAndEscBacksOut(t *testing.T) {
 	srv := sseTextServer(t, "report-body")
 	defer srv.Close()
 	m := tasksModel(srv.URL)
-	task := m.agent.StartBackground(t.Context(), "probe", "find things")
+	task := m.agent.StartBackground("probe", "find things", agent.SubModel{})
 	defer m.agent.Tasks().Cancel(task.ID)
 
 	m.key(mkKey("ctrl+t"))
@@ -345,9 +349,9 @@ func TestEnterOpensTaskViewAndEscBacksOut(t *testing.T) {
 	if !m.tasksFocus {
 		t.Fatal("esc from a task view should land on the focused dock")
 	}
-	m.key(mkKey("esc"))
+	m.key(mkKey("up")) // ↑ past the dock's top row returns to the input (esc no longer does)
 	if m.tasksFocus {
-		t.Fatal("second esc should return to the main thread")
+		t.Fatal("↑ past the top row should return to the main thread")
 	}
 }
 
@@ -366,7 +370,7 @@ func TestEnterOnEmptyFocusedDockDoesNotPanic(t *testing.T) {
 	}
 
 	// stale selection beyond the shrunk list clamps instead of panicking
-	task := m.agent.StartBackground(t.Context(), "probe", "p")
+	task := m.agent.StartBackground("probe", "p", agent.SubModel{})
 	defer m.agent.Tasks().Cancel(task.ID)
 	m.tasksFocus = true
 	m.taskSel = 5 // beyond the single dock row
@@ -384,9 +388,9 @@ func TestDockClickOpensClickedRow(t *testing.T) {
 	srv := sseTextServer(t, "ok")
 	defer srv.Close()
 	m := tasksModel(srv.URL)
-	t1 := m.agent.StartBackground(t.Context(), "first", "p")
+	t1 := m.agent.StartBackground("first", "p", agent.SubModel{})
 	defer m.agent.Tasks().Cancel(t1.ID)
-	t2 := m.agent.StartBackground(t.Context(), "second", "p")
+	t2 := m.agent.StartBackground("second", "p", agent.SubModel{})
 	defer m.agent.Tasks().Cancel(t2.ID)
 
 	click := func(y int) tea.Model {
@@ -413,7 +417,7 @@ func TestDockClickOpensClickedRow(t *testing.T) {
 	// render at stripTop+1 (past the hint) and stripTop+2.
 	m.tasksFocus = true
 	m.layout()
-	stripTop := m.height - 2 - m.input.Height() - m.dockRows
+	stripTop := m.height - 2 - m.dockRows // the strip renders below the input, above blank+status
 	m2 = click(stripTop + 2).(*model)
 	if m2.taskVP == nil || m2.taskVP.id != t1.ID {
 		t.Fatalf("clicking the second task row should open %s, got %+v", t1.ID, m2.taskVP)
@@ -437,7 +441,7 @@ func TestDockClickIgnoredWhilePaletteOpen(t *testing.T) {
 	srv := sseTextServer(t, "ok")
 	defer srv.Close()
 	m := tasksModel(srv.URL)
-	task := m.agent.StartBackground(t.Context(), "probe", "p")
+	task := m.agent.StartBackground("probe", "p", agent.SubModel{})
 	defer m.agent.Tasks().Cancel(task.ID)
 
 	m.layout()
@@ -455,7 +459,7 @@ func TestSettledTaskViewShowsReport(t *testing.T) {
 	srv := sseTextServer(t, "the final report")
 	defer srv.Close()
 	m := tasksModel(srv.URL)
-	task := m.agent.StartBackground(t.Context(), "probe", "p")
+	task := m.agent.StartBackground("probe", "p", agent.SubModel{})
 	waitSettled(t, task)
 
 	m.openTask(task.ID)
@@ -474,7 +478,7 @@ func TestSlashTasksFocusesDockAndOpensByID(t *testing.T) {
 	srv := sseTextServer(t, "ok")
 	defer srv.Close()
 	m := tasksModel(srv.URL)
-	task := m.agent.StartBackground(t.Context(), "probe", "p")
+	task := m.agent.StartBackground("probe", "p", agent.SubModel{})
 	defer m.agent.Tasks().Cancel(task.ID)
 
 	m.command("/tasks")
@@ -493,7 +497,7 @@ func TestTasksDockShowsSettledTasks(t *testing.T) {
 	srv := sseTextServer(t, "ok")
 	defer srv.Close()
 	m := tasksModel(srv.URL)
-	task := m.agent.StartBackground(t.Context(), "finished probe", "p")
+	task := m.agent.StartBackground("finished probe", "p", agent.SubModel{})
 	waitSettled(t, task)
 
 	dock := stripAll(m.tasksDock())
@@ -517,7 +521,7 @@ func TestLayoutReservesDockHeight(t *testing.T) {
 	m.Update(mkWinSize(80, 30))
 	base := m.vp.Height
 
-	task := m.agent.StartBackground(t.Context(), "probe", "p")
+	task := m.agent.StartBackground("probe", "p", agent.SubModel{})
 	defer m.agent.Tasks().Cancel(task.ID)
 	tm, _ := m.Update(taskUpdateMsg{}) // force a layout pass with the task visible
 	m = tm.(*model)
@@ -528,12 +532,13 @@ func TestLayoutReservesDockHeight(t *testing.T) {
 	if m.vp.Height != base-dockRows {
 		t.Fatalf("viewport should shrink by exactly the dock rows: base=%d now=%d dock=%d", base, m.vp.Height, dockRows)
 	}
-	// and the dock renders on its own row above the input, not glued to it
+	// and the dock renders on its own row below the input (above the status
+	// line), so ↓ from an empty input lands on it naturally
 	v := stripAll(m.View())
 	di := strings.Index(v, "probe")
 	ii := strings.Index(v, "Ask whip")
-	if di < 0 || ii < 0 || di > ii {
-		t.Fatalf("dock must render above the input: dock@%d input@%d\n%s", di, ii, v)
+	if di < 0 || ii < 0 || di < ii {
+		t.Fatalf("dock must render below the input: dock@%d input@%d\n%s", di, ii, v)
 	}
 	if m.dockTop() < 0 || m.dockTop() >= m.height {
 		t.Fatalf("dockTop out of screen: %d (height %d)", m.dockTop(), m.height)
@@ -567,7 +572,7 @@ func TestDockScrollsWithSelection(t *testing.T) {
 	// task IDs come from a global counter, so tests can't rely on a fresh
 	// numbering — the probe-N descriptions are what the dock shows
 	for i := range 8 {
-		tk := m.agent.StartBackground(t.Context(), fmt.Sprintf("probe-%d", i), "p")
+		tk := m.agent.StartBackground(fmt.Sprintf("probe-%d", i), "p", agent.SubModel{})
 		defer m.agent.Tasks().Cancel(tk.ID)
 	}
 
@@ -595,9 +600,9 @@ func TestDockMouseClickOpensTask(t *testing.T) {
 	srv := sseTextServer(t, "ok")
 	defer srv.Close()
 	m := tasksModel(srv.URL)
-	t1 := m.agent.StartBackground(t.Context(), "first", "p")
+	t1 := m.agent.StartBackground("first", "p", agent.SubModel{})
 	defer m.agent.Tasks().Cancel(t1.ID)
-	t2 := m.agent.StartBackground(t.Context(), "second", "p")
+	t2 := m.agent.StartBackground("second", "p", agent.SubModel{})
 	defer m.agent.Tasks().Cancel(t2.ID)
 
 	m.layout()
@@ -634,7 +639,7 @@ func TestTaskEventAppendsToOpenView(t *testing.T) {
 	srv := sseTextServer(t, "ok")
 	defer srv.Close()
 	m := tasksModel(srv.URL)
-	task := m.agent.StartBackground(t.Context(), "probe", "p")
+	task := m.agent.StartBackground("probe", "p", agent.SubModel{})
 	defer m.agent.Tasks().Cancel(task.ID)
 
 	m.openTask(task.ID)
@@ -665,7 +670,7 @@ func TestOpenTaskViewRefreshesOnSettle(t *testing.T) {
 	srv := sseTextServer(t, "the streamed final report")
 	defer srv.Close()
 	m := tasksModel(srv.URL)
-	task := m.agent.StartBackground(t.Context(), "probe", "p")
+	task := m.agent.StartBackground("probe", "p", agent.SubModel{})
 
 	m.openTask(task.ID)
 	if !m.taskVP.live {
@@ -687,19 +692,24 @@ func TestOpenTaskViewRefreshesOnSettle(t *testing.T) {
 	}
 }
 
-// x in an open view cancels a running task.
-func TestTaskViewXCancels(t *testing.T) {
+// ctrl+x in an open view cancels a running task; plain runes go to the chat
+// input instead (typing must not trigger actions).
+func TestTaskViewCtrlXCancels(t *testing.T) {
 	srv := sseTextServer(t, "ok")
 	defer srv.Close()
 	m := tasksModel(srv.URL)
-	task := m.agent.StartBackground(t.Context(), "probe", "p")
+	task := m.agent.StartBackground("probe", "p", agent.SubModel{})
 
 	m.openTask(task.ID)
 	m.taskViewKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+	if got := m.taskVP.input.Value(); got != "x" {
+		t.Fatalf("plain runes should type into the chat input, got %q", got)
+	}
+	m.taskViewKey(tea.KeyMsg{Type: tea.KeyCtrlX})
 	waitSettled(t, task)
 	snap, _ := m.agent.Tasks().Get(task.ID)
 	if snap.Status != agent.TaskCancelled {
-		t.Fatalf("x should cancel the running task, got %s", snap.Status)
+		t.Fatalf("ctrl+x should cancel the running task, got %s", snap.Status)
 	}
 }
 
@@ -708,7 +718,7 @@ func TestCtrlTFromTaskViewLandsOnDock(t *testing.T) {
 	srv := sseTextServer(t, "ok")
 	defer srv.Close()
 	m := tasksModel(srv.URL)
-	task := m.agent.StartBackground(t.Context(), "probe", "p")
+	task := m.agent.StartBackground("probe", "p", agent.SubModel{})
 	defer m.agent.Tasks().Cancel(task.ID)
 
 	m.openTask(task.ID)

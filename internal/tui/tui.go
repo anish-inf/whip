@@ -198,7 +198,7 @@ type model struct {
 	perms      permRules   // saved allow-always rules
 	permDialog *permDialog // open permission modal; the turn is paused on it
 
-	tasksFocus bool      // the tasks dock owns ↑/↓/enter/esc instead of the input
+	tasksFocus bool      // the tasks dock owns ↑/↓/enter (never esc); typing or ↑ past the top returns to the input
 	taskSel    int       // selected row in the dock (index into newest-first tasks)
 	dockSkip   int       // non-task rows at the dock's top (focused hint) — click math skips them
 	taskVP     *taskView // open per-task detail view; nil when on the main thread
@@ -315,6 +315,7 @@ func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string, ca
 		skillScan: func() []skills.Skill { return skills.Scan(skills.DefaultDirs()...) },
 	}
 	m.applyCompactModel()
+	m.applyTaskModel()
 	m.agent.CompactThreshold = compactThresholdFor(cfg)
 	m.wireTasks() // redraw the UI when background subagents start/settle
 
@@ -652,6 +653,7 @@ func (m *model) resume(id string) error {
 		m.agent.ContextLimit = m.contextLimitFor(m.provName, m.agent.Model)
 	}
 	m.applyCompactModel()
+	m.applyTaskModel()
 	m.agent.CompactThreshold = compactThresholdFor(m.cfg)
 	m.wireTasks()
 	// Publish before restoring so the settled rows record against this session.
@@ -1523,18 +1525,18 @@ func (m *model) layout() {
 }
 
 // dockTop returns the screen row of the first TASK row in the dock: the dock
-// renders as the last dockRows rows above the input box and bottom pad, but
-// dockSkip non-task rows (the focused hint) sit on top of the task rows.
-// layout() keeps both in sync with what View renders. The row is an absolute
-// screen row: counted up from the view's bottom (viewTop+viewH), which equals
-// the terminal bottom while the view is bottom-anchored but stays correct
-// when a shrunk view floats above it.
+// renders below the input as the last dockRows rows above the blank + status
+// line, but dockSkip non-task rows (the focused hint) sit on top of the task
+// rows. layout() keeps both in sync with what View renders. The row is an
+// absolute screen row: counted up from the view's bottom (viewTop+viewH),
+// which equals the terminal bottom while the view is bottom-anchored but
+// stays correct when a shrunk view floats above it.
 func (m *model) dockTop() int {
 	bottom := m.height
 	if m.viewH > 0 {
 		bottom = m.viewTop + m.viewH
 	}
-	return bottom - 2 - m.input.Height() - m.dockRows + m.dockSkip
+	return bottom - 2 - m.dockRows + m.dockSkip
 }
 
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -2041,6 +2043,15 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				preview = append(preview[:4], fmt.Sprintf("… +%d lines", len(msg.s2)-4))
 			}
 			fmt.Fprintf(&tv.buf, "%s\n", dimStyle.Render("  "+strings.Join(preview, "\n  ")))
+		case 3: // a steered message reached the running subagent (task_steer / chat)
+			fmt.Fprintf(&tv.buf, "\n%s %s\n", youStyle.Render("↪ steered:"), msg.s)
+		case 4: // follow-up turn settled; unlock the chat input
+			tv.busy, tv.followCancel = false, nil
+			if msg.s != "" {
+				fmt.Fprintf(&tv.buf, "\n%s\n", errStyle.Render(msg.s))
+			} else {
+				tv.buf.WriteString("\n")
+			}
 		}
 		m.refreshTaskVP()
 		return m, nil
@@ -2150,8 +2161,8 @@ func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	switch msg.Type {
 	case tea.KeyCtrlT:
-		// focus the tasks dock (or unfocus it) — the persistent strip above
-		// the input listing background subagents
+		// focus the tasks dock (or unfocus it) — the persistent strip below
+		// the input listing background subagents (↓ on an empty input works too)
 		if len(m.dockTasks()) == 0 {
 			return m, nil
 		}
@@ -2210,8 +2221,9 @@ func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.menu = nil
 		case m.queueSel >= 0: // leave queue navigation
 			m.queueSel = -1
-		case m.tasksFocus: // leave dock navigation, back to the main thread
-			m.tasksFocus = false
+		// NOTE: dock focus deliberately does NOT consume esc — esc stays the
+		// interrupt/rewind key. Leave the dock with ↑ past its top row (it
+		// sits below the input), ctrl+t, or just typing.
 		default:
 			dismissed = false
 		}
@@ -2303,6 +2315,13 @@ func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
+		// empty input + a visible dock below it: ↓ moves focus into the
+		// subagent list (↑ from its top row hands focus back)
+		if m.input.Value() == "" && len(m.dockTasks()) > 0 {
+			m.tasksFocus = true
+			m.taskSel = 0
+			return m, nil
+		}
 		// move within the textarea unless the cursor already sits on the
 		// last (soft-wrapped) row, where ↓ falls through to history recall
 		if !m.cursorOnLastLine() {
@@ -2326,7 +2345,11 @@ func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if m.tasksFocus {
-			m.taskSel = max(m.taskSel-1, 0)
+			if m.taskSel == 0 { // the dock sits below the input: ↑ off its top row hands focus back
+				m.tasksFocus = false
+				return m, nil
+			}
+			m.taskSel--
 			return m, nil
 		}
 		// while busy with a queue and an empty input, ↑ selects queued messages
@@ -2494,6 +2517,9 @@ func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.submit(text)
 	}
 
+	// Typing hands focus back from the dock to the input implicitly — without
+	// this, enter after typing would open the selected task, not submit.
+	m.tasksFocus = false
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
 	m.refreshMenu()
@@ -2753,6 +2779,7 @@ func (m *model) switchModel(name, prov string) {
 	ag.CompactClient, ag.CompactModel = m.agent.CompactClient, m.agent.CompactModel
 	ag.CompactThreshold = m.agent.CompactThreshold
 	m.agent, m.modelName, m.provName = ag, mn, pn
+	m.applyTaskModel()
 	m.wireTasks()
 	if !slices.Contains(m.effortsFor(), ag.Effort) {
 		m.resetEffort("") // the new model doesn't support the current level
@@ -3145,9 +3172,14 @@ func (m *model) submitTurn(text string, authored bool) (tea.Model, tea.Cmd) {
 	}
 	m.discardFuture() // new activity while rewound kills the redo stack
 	// settled subagents already reported into the transcript; clear them off
-	// the dock strip so a new turn starts with only what's still running
+	// the dock strip so a new turn starts with only what's still running —
+	// except a task whose chat pane is open (its retained subagent is in use)
 	if m.agent != nil {
-		m.agent.Tasks().ClearSettled()
+		var keep []string
+		if m.taskVP != nil {
+			keep = append(keep, m.taskVP.id)
+		}
+		m.agent.Tasks().ClearSettled(keep...)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancel = cancel
@@ -3265,7 +3297,7 @@ func busyCmd(text string) bool {
 		return false
 	}
 	switch fields[0] {
-	case "/help", "/theme", "/mouse", "/effort", "/tasks", "/cd", "/pwd", "/report":
+	case "/help", "/theme", "/mouse", "/effort", "/subagents", "/tasks", "/subagent", "/cd", "/pwd", "/report":
 		return true
 	case "/auth": // must run now even while busy: an inline key queued as a chat message would be sent to the model
 		return true
@@ -3348,8 +3380,11 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 	case "/pwd":
 		m.append(dimStyle.Render(cwd()))
 		return m, nil
-	case "/tasks":
-		if len(fields) > 1 { // /tasks <id>: jump straight into the detail view
+	case "/subagent": // user-spawned background subagent — the LLM isn't the only driver
+		m.taskCommand(strings.TrimSpace(strings.TrimPrefix(text, "/subagent")))
+		return m, nil
+	case "/subagents", "/tasks": // /tasks kept as an alias
+		if len(fields) > 1 { // /subagents <id>: jump straight into the detail view
 			m.openTask(fields[1])
 			return m, nil
 		}
@@ -3762,10 +3797,6 @@ func (m *model) viewBody() string {
 		}
 	}
 	b.WriteString("\n")
-	// the persistent background-subagent strip sits just above the input box
-	if dock := m.tasksDock(); dock != "" {
-		b.WriteString(dock + "\n")
-	}
 	if m.rew != nil {
 		b.WriteString(m.rewindView() + "\n\n")
 	}
@@ -3795,6 +3826,11 @@ func (m *model) viewBody() string {
 	}
 	if m.menu != nil {
 		b.WriteString("\n" + m.menuView())
+	}
+	// the persistent background-subagent strip sits just below the input box
+	// (above the status line): ↓ on an empty input moves focus into it
+	if dock := m.tasksDock(); dock != "" {
+		b.WriteString("\n" + dock)
 	}
 	b.WriteString("\n\n" + m.statusView()) // persistent status line, with a blank line above
 	return b.String()

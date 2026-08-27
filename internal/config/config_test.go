@@ -431,3 +431,25 @@ func TestLoadMixedTokenFields(t *testing.T) {
 		t.Fatalf("m2: %+v", m2)
 	}
 }
+
+// Snapshot hands worker goroutines an isolated view: mutating the original's
+// maps after the snapshot must not show through.
+func TestSnapshotIsolatesMaps(t *testing.T) {
+	cfg := Default()
+	snap := cfg.Snapshot()
+	cfg.Providers["late"] = Provider{BaseURL: "http://late"}
+	cfg.Models["late-model"] = Model{Providers: []string{"late"}}
+	cfg.DefaultModel = "changed"
+	if _, ok := snap.Providers["late"]; ok {
+		t.Fatal("snapshot providers must not see later mutations")
+	}
+	if _, ok := snap.Models["late-model"]; ok {
+		t.Fatal("snapshot models must not see later mutations")
+	}
+	if snap.DefaultModel == "changed" {
+		t.Fatal("snapshot scalars are copies")
+	}
+	if len(snap.Providers) != len(Default().Providers) || len(snap.Models) != len(Default().Models) {
+		t.Fatal("snapshot should carry the original entries")
+	}
+}
