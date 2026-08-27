@@ -20,8 +20,9 @@ var commands = completionTable()
 // completionTable derives the tab-completion table from the registry, so a
 // command can never be dispatchable but uncompletable (or vice versa).
 func completionTable() []cand {
-	var out []cand
-	for _, e := range slashRegistry() {
+	reg := slashRegistry()
+	out := make([]cand, 0, len(reg))
+	for _, e := range reg {
 		out = append(out, cand{e.Name, e.Hint})
 	}
 	return out

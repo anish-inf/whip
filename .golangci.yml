@@ -38,6 +38,7 @@ linters:
     - mirror # wrong bytes/strings mirror patterns
     - canonicalheader # http.Header.Get("...") with non-canonical header names
     - gocheckcompilerdirectives # malformed //go: directives silently ignored
+    - prealloc # slice grown in a range loop without a capacity hint
     # --- idiomatic modernization (Go 1.22+; go.mod is 1.27) ---
     - intrange # range-over-int instead of C-style for loops
     - modernize # min/max, slices/maps/strings helpers, range-over-func
@@ -94,6 +95,9 @@ linters:
     - promlinter # no Prometheus metrics in this codebase
     - protogetter # no protobuf
     - spancheck # no OpenTelemetry
+    # Considered from golangci/awesome-go-linters and rejected:
+    - nakedret # only fires on long functions; funlen/gocyclo already rejected, 0 hits anyway
+    - dogsled # 2 hits, both deliberate `_, _, _ =` drain calls in tests
 
   settings:
     errcheck:
@@ -126,7 +130,7 @@ linters:
       # tests legitimately use os.Setenv/os.MkdirTemp where t.* equivalents
       # are awkward; usetesting is on via staticcheck-adjacent checks anyway.
       - path: _test\.go
-        linters: [errcheck, gosec]
+        linters: [errcheck, gosec, prealloc]
       # internal/browser drives Chromium over a websocket; noctx/bodyclose
       # false-positive on chromedp/rod plumbing.
       - path: internal/browser
@@ -141,6 +145,7 @@ linters:
 formatters:
   enable:
     - gofumpt # superset of gofmt -s; matches `task check`'s gofmt -s gate
+    - goimports # unused imports + stdlib/local grouping; gofumpt's formatting is a superset of gofmt's, so no conflict
   settings:
     gofumpt:
       extra:
