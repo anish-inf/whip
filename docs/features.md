@@ -291,12 +291,24 @@ relay: full device login + key mint, store round-trip, key validation),
   within a 2-second window**, so a stray ctrl+c can't nuke the session. The
   hint `press ctrl+c again to quit` shows while armed.
   Tests: `quit_confirm_test.go`.
-- **Collapsible tool results.** Tool results store raw output in a `blockTool`
-  transcript block and render collapsed to 5 lines with a `… +N lines` hint.
-  `ctrl+e` toggles the most recent; clicking a block expands/collapses it
-  (each block tracks its rendered line range `y0`/`y1` so the click row maps
-  through the viewport offset). Blocks re-render at the current width on
-  terminal resize. Tests: `tool_expand_test.go`, `resize_test.go`.
+- **Collapsible tool results, claude-style.** A completed call renders as a
+  `● Verb(subject)` header (`internal/tui/toolrow.go` — `Update(path)`,
+  `Bash(cmd)`, `Subagent(description)`; the collapse never loses what the call
+  was about) over its result in a `blockTool` block: first line under a `⎿`
+  marker, collapsed to 5 lines with a `… +N lines` hint, red when the result
+  is an error. **Write/edit results render their diff**: the tools emit
+  line-numbered fenced diffs (`editDiff` with a startLine; `write` diffs
+  overwrites against the old content from line 1), and the TUI shows
+  `⎿ Added N lines, removed M lines` over red/green full-width bands with
+  absolute line numbers — the diff IS the collapsed view (capped at 30 rows),
+  and trailing LSP diagnostics stay visible under it. Resumed sessions
+  re-render call headers and diffs from the stored messages. `ctrl+e` toggles
+  the most recent; clicking a block expands/collapses it (each block tracks
+  its rendered line range `y0`/`y1` so the click row maps through the
+  viewport offset). Blocks re-render at the current width on terminal resize.
+  Tests: `tool_expand_test.go`, `resize_test.go`, `toolrow_test.go`
+  (headers, extract/counts, colored diff render, preview cap, resume),
+  `tools_test.go` — `TestEditDiffLineNumbers`, `TestWriteToolDiffOnOverwrite`.
 - **Markdown.** Assistant messages render through glamour; streamed in-flight
   text stays plain and renders on flush. `markdown.go`.
 - **Clickable links (OSC 8).** URLs and existing local file paths in the
