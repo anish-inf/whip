@@ -78,6 +78,19 @@ func firstLine(s string) string {
 	return "(no output)"
 }
 
+// lastLines is the running tool row's live tail: the last n non-empty lines,
+// each truncated for width sanity, joined with newlines.
+func lastLines(s string, n int) string {
+	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
+	var kept []string
+	for i := len(lines) - 1; i >= 0 && len(kept) < n; i-- {
+		if l := strings.TrimRight(lines[i], "\r \t"); l != "" {
+			kept = append([]string{truncLine(l, 200)}, kept...)
+		}
+	}
+	return strings.Join(kept, "\n  ")
+}
+
 // toolVerb is the present-participle a running row leads with ("Reading
 // file…"-style); the tool name verbatim when there's no nicer verb.
 func toolVerb(name string) string {

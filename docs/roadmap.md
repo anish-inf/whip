@@ -65,9 +65,9 @@ parallel tool calls and background subagents).
 
 - [x] Parallel tool-call execution with per-path file mutation lock (pi: `withFileMutationQueue`, `executeToolCallsParallel`) — `agent.runTools` fans a tool-call batch out to goroutines; write/edit serialize through a per-canonical-path channel semaphore, bash takes a global lock; results land in call order, OnToolStart/End fire per call
 - [x] Retry with backoff on provider errors (pi settings: `retry: {maxRetries, baseDelayMs}`) — transient failures (429/5xx/transport) retry with exponential backoff (1s→2s→4s… capped 20s, jittered), configurable via `maxRetries` (default 8, 1 disables); streaming retries stop once visible text has been emitted so the transcript never double-prints, and context-limit errors pass straight through to the compaction retry
-- [ ] Streamed partial tool output (bash `onUpdate` throttled at 100ms in pi)
-- [ ] Spill truncated bash output to a temp file and mention the path (pi bash tool)
-- [ ] Inject `WHIP_SESSION_ID` / `WHIP_MODEL` env into bash children (pi injects `PI_*`)
+- [x] Streamed partial tool output (bash `onUpdate` throttled at 100ms in pi) — `bashrun.Options.OnUpdate` fires accumulated-output snapshots at most every 100ms from the run's own goroutine; the bash tool picks it up via a per-call ctx value (`tools.WithOnUpdate` — parallel calls can't cross wires), `agent.Events.OnToolOutput` carries it with the tool-call id, and the TUI renders the last-3-lines tail under the running tool row until `toolEndMsg` collapses it
+- [x] Spill truncated bash output to a temp file and mention the path (pi bash tool) — when combined output exceeds `maxOutput` and gets tail-truncated, `bashrun.Spill` writes the full bytes to `$TMPDIR/whip-bash-<pid>/*.log` (0600) and the tool result appends `[full output (N bytes): <path>]` so the model can read/grep the rest; spill failure degrades silently, never breaks the result
+- [x] Inject `WHIP_SESSION_ID` / `WHIP_MODEL` env into bash children (pi injects `PI_*`) — already shipped: `bashrun.SetMarkers` stamps `WHIP=1`, `WHIP_SESSION_ID`, `WHIP_MODEL`, `WHIP_PID` on every child env (wired from `tui.go` on session create/resume); checkbox was stale
 
 ## Skills & subagents
 

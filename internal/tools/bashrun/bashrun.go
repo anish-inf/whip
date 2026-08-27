@@ -97,6 +97,12 @@ type Options struct {
 	// OnOutput streams PTY stdout/stderr deltas back to the caller (live
 	// transcript). Interactive only; safe to call from the run goroutine.
 	OnOutput func(chunk string)
+	// OnUpdate reports the accumulated combined output while a non-interactive
+	// command runs, throttled to at most one call per ~100ms (pi's bash
+	// onUpdate). Invoked from the run's own goroutines; must not block.
+	// The final output is delivered via Result, not OnUpdate; one trailing
+	// call may land after Run returns if a tick was in flight.
+	OnUpdate func(outputSoFar string)
 	// OnAwaitInput is called once per second while the child is quiet and
 	// likely waiting for input; secLeft is the seconds remaining before the
 	// inactivity timeout fires. Interactive only.
@@ -129,7 +135,7 @@ func Run(ctx context.Context, opts Options) Result {
 	if opts.Interactive {
 		return runInteractive(ctx, cmd, opts)
 	}
-	return runPiped(ctx, cmd)
+	return runPiped(ctx, cmd, opts.OnUpdate)
 }
 
 // runPiped runs the command with stdout/stderr captured, stdin wired to
@@ -145,7 +151,11 @@ func Run(ctx context.Context, opts Options) Result {
 // our read ends the moment the process exits, so a lingering grandchild can't
 // stall us. (We don't get the grandchild's later output, which is correct —
 // it outlived the command.)
-func runPiped(ctx context.Context, cmd *exec.Cmd) Result {
+// updateInterval is the minimum gap between OnUpdate calls while a command
+// runs (pi throttles its bash onUpdate at 100ms too).
+const updateInterval = 100 * time.Millisecond
+
+func runPiped(ctx context.Context, cmd *exec.Cmd, onUpdate func(string)) Result {
 	// Hand-rolled pipes, NOT cmd.StdoutPipe: Wait() closes StdoutPipe's read
 	// ends the moment the child exits, discarding kernel-buffered output the
 	// drain goroutines haven't read yet (lost output on fast commands). With
@@ -208,6 +218,29 @@ func runPiped(ctx context.Context, cmd *exec.Cmd) Result {
 	}
 	go drain(stdout)
 	go drain(stderr)
+	// Stream throttled snapshots of the accumulated output to the caller so
+	// in-flight progress is visible before the command exits. One goroutine,
+	// owned by this run, exits when updatesDone closes below.
+	var updatesDone chan struct{}
+	if onUpdate != nil {
+		updatesDone = make(chan struct{})
+		defer close(updatesDone)
+		go func() {
+			ticker := time.NewTicker(updateInterval)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-updatesDone:
+					return
+				case <-ticker.C:
+					mu.Lock()
+					snap := out.String()
+					mu.Unlock()
+					onUpdate(snap)
+				}
+			}
+		}()
+	}
 	// Kill the process group if the run context is cancelled/times out.
 	watchDone := make(chan struct{})
 	defer close(watchDone)
@@ -272,7 +305,7 @@ func runInteractive(ctx context.Context, cmd *exec.Cmd, opts Options) Result {
 	if err != nil {
 		// Fall back to the safe non-interactive path; an interactive failure
 		// must never hang the agent.
-		return runPiped(ctx, cmd)
+		return runPiped(ctx, cmd, nil)
 	}
 	defer ptmx.Close()
 	track(cmd) // register for KillAll on whip exit
