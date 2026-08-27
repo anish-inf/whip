@@ -33,6 +33,17 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      # setup-go's own cache keys on go.sum alone, so once it exists it never
+      # refreshes — every run recompiles from whatever was cached the first
+      # time. Key on the sources too, with a prefix restore-key, so each run
+      # starts from the nearest previous compile and saves an updated cache.
+      - name: Go build cache (lint)
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/go-build
+          key: gobuild-lint-${{ runner.os }}-${{ hashFiles('**/*.go', 'go.sum') }}
+          restore-keys: gobuild-lint-${{ runner.os }}-
+
       - name: gofmt -s (matches task check)
         run: |
           unformatted=$(gofmt -s -l .)
@@ -73,6 +84,16 @@ jobs:
       # -race catches data races; -shuffle=on randomizes test order to catch
       # inter-test dependencies a contributor might introduce. Coverage is
       # recorded so the gate below can fail the PR if it drops.
+      # See the note in the lint job: the -race + -coverpkg objects are the
+      # expensive part of this job and setup-go's go.sum-keyed cache never
+      # refreshes to hold them.
+      - name: Go build cache (race + coverage objects)
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/go-build
+          key: gobuild-test-${{ runner.os }}-${{ hashFiles('**/*.go', 'go.sum') }}
+          restore-keys: gobuild-test-${{ runner.os }}-
+
       - name: go test (portable set, with coverage)
         run: |
           PKGS=$(go list ./... | grep -v -e /internal/browser -e /internal/tui)
@@ -105,6 +126,15 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+
+      # Per-target: each GOOS/GOARCH has its own standard-library objects, so
+      # they get their own cache rather than evicting each other.
+      - name: Go build cache (${{ matrix.target }})
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/go-build
+          key: gobuild-${{ matrix.target }}-${{ runner.os }}-${{ hashFiles('**/*.go', 'go.sum') }}
+          restore-keys: gobuild-${{ matrix.target }}-${{ runner.os }}-
 
       - name: Cross-compile check (${{ matrix.target }})
         env:

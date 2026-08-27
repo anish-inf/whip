@@ -73,3 +73,22 @@ func TestStartupReportSilent(t *testing.T) {
 		t.Errorf("expected silence, got %q", m.blocks[0].text)
 	}
 }
+
+// TestStartupReportUpdateNotice: a pending newer release (spotted by main's
+// background check) renders as a notice line naming `whip update`.
+func TestStartupReportUpdateNotice(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	t.Setenv("HOME", t.TempDir())
+
+	m := tasksModel("http://unused")
+	m.updateLatest = "v0.4.0"
+	m.startupReport()
+	if len(m.blocks) == 0 {
+		t.Fatal("no report rendered")
+	}
+	out := m.blocks[0].text
+	if !strings.Contains(out, "update available: v0.4.0") || !strings.Contains(out, "whip update") {
+		t.Errorf("missing update notice:\n%s", out)
+	}
+}
