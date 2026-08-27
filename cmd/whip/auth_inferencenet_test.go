@@ -50,11 +50,13 @@ func TestAuthInferenceNetStatusAndLogoutUnsigned(t *testing.T) {
 
 func TestAuthInferenceNetLogoutClearsStoredAuth(t *testing.T) {
 	t.Setenv("WHIP_HOME", t.TempDir())
+	// Point the remote calls at a dead local port so they fail fast (and the
+	// test never reaches the real relay); the local state is still cleared.
+	defer inferencenet.SetURLsForTest("http://127.0.0.1:1", "", "")()
 	if err := inferencenet.SaveAuth(inferencenet.Auth{SessionToken: "tok", MachineKey: "mk"}); err != nil {
 		t.Fatal(err)
 	}
-	// Logout hits the network for the remote calls; with unreachable URLs those
-	// fail soft (warnings), and the local state is still cleared.
+	// Logout's remote calls fail soft (warnings); the local state is cleared.
 	if err := authCLI([]string{"inference-net", "logout"}); err != nil {
 		t.Errorf("logout should clear local state even when remote calls fail: %v", err)
 	}

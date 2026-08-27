@@ -204,6 +204,10 @@ type model struct {
 	future []llm.Message // clipped tail kept for forward travel after a rewind
 
 	namePrompt *namePrompt // inline text prompt (fork naming, /rename)
+
+	// infAuth holds the in-flight inference-net device login across the
+	// team → project → create prompts.
+	infAuth *inferenceNetPending
 }
 
 // picker is the /resume session browser. metas is newest-first; the list is
@@ -1897,6 +1901,18 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case authResultMsg:
 		m.applyAuthResult(msg)
+		return m, nil
+
+	case inferenceNetLoginMsg:
+		m.applyInferenceNetLogin(msg)
+		return m, nil
+
+	case inferenceNetProjectsMsg:
+		m.applyInferenceNetProjects(msg)
+		return m, nil
+
+	case inferenceNetProjectCreatedMsg:
+		m.applyInferenceNetProjectCreated(msg)
 		return m, nil
 
 	case inferenceNetAuthMsg:
