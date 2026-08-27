@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"sync"
 	"time"
 
@@ -28,8 +29,8 @@ const (
 )
 
 var modes = []acp.SessionMode{
-	{Id: ModeAuto, Name: "Auto", Description: acp.Ptr("Run tools without asking (trusted automation)")},
-	{Id: ModeAsk, Name: "Ask", Description: acp.Ptr("Ask the editor before bash/write/edit calls")},
+	{Id: ModeAuto, Name: "Auto", Description: new("Run tools without asking (trusted automation)")},
+	{Id: ModeAsk, Name: "Ask", Description: new("Ask the editor before bash/write/edit calls")},
 }
 
 // Factory builds the agent loop + MCP manager for one session rooted at cwd.
@@ -143,7 +144,7 @@ func (b *Bridge) Initialize(_ context.Context, params acp.InitializeRequest) (ac
 		},
 		AgentInfo: &acp.Implementation{
 			Name:    "whip",
-			Title:   acp.Ptr("whip"),
+			Title:   new("whip"),
 			Version: b.version,
 		},
 		AuthMethods: []acp.AuthMethod{},
@@ -203,9 +204,7 @@ func (b *Bridge) CloseAll() {
 // The returned map is ready for mcp.NewManager.
 func (b *Bridge) mergeMCPServers(client []acp.McpServer) map[string]mcp.ServerConfig {
 	out := make(map[string]mcp.ServerConfig, len(b.mcpBase)+len(client))
-	for name, cfg := range b.mcpBase {
-		out[name] = cfg
-	}
+	maps.Copy(out, b.mcpBase)
 	for _, srv := range client {
 		var name string
 		var cfg mcp.ServerConfig
@@ -335,10 +334,10 @@ func (b *Bridge) ListSessions(_ context.Context, params acp.ListSessionsRequest)
 		}
 		info := acp.SessionInfo{SessionId: acp.SessionId(m.ID), Cwd: m.CWD}
 		if m.Title != "" {
-			info.Title = acp.Ptr(m.Title)
+			info.Title = new(m.Title)
 		}
 		if !m.UpdatedAt.IsZero() {
-			info.UpdatedAt = acp.Ptr(m.UpdatedAt.UTC().Format(time.RFC3339))
+			info.UpdatedAt = new(m.UpdatedAt.UTC().Format(time.RFC3339))
 		}
 		out = append(out, info)
 	}
@@ -522,7 +521,7 @@ func (b *Bridge) sendTitle(ctx context.Context, s *acpSession) {
 	}
 	_ = b.update(ctx, s.id, acp.SessionUpdate{SessionInfoUpdate: &acp.SessionSessionInfoUpdate{
 		SessionUpdate: "session_info_update",
-		Title:         acp.Ptr(meta.Title),
+		Title:         new(meta.Title),
 	}})
 }
 

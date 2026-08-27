@@ -12,6 +12,7 @@ import (
 	"io"
 	"math/rand/v2"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -350,8 +351,13 @@ type Request struct {
 	Tools           []Tool    `json:"tools,omitempty"`
 	MaxTokens       int       `json:"max_tokens,omitempty"`
 	ReasoningEffort string    `json:"reasoning_effort,omitempty"`
-	Stream          bool      `json:"stream"`
-	StreamOptions   *struct {
+	// Temperature and TopP are optional per-model sampling knobs. Pointers so
+	// 0.0 (a legitimate value) is distinguishable from unset; nil omits the
+	// field from the request, preserving provider defaults.
+	Temperature   *float64 `json:"temperature,omitempty"`
+	TopP          *float64 `json:"top_p,omitempty"`
+	Stream        bool     `json:"stream"`
+	StreamOptions *struct {
 		IncludeUsage bool `json:"include_usage"`
 	} `json:"stream_options,omitempty"`
 }
@@ -455,12 +461,10 @@ func retryable(err error) bool {
 	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return false
 	}
-	var nr nonRetryable
-	if errors.As(err, &nr) {
+	if _, ok := errors.AsType[nonRetryable](err); ok {
 		return false
 	}
-	var he *HTTPError
-	if errors.As(err, &he) {
+	if he, ok := errors.AsType[*HTTPError](err); ok {
 		code, _ := strconv.Atoi(strings.Fields(he.Status)[0])
 		return retryableStatus(code)
 	}
@@ -473,11 +477,8 @@ func retryable(err error) bool {
 // backoff returns the sleep before the next attempt: 1s, 2s, 4s… capped at
 // 20s, plus up to 25% jitter so concurrent sessions don't retry in lockstep.
 func backoff(attempt int) time.Duration {
-	d := time.Second << (attempt - 1)
-	if d > 20*time.Second {
-		d = 20 * time.Second
-	}
-	return d + time.Duration(rand.Int64N(int64(d/4)+1))
+	d := min(time.Second<<(attempt-1), 20*time.Second)
+	return d + time.Duration(rand.Int64N(int64(d/4)+1)) //nolint:gosec // G404: retry jitter, not a security token
 }
 
 // sleep blocks for d or returns ctx's error if the caller cancels first.
@@ -510,8 +511,7 @@ func IsContextLimit(err error) bool {
 	if err == nil {
 		return false
 	}
-	var he *HTTPError
-	if errors.As(err, &he) {
+	if he, ok := errors.AsType[*HTTPError](err); ok {
 		if strings.HasPrefix(he.Status, "400") || strings.HasPrefix(he.Status, "413") {
 			b := strings.ToLower(he.Body)
 			for _, m := range contextLimitMarkers {
@@ -547,12 +547,7 @@ type ModelInfo struct {
 
 // SupportsVision reports whether the model advertises image input.
 func (mi ModelInfo) SupportsVision() bool {
-	for _, m := range mi.InputModalities {
-		if m == "image" {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(mi.InputModalities, "image")
 }
 
 // Pricing is the provider's per-token USD rates as decimal strings
@@ -570,7 +565,7 @@ func (p Pricing) Rates() (in, out, cacheRead float64) {
 	in, _ = strconv.ParseFloat(p.Prompt, 64)
 	out, _ = strconv.ParseFloat(p.Completion, 64)
 	cacheRead, _ = strconv.ParseFloat(p.InputCacheRead, 64)
-	return
+	return in, out, cacheRead
 }
 
 // SessionCost returns the USD spend for cumulative usage u at per-token
@@ -589,7 +584,7 @@ func SessionCost(u Usage, in, out, cacheRead float64) float64 {
 
 // Models fetches GET /models from the provider.
 func (c *Client) Models(ctx context.Context) ([]ModelInfo, error) {
-	hr, err := http.NewRequestWithContext(ctx, "GET", c.BaseURL+"/models", nil)
+	hr, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+"/models", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -612,10 +607,12 @@ func (c *Client) Models(ctx context.Context) ([]ModelInfo, error) {
 	return list.Data, nil
 }
 
-// Stream sends the request and invokes onText for each content delta and
-// onThink for each reasoning_content delta (both may be nil). It returns the
-// final assistant message (with any accumulated tool calls) plus the usage
-// the provider reports on the terminal chunk (stream_options:include_usage).
+// Stream sends the request and invokes onText for each content delta,
+// onThink for each reasoning_content delta (both may be nil), and onToolCall
+// for each tool-call state change as it streams (id/name/args snapshots; may
+// be partial mid-stream). It returns the final assistant message (with any
+// accumulated tool calls) plus the usage the provider reports on the terminal
+// chunk (stream_options:include_usage).
 //
 // Transient failures (transport errors, 429, 5xx) are retried with backoff —
 // but only until the first visible delta has been handed to onText/onThink.
@@ -623,7 +620,7 @@ func (c *Client) Models(ctx context.Context) ([]ModelInfo, error) {
 // the error is surfaced instead. A retry regenerates the whole assistant
 // message server-side; nothing in the request messages is mutated by a failed
 // attempt, so retrying is idempotent.
-func (c *Client) Stream(ctx context.Context, req Request, onText, onThink func(string)) (Message, Usage, error) {
+func (c *Client) Stream(ctx context.Context, req Request, onText, onThink func(string), onToolCall func(id, name, args string)) (Message, Usage, error) {
 	req.Stream = true
 	req.StreamOptions = &struct {
 		IncludeUsage bool `json:"include_usage"`
@@ -643,7 +640,7 @@ func (c *Client) Stream(ctx context.Context, req Request, onText, onThink func(s
 		if onThink != nil {
 			wrapThink = func(s string) { emitted = true; onThink(s) }
 		}
-		msg, usage, err := c.streamOnce(ctx, body, wrapText, wrapThink)
+		msg, usage, err := c.streamOnce(ctx, body, wrapText, wrapThink, onToolCall)
 		if err == nil {
 			return msg, usage, nil
 		}
@@ -666,8 +663,8 @@ func (c *Client) Stream(ctx context.Context, req Request, onText, onThink func(s
 // streamOnce performs a single streaming request attempt; the Stream retry
 // wrapper calls it per attempt and reads its own `emitted` flag (set by the
 // wrapped callbacks) to decide whether a retry would replay visible output.
-func (c *Client) streamOnce(ctx context.Context, body []byte, onText, onThink func(string)) (Message, Usage, error) {
-	hr, err := http.NewRequestWithContext(ctx, "POST", c.BaseURL+"/chat/completions", bytes.NewReader(body))
+func (c *Client) streamOnce(ctx context.Context, body []byte, onText, onThink func(string), onToolCall func(id, name, args string)) (Message, Usage, error) {
+	hr, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
 		return Message{}, Usage{}, err
 	}
@@ -741,6 +738,12 @@ func (c *Client) streamOnce(ctx context.Context, body []byte, onText, onThink fu
 				cur.Function.Name += tc.Function.Name
 			}
 			cur.Function.Arguments += tc.Function.Arguments
+			// Surface the streaming tool call as soon as it has an id, so the
+			// UI can show a pending row before execution (tool_call arguments
+			// stream in fragments, so re-fire each delta with the snapshot).
+			if onToolCall != nil && cur.ID != "" {
+				onToolCall(cur.ID, cur.Function.Name, cur.Function.Arguments)
+			}
 		}
 	}
 	if err := sc.Err(); err != nil {
@@ -792,7 +795,7 @@ func (c *Client) Complete(ctx context.Context, req Request) (string, Usage, erro
 
 // completeOnce performs one non-streaming request attempt.
 func (c *Client) completeOnce(ctx context.Context, body []byte) (string, Usage, error) {
-	hr, err := http.NewRequestWithContext(ctx, "POST", c.BaseURL+"/chat/completions", bytes.NewReader(body))
+	hr, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
 		return "", Usage{}, err
 	}
@@ -819,7 +822,7 @@ func (c *Client) completeOnce(ctx context.Context, body []byte) (string, Usage, 
 		return "", Usage{}, err
 	}
 	if len(out.Choices) == 0 {
-		return "", Usage{}, fmt.Errorf("no choices in completion response")
+		return "", Usage{}, errors.New("no choices in completion response")
 	}
 	var usage Usage
 	if out.Usage != nil {

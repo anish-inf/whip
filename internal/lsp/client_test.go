@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -104,5 +105,109 @@ func TestServerRequestsGetNullAck(t *testing.T) {
 	case <-ack:
 	case <-time.After(2 * time.Second):
 		t.Fatal("no ack for server request")
+	}
+}
+
+// An error response is routed back to the waiting request, and a malformed
+// frame is skipped instead of killing the read loop.
+func TestErrorResponseAndGarbageFrame(t *testing.T) {
+	inR, inW := io.Pipe()
+	outR, outW := io.Pipe()
+	defer inW.Close()
+	defer outW.Close()
+	c := newClient(inW, outR, nil)
+	defer c.shutdown()
+
+	go func() {
+		br := bufio.NewReader(inR)
+		body, err := readFrame(br)
+		if err != nil {
+			return
+		}
+		var msg rpcMessage
+		_ = json.Unmarshal(body, &msg)
+		// Garbage first: the loop must survive it and still answer.
+		_, _ = fmt.Fprint(outW, "Content-Length: 5\r\n\r\n{no:}")
+		resp, _ := json.Marshal(rpcMessage{ID: msg.ID, Error: &rpcError{Code: -32602, Message: "bad params"}})
+		_, _ = fmt.Fprintf(outW, "Content-Length: %d\r\n\r\n%s", len(resp), resp)
+	}()
+
+	err := c.request(context.Background(), "test/method", nil, nil)
+	var rpcErr *rpcError
+	if !errors.As(err, &rpcErr) || rpcErr.Code != -32602 {
+		t.Fatalf("want rpc error, got %v", err)
+	}
+}
+
+// Unmarshalable params never reach the wire — send/request/notify bail out
+// rather than framing a broken message.
+func TestUnmarshalableParams(t *testing.T) {
+	inR, inW := io.Pipe()
+	outR, outW := io.Pipe()
+	defer inW.Close()
+	defer outW.Close()
+	c := newClient(inW, outR, nil)
+	defer c.shutdown()
+
+	if err := c.request(context.Background(), "test/method", make(chan int), nil); err == nil {
+		t.Error("unmarshalable request params must error")
+	}
+	c.notify("test/note", make(chan int)) // must not panic or block
+	c.send(rpcMessage{Method: "test/bad", Params: json.RawMessage("{not json")})
+
+	// Nothing was written: the server side sees no frame before we tear down.
+	got := make(chan struct{})
+	go func() {
+		if _, err := readFrame(bufio.NewReader(inR)); err == nil {
+			close(got)
+		}
+	}()
+	select {
+	case <-got:
+		t.Error("a broken message reached the wire")
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+// Once the client is dead, sends drop and in-flight requests unblock with a
+// connection-closed error instead of hanging on the tool ctx.
+func TestRequestAfterShutdown(t *testing.T) {
+	inR, inW := io.Pipe()
+	outR, outW := io.Pipe()
+	defer inW.Close()
+	defer outW.Close()
+	c := newClient(inW, outR, nil)
+	go func() { // drain stdin so the writer pump never blocks
+		br := bufio.NewReader(inR)
+		for {
+			if _, err := readFrame(br); err != nil {
+				return
+			}
+		}
+	}()
+
+	done := make(chan error, 1)
+	go func() { done <- c.request(context.Background(), "test/never", nil, nil) }()
+	time.Sleep(50 * time.Millisecond)
+	c.shutdown()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "connection closed") {
+			t.Fatalf("in-flight request after shutdown: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("request did not unblock on shutdown")
+	}
+
+	if err := c.request(context.Background(), "test/after", nil, nil); err == nil {
+		t.Error("request on a dead client must error")
+	}
+	c.send(rpcMessage{Method: "test/after"}) // drops on c.dead, must not block
+}
+
+func TestRPCErrorMessage(t *testing.T) {
+	err := &rpcError{Code: -32601, Message: "method not found"}
+	if got := err.Error(); got != "rpc error -32601: method not found" {
+		t.Fatalf("Error() = %q", got)
 	}
 }

@@ -42,7 +42,7 @@ parallel tool calls and background subagents).
 - [x] Markdown rendering for assistant messages (glamour, hardcoded dark style — no OSC background query; finalized segments + resumed transcripts render rich, in-flight streaming stays plain text; right-padding stripped, body aligned under the "● " marker)
 - [x] Diff view for `edit` tool results (pi edit tool returns `details: {diff, patch, firstChangedLine}` — `packages/agent/src/harness/tools/edit.ts`; opencode picks split vs unified by terminal width >120)
 - [x] Tool rows: icon + present-participle verb while running ("Reading file…"), collapse to one line on completion, red + expandable on failure (opencode `routes/session/index.tsx:1836`, `util/collapse-tool-output.ts` — 19 lines)
-- [ ] Render tool calls as they stream, before execution starts (pi: `message_update` spawns `ToolExecutionComponent` keyed by tool-call id)
+- [x] Render tool calls as they stream, before execution starts (pi: `message_update` spawns `ToolExecutionComponent` keyed by tool-call id)
 - [x] Spinner with elapsed time + token count (% of context window) in status line (opencode `routes/session/footer.tsx`) — cost part done (status line shows session spend when the provider advertises pricing)
 - [ ] Toast-style transient notifications for command success/failure (opencode `ui/toast.tsx` — 102 lines)
 - [ ] Desktop notification/sound when a turn finishes and the terminal is blurred (opencode `attention.ts` — "when: blurred" is the detail that makes it not-annoying)
@@ -65,17 +65,20 @@ parallel tool calls and background subagents).
 
 - [x] Parallel tool-call execution with per-path file mutation lock (pi: `withFileMutationQueue`, `executeToolCallsParallel`) — `agent.runTools` fans a tool-call batch out to goroutines; write/edit serialize through a per-canonical-path channel semaphore, bash takes a global lock; results land in call order, OnToolStart/End fire per call
 - [x] Retry with backoff on provider errors (pi settings: `retry: {maxRetries, baseDelayMs}`) — transient failures (429/5xx/transport) retry with exponential backoff (1s→2s→4s… capped 20s, jittered), configurable via `maxRetries` (default 8, 1 disables); streaming retries stop once visible text has been emitted so the transcript never double-prints, and context-limit errors pass straight through to the compaction retry
-- [ ] Streamed partial tool output (bash `onUpdate` throttled at 100ms in pi)
-- [ ] Spill truncated bash output to a temp file and mention the path (pi bash tool)
-- [ ] Inject `WHIP_SESSION_ID` / `WHIP_MODEL` env into bash children (pi injects `PI_*`)
+- [x] Streamed partial tool output (bash `onUpdate` throttled at 100ms in pi) — `bashrun.Options.OnUpdate` fires accumulated-output snapshots at most every 100ms from the run's own goroutine; the bash tool picks it up via a per-call ctx value (`tools.WithOnUpdate` — parallel calls can't cross wires), `agent.Events.OnToolOutput` carries it with the tool-call id, and the TUI renders the last-3-lines tail under the running tool row until `toolEndMsg` collapses it
+- [x] Spill truncated bash output to a temp file and mention the path (pi bash tool) — when combined output exceeds `maxOutput` and gets tail-truncated, `bashrun.Spill` writes the full bytes to `$TMPDIR/whip-bash-<pid>/*.log` (0600) and the tool result appends `[full output (N bytes): <path>]` so the model can read/grep the rest; spill failure degrades silently, never breaks the result
+- [x] Inject `WHIP_SESSION_ID` / `WHIP_MODEL` env into bash children (pi injects `PI_*`) — already shipped: `bashrun.SetMarkers` stamps `WHIP=1`, `WHIP_SESSION_ID`, `WHIP_MODEL`, `WHIP_PID` on every child env (wired from `tui.go` on session create/resume); checkbox was stale
 
 ## Skills & subagents
 
 - [x] Skills: scan `.agents/skills/*/SKILL.md` (project) and `~/.whip/skills/` (user), inject name+description into the system prompt as an `<available_skills>` block; the model reads a SKILL.md with its own read tool when relevant (pi's approach — no skill tool needed, `packages/coding-agent/src/core/skills.ts`)
-- [x] Subagents: a `task` tool that runs a self-contained prompt in a fresh agent with the same tools (minus `task` — no recursion) and returns its final report
+- [x] Subagents: a `subagent` tool (né `task`) that runs a self-contained prompt in a fresh agent with the same tools (minus `subagent` — no recursion) and returns its final report
 - [x] `$skill-name` invocation (codex-style) with live completion dropdown; skills re-indexed every turn and every `$` keystroke, so new skills load without restarting the harness
 - [ ] Custom agent definitions (`.agents/*.md` with model/tools/prompt frontmatter; opencode agents config `packages/core/src/config/agent.ts`)
-- [x] Parallel/background subagents (pi streams tool `onUpdate`; opencode `background-job.ts`) — `task` with `background:true` runs concurrently and reports back via a steered message; a `taskRegistry` keyed by id holds a `Done` channel whose single close broadcasts completion to every waiter; `/tasks` lists them, a `⚙ N sub` header badge shows running count, `/tasks` updates live via `OnChange`; tasks persist in the session store and are restored on `--resume` (a stale "running" row comes back as interrupted-error)
+- [x] Parallel/background subagents (pi streams tool `onUpdate`; opencode `background-job.ts`) — `subagent` with `background:true` runs concurrently and reports back via a steered message; a `taskRegistry` keyed by id holds a `Done` channel whose single close broadcasts completion to every waiter; `/subagents` (alias `/tasks`) lists them, a `⚙ N sub` header badge shows running count and updates live via `OnChange`; tasks persist in the session store and are restored on `--resume` (a stale "running" row comes back as interrupted-error)
+- [x] Subagent model routing (claude's Agent-tool `model` override) — subagents default to the cheap `deepseek-v4-flash-0731` route like compaction (`config.DefaultTaskModel`, catalog suffix scan covers openrouter's vendor-prefixed id); pin with config `taskModel`/`taskProvider`; the main model picks per call via the `subagent` tool's `model`/`provider` params
+- [x] User-spawned subagents: `/subagent [-m model[@provider]] <prompt>` starts one by hand, mid-turn too — the LLM isn't the only driver
+- [x] Chat with a subagent (claude's "subagents are full sessions" UX) — the task pane has a chat input: enter steers a running subagent (`SteerTask`, same primitive the model gets as `subagent_steer`) and runs follow-up turns on a settled one's retained context (`FollowupTask`, live-only)
 - [ ] `@agent` mentions to target a named subagent (opencode autocomplete)
 
 ## Models & providers
@@ -84,7 +87,7 @@ parallel tool calls and background subagents).
 - [ ] `anthropic-messages` API style alongside `openai-completions` (pi: `packages/ai/src/api/`)
 - [x] `"$VAR"` / `"!cmd"` resolution for apiKey/header values in config (pi models.json value resolution) — shipped with secrets-by-reference (internal/config/secret.go), resolved at point of use
 - [x] Reasoning effort: `/effort [off|low|medium|high]` (bare opens the selector), tab-completes, clickable `⚡` control in the header top-right; sent as `reasoning_effort`, inherited by subagents, survives model switches
-- [ ] Per-model sampling params in config (`samplingParams: {temperature, top_p}`)
+- [x] Per-model sampling params in config (`samplingParams: {temperature, top_p}`)
 
 ## MCP
 

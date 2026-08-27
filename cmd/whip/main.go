@@ -10,6 +10,7 @@ import (
 	"github.com/context-labs/whip/internal/config"
 	"github.com/context-labs/whip/internal/llm"
 	"github.com/context-labs/whip/internal/tui"
+	"github.com/context-labs/whip/internal/update"
 )
 
 var version = "dev" // set via -ldflags "-X main.version=..."
@@ -27,7 +28,7 @@ func cwd() string {
 // `whip run` pass the process cwd; `whip acp` passes the client-provided
 // session cwd (the editor spawns whip wherever it likes).
 func systemPrompt(wd string) string {
-	prompt := fmt.Sprintf(`You are an expert coding assistant operating inside whip, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files.
+	prompt := `You are an expert coding assistant operating inside whip, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files.
 
 Available tools:
 - read: Read file contents
@@ -51,7 +52,7 @@ Operating rules:
 - When the user shares a durable preference or fact about themselves, save it with remember; drop stale entries with forget.
 - Git hygiene: review the staged diff for secrets before committing, never run git add . — stage only the files you intend — and never force-push.
 
-Current working directory: %s`, wd)
+Current working directory: ` + wd
 	if extra := config.MeInstructions(); extra != "" {
 		prompt += "\n\nStanding instructions from the user (~/.whip/me.md — treat as user rules):\n" + extra
 	}
@@ -154,6 +155,11 @@ func main() {
 		_ = agent.New(llm.New(prov.BaseURL, "bench"), id, mdl.MaxTokens, systemPrompt(cwd()))
 		return
 	}
+
+	// Update check: concurrent with the trust prompt and agent setup, so its
+	// ~1 RTT is usually free — and when startup wins the race, the recorded
+	// notice still shows on the next launch.
+	go update.Check(version)
 	tui.Version = version // /report names the build in the bug-report bundle
 	sessionID, err := tui.Run(cfg, *modelFlag, *providerFlag, systemPrompt(cwd()), *resumeFlag, *cautiousFlag)
 	if err != nil {

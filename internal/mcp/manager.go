@@ -87,7 +87,16 @@ type server struct {
 
 	autoTries int // auto-reconnect attempts since the last successful connect
 
-	mu sync.Mutex // guards status/err/defs/sess
+	mu sync.Mutex // guards status/err/defs/sess/cfg.Enabled
+}
+
+// disabled reports the server's current enable state. Enable/Disable flip
+// cfg.Enabled while the run and auto-reconnect goroutines read it, so the
+// read takes mu like any other mutable server field.
+func (s *server) disabled() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.cfg.Disabled()
 }
 
 // autoReconnect caps the background reconnect attempts after an unexpected
@@ -114,7 +123,7 @@ func (s *server) kickAutoReconnect(m *Manager) {
 	s.mu.Lock()
 	tries := s.autoTries
 	s.mu.Unlock()
-	if closing || s.cfg.Disabled() || tries >= autoReconnectMax {
+	if closing || s.disabled() || tries >= autoReconnectMax {
 		return
 	}
 	go func() {
@@ -125,7 +134,7 @@ func (s *server) kickAutoReconnect(m *Manager) {
 		s.mu.Lock()
 		gave := s.status == StatusReady || s.autoTries != tries // someone else recovered/retried
 		s.mu.Unlock()
-		if closing || gave || s.cfg.Disabled() {
+		if closing || gave || s.disabled() {
 			return
 		}
 		s.mu.Lock()
@@ -151,7 +160,7 @@ type Manager struct {
 
 	// connectTransport builds the transport for a server config. A var so
 	// tests can substitute in-process transports without spawning processes.
-	connectTransport func(cfg ServerConfig, stderr *ringBuffer) (sdkmcp.Transport, error)
+	connectTransport func(ctx context.Context, cfg ServerConfig, stderr *ringBuffer) (sdkmcp.Transport, error)
 
 	onChangeMu sync.Mutex // guards onChange, blocked, and closed (writes may race connect goroutines)
 	closed     bool       // set by Close; connect() won't store new sessions after it
@@ -221,7 +230,7 @@ func (m *Manager) Start(ctx context.Context) {
 		if s.status != StatusConnecting {
 			continue
 		}
-		go s.run(ctx, m)
+		go s.run(ctx, m) //nolint:gosec // G118: the lifecycle goroutine deliberately outlives Start's ctx (reconnects run until Close)
 	}
 }
 
@@ -234,7 +243,7 @@ func (m *Manager) Start(ctx context.Context) {
 func (s *server) run(ctx context.Context, m *Manager) {
 	s.connect(ctx, m)
 	for range s.reconnect {
-		if s.cfg.Disabled() {
+		if s.disabled() {
 			s.setState(m, StatusDisabled, "")
 			continue
 		}
@@ -259,7 +268,7 @@ func (s *server) connect(ctx context.Context, m *Manager) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	transport, err := m.connectTransport(s.cfg, s.stderr)
+	transport, err := m.connectTransport(ctx, s.cfg, s.stderr)
 	if err == nil {
 		client := sdkmcp.NewClient(&sdkmcp.Implementation{Name: "whip", Title: "whip"}, nil)
 		var sess *sdkmcp.ClientSession
@@ -536,8 +545,8 @@ func (m *Manager) Disable(name string) bool {
 	if !ok {
 		return false
 	}
-	s.cfg.Enabled = boolp(false)
 	s.mu.Lock()
+	s.cfg.Enabled = new(false)
 	old := s.sess
 	s.sess, s.defs = nil, nil
 	s.gen++
@@ -555,11 +564,11 @@ func (m *Manager) Enable(name string) bool {
 	if !ok {
 		return false
 	}
+	s.mu.Lock()
 	s.cfg.Enabled = nil
+	s.mu.Unlock()
 	return m.Reconnect(name)
 }
-
-func boolp(b bool) *bool { return &b }
 
 // InstructionsBlock renders the <mcp_instructions> system-prompt section:
 // ready servers' initialize instructions, name-sorted ("" when none publish
@@ -608,7 +617,7 @@ func Probe(ctx context.Context, name string, cfg ServerConfig) ProbeResult {
 	select {
 	case <-s.ready:
 	case <-ctx.Done():
-		return ProbeResult{Server: Server{Name: name, Status: StatusFailed, Err: ctx.Err().Error()}, Elapsed: time.Since(start)}
+		return ProbeResult{Name: name, Status: StatusFailed, Err: ctx.Err().Error(), Elapsed: time.Since(start)}
 	}
 	st := m.Statuses()[0]
 	res := ProbeResult{Server: st, Elapsed: time.Since(start)}
@@ -692,6 +701,9 @@ func (m *Manager) Reconnect(name string) bool {
 // children get their own process group at spawn (defaultTransport) so whip's
 // exit path can also group-kill strays via the bashrun registry pattern.
 func (m *Manager) Close() {
+	m.onChangeMu.Lock()
+	m.closed = true
+	m.onChangeMu.Unlock()
 	for _, s := range m.servers {
 		s.mu.Lock()
 		sess := s.sess
@@ -706,7 +718,7 @@ func (m *Manager) Close() {
 // defaultTransport builds the SDK transport for a config: CommandTransport
 // (stdio, own process group, merged env, captured stderr) or
 // StreamableClientTransport (remote, header-injecting client).
-func defaultTransport(cfg ServerConfig, stderr *ringBuffer) (sdkmcp.Transport, error) {
+func defaultTransport(ctx context.Context, cfg ServerConfig, stderr *ringBuffer) (sdkmcp.Transport, error) {
 	if cfg.Remote() {
 		// Header values may be secret references ("$VAR"/"${VAR}"/"!cmd") —
 		// resolve them at connect time (the point of use) so configs hold only
@@ -730,7 +742,11 @@ func defaultTransport(cfg ServerConfig, stderr *ringBuffer) (sdkmcp.Transport, e
 			DisableStandaloneSSE: true,
 		}, nil
 	}
-	cmd := exec.Command(cfg.Command[0], cfg.Command[1:]...)
+	// WithoutCancel: ctx is connect()'s startup-timeout context, cancelled the
+	// moment connect returns — binding the command to it would SIGKILL every
+	// stdio server right after a successful connect. The process must live
+	// until the session is closed (CommandTransport terminates it then).
+	cmd := exec.CommandContext(context.WithoutCancel(ctx), cfg.Command[0], cfg.Command[1:]...)
 	// Inherit whip's environment and layer the server's vars on top (opencode
 	// does the same — users expect $PATH etc. to work).
 	cmd.Env = append(os.Environ(), envPairs(cfg.Env)...)

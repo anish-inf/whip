@@ -20,7 +20,7 @@ func TestLightThemeRendersDarkText(t *testing.T) {
 		t.Errorf("light theme must not use dark-style color 252: %q", out)
 	}
 	// width behavior unchanged
-	for _, l := range strings.Split(out, "\n") {
+	for l := range strings.SplitSeq(out, "\n") {
 		if ansi.StringWidth(l) > 60 {
 			t.Errorf("light render overflow: %q", l)
 		}
@@ -105,6 +105,44 @@ func TestUnknownThemeIsNeutral(t *testing.T) {
 	}
 	if got := CurrentTheme(); got != "auto" {
 		t.Errorf("CurrentTheme = %q, want auto", got)
+	}
+}
+
+// The neutral (unknown-background) style must still RENDER markdown — bold
+// applied, box-drawing table rules, only terminal-palette ANSI colors — not
+// glamour's ASCII fallback (kept ** markers, raw pipe tables, zero styling),
+// which users read as "markdown rendering is broken".
+func TestUnknownThemeStillRendersMarkdown(t *testing.T) {
+	SetUnknownTheme()
+	defer SetLightTheme(false)
+	src := "## Head\n\n**bold** text\n\n| A | B |\n|---|---|\n| 1 | 2 |"
+	out := renderMarkdown(src, 60)
+	if strings.Contains(ansi.Strip(out), "**") {
+		t.Errorf("neutral style left literal ** markers (ASCII style?): %q", out)
+	}
+	if !strings.Contains(out, "\x1b[1m") {
+		t.Errorf("neutral style should render bold: %q", out)
+	}
+	if !strings.Contains(out, "─") {
+		t.Errorf("neutral style should draw the table header rule: %q", out)
+	}
+	if strings.Contains(out, "\x1b[38;5;") || strings.Contains(out, "\x1b[38;2;") {
+		t.Errorf("neutral style must only use basic ANSI colors: %q", out)
+	}
+}
+
+// Every styled rendered line must end in a full reset. Glamour puts a line's
+// closing reset inside the right-padding stripLinePadding removes (heading
+// lines especially); left un-reset, a blue heading bleeds into every line
+// below it — the whole table after "## Table" rendered blue+bold.
+func TestRenderedLinesSelfTerminate(t *testing.T) {
+	SetUnknownTheme()
+	defer SetLightTheme(false)
+	out := renderMarkdown("## Head\n\n| A | B |\n|---|---|\n| 1 | 2 |", 60)
+	for l := range strings.SplitSeq(out, "\n") {
+		if strings.Contains(l, "\x1b[") && !strings.HasSuffix(l, "\x1b[0m") {
+			t.Errorf("styled line not reset-terminated: %q", l)
+		}
 	}
 }
 

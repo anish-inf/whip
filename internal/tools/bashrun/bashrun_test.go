@@ -141,7 +141,7 @@ func TestInteractiveKeyForwardingDelaysInactivity(t *testing.T) {
 	keys := make(chan []byte, 16)
 	go func() {
 		// poke a key every 100ms for ~600ms, longer than the 250ms cap below
-		for i := 0; i < 6; i++ {
+		for range 6 {
 			time.Sleep(100 * time.Millisecond)
 			keys <- []byte("x")
 		}
@@ -190,5 +190,26 @@ func TestUserShellResolution(t *testing.T) {
 	res := Run(context.Background(), Options{Command: "echo shell-ok"})
 	if !strings.Contains(res.Output, "shell-ok") || res.Exit != "" {
 		t.Fatalf("run via user shell: %+v", res)
+	}
+}
+
+func TestKeyBytes(t *testing.T) {
+	cases := map[string]string{
+		"enter":     KeyEnter,
+		"esc":       KeyEsc,
+		"tab":       KeyTab,
+		"backspace": KeyBS,
+		"delete":    KeyBS,
+		"up":        KeyUp,
+		"down":      KeyDown,
+		"right":     KeyRight,
+		"left":      KeyLeft,
+		"bogus":     "",
+		"":          "",
+	}
+	for name, want := range cases {
+		if got := KeyBytes(name); got != want {
+			t.Errorf("KeyBytes(%q) = %q, want %q", name, got, want)
+		}
 	}
 }

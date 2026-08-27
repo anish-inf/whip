@@ -88,9 +88,9 @@ func (b *Bridge) requestPermission(ctx context.Context, s *acpSession, req tools
 	resp, err := b.conn.RequestPermission(ctx, acp.RequestPermissionRequest{
 		SessionId: s.id,
 		ToolCall: acp.ToolCallUpdate{
-			ToolCallId: acp.ToolCallId(fmt.Sprintf("perm-%s", req.Tool)),
-			Title:      acp.Ptr(name),
-			Kind:       acp.Ptr(toolKind(req.Tool)),
+			ToolCallId: acp.ToolCallId("perm-" + req.Tool),
+			Title:      new(name),
+			Kind:       new(toolKind(req.Tool)),
 		},
 		Options: options,
 	})

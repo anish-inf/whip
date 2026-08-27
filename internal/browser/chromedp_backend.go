@@ -405,7 +405,7 @@ func (b *chromedpBackend) BoxModel(ctx context.Context, backendNodeID int) (floa
 	}
 	q := model.Content
 	var sx, sy float64
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		sx += q[i*2]
 		sy += q[i*2+1]
 	}
@@ -446,7 +446,7 @@ func (b *chromedpBackend) UploadFiles(ctx context.Context, selector string, path
 		if err != nil {
 			return err
 		}
-		nodeID, err = dom.QuerySelector(cdp.NodeID(doc.NodeID), selector).Do(ctx)
+		nodeID, err = dom.QuerySelector(doc.NodeID, selector).Do(ctx)
 		return err
 	}))
 	if err != nil {

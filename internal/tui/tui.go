@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -33,6 +34,7 @@ import (
 	"github.com/context-labs/whip/internal/skills"
 	"github.com/context-labs/whip/internal/tools"
 	"github.com/context-labs/whip/internal/tools/bashrun"
+	"github.com/context-labs/whip/internal/update"
 
 	"github.com/charmbracelet/x/ansi"
 	"github.com/muesli/termenv"
@@ -52,10 +54,17 @@ var (
 )
 
 // messages sent from the agent goroutine
-type textMsg string
-type toolStartMsg struct{ id, name, args string }
-type toolEndMsg struct{ id, name, result string }
-type steeredMsg string
+type (
+	textMsg      string
+	toolStartMsg struct{ id, name, args string }
+	toolEndMsg   struct{ id, name, result string }
+	// toolCallMsg is a tool call still streaming from the model (args may be
+	// partial): renders a dim "queued" row that toolStartMsg replaces when
+	// execution begins.
+	toolCallMsg   struct{ id, name, args string }
+	toolOutputMsg struct{ id, text string } // partial output for a running tool row
+	steeredMsg    string
+)
 
 // goalFromContextMsg carries the model-formulated goal back from the
 // /goal-from-context goroutine to the Update loop.
@@ -77,17 +86,19 @@ type turnDoneMsg struct {
 	snap  string // pre-turn workspace snapshot commit ("" = not a git repo)
 	clean bool   // the turn left the tree clean — snap is worthless, drop it
 }
-type catalogsMsg map[string]config.Catalog // background /models fetch result
-type noticeMsg string                      // dim one-liner appended to the transcript
-type usageMsg llm.Usage                    // one request's token usage
-type quitArmMsg struct{}                   // the idle ctrl+c arm window expired
-type taskUpdateMsg struct{}                // a background subagent started/settled — redraw
-type mcpStatusMsg struct{}                 // an MCP server changed state — redraw
-type thinkMsg string                       // streamed reasoning tokens
-type imageMsg struct {                     // ctrl+v clipboard image result
-	path string // clipboard image saved to disk
-	err  error
-}
+type (
+	catalogsMsg   map[string]config.Catalog // background /models fetch result
+	noticeMsg     string                    // dim one-liner appended to the transcript
+	usageMsg      llm.Usage                 // one request's token usage
+	quitArmMsg    struct{}                  // the idle ctrl+c arm window expired
+	taskUpdateMsg struct{}                  // a background subagent started/settled — redraw
+	mcpStatusMsg  struct{}                  // an MCP server changed state — redraw
+	thinkMsg      string                    // streamed reasoning tokens
+	imageMsg      struct {                  // ctrl+v clipboard image result
+		path string // clipboard image saved to disk
+		err  error
+	}
+)
 
 // menu is the open completion dropdown.
 type menu struct {
@@ -161,10 +172,20 @@ type model struct {
 	goalRounds int    // continuation turns spent on the current goal
 	titled     bool   // an auto-title has been attempted for this session
 
-	mouseOn      bool   // runtime mouse-capture state (toggle with /mouse)
+	mouseOn      bool       // runtime mouse-capture state (toggle with /mouse)
+	sel          *selection // in-flight/last drag selection over the transcript
+	selDragX     int        // last drag pointer position (edge auto-scroll re-checks it)
+	selDragY     int
+	vpLead       int    // top blank rows viewportView last dropped (selection row mapping)
+	viewTop      int    // screen row of the view's first line (View tracks it; mouse Y is absolute)
+	viewH        int    // height of the last rendered view
 	themeHow     string // how auto theme detection resolved (env var, OSC query, …) — captured at startup/theme change for /report; never re-queried
 	compactModel string // config model name for compaction summaries; "" = the built-in default
 	compactProv  string
+	// updateLatest is a pending newer release tag ("" when none), picked up
+	// from update.Pending at startup; the notice it renders is durable, so a
+	// check that lands after the report still shows next launch.
+	updateLatest string
 	effortX      int                       // screen column where the clickable ⚡ effort control starts
 	catalogs     map[string]config.Catalog // provider model lists (capabilities)
 	mcpMgr       *mcp.Manager              // MCP server connections; nil when none configured
@@ -181,7 +202,7 @@ type model struct {
 	perms      permRules   // saved allow-always rules
 	permDialog *permDialog // open permission modal; the turn is paused on it
 
-	tasksFocus bool      // the tasks dock owns ↑/↓/enter/esc instead of the input
+	tasksFocus bool      // the tasks dock owns ↑/↓/enter (never esc); typing or ↑ past the top returns to the input
 	taskSel    int       // selected row in the dock (index into newest-first tasks)
 	dockSkip   int       // non-task rows at the dock's top (focused hint) — click math skips them
 	taskVP     *taskView // open per-task detail view; nil when on the main thread
@@ -193,6 +214,10 @@ type model struct {
 	future []llm.Message // clipped tail kept for forward travel after a rewind
 
 	namePrompt *namePrompt // inline text prompt (fork naming, /rename)
+
+	// infAuth holds the in-flight inference-net device login across the
+	// team → project → create prompts.
+	infAuth *inferenceNetPending
 }
 
 // picker is the /resume session browser. metas is newest-first; the list is
@@ -230,6 +255,20 @@ func newInput() textarea.Model {
 	return ti
 }
 
+// tuiRunning gates the raw tty query to BEFORE bubbletea starts; bgCache
+// carries the startup answer to runtime re-detections. Both are only touched
+// from the main goroutine (Run pre-tea, then Update inside the event loop).
+//
+// This block must stay ABOVE Run: ineffassign (the golangci-lint gate)
+// decides a package-level write is effectual from the first function in file
+// order that reads the var, and Run's `tuiRunning = true` precedes the read
+// in detectColorScheme — declared below Run, the write is misreported as
+// ineffectual.
+var (
+	tuiRunning bool
+	bgCache    bgResult
+)
+
 // Run starts the interactive session. It returns the id of the session that
 // was active on exit ("" if nothing was said).
 func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string, cautious bool) (string, error) {
@@ -239,7 +278,7 @@ func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string, ca
 	if ok, err := checkTrust(); err != nil {
 		return "", err
 	} else if !ok {
-		return "", fmt.Errorf("folder not trusted")
+		return "", errors.New("folder not trusted")
 	}
 
 	ag, mn, pn, err := buildAgent(cfg, modelName, provName, sysPrompt)
@@ -256,12 +295,14 @@ func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string, ca
 		ag.Effort = "medium"
 	}
 	// Mouse capture ON by default so the wheel scrolls the transcript viewport
-	// and ⚡/tool clicks work — but only wheel+click reporting (?1000), NOT
-	// cell-motion (?1002). With capture off, tmux's WheelUpPane binding sees
-	// mouse_any_flag=0 and runs 'copy-mode -e', scrolling tmux's own scrollback
-	// instead of the transcript. We don't report motion, so drags aren't sent
-	// to whip; the tmux drag override (applyTmuxMouseFix) routes MouseDrag1Pane
-	// to copy-mode so plain drag-to-copy keeps working. Explicit config wins.
+	// and ⚡/tool clicks work — with button-motion reporting (?1002) so a left
+	// drag becomes whip's own selection (select.go): enabling click reporting
+	// alone makes most terminals (Ghostty, kitty) suppress their native
+	// drag-selection without sending the drag to anyone. With capture off,
+	// tmux's WheelUpPane binding sees mouse_any_flag=0 and runs 'copy-mode -e',
+	// scrolling tmux's own scrollback instead of the transcript. In tmux the
+	// drag never reaches whip, so applyTmuxMouseFix routes MouseDrag1Pane to
+	// copy-mode for drag-to-copy there. Explicit config wins.
 	mouseOn := true
 	if cfg.Mouse != nil {
 		mouseOn = *cfg.Mouse
@@ -278,6 +319,7 @@ func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string, ca
 		skillScan: func() []skills.Skill { return skills.Scan(skills.DefaultDirs()...) },
 	}
 	m.applyCompactModel()
+	m.applyTaskModel()
 	m.agent.CompactThreshold = compactThresholdFor(cfg)
 	m.wireTasks() // redraw the UI when background subagents start/settle
 
@@ -333,8 +375,8 @@ func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string, ca
 			// UserHistory is newest-first; hist is oldest-first (up-arrow walks
 			// back from the end), so reverse it into place.
 			if hist, herr := st.UserHistory(500); herr == nil && len(hist) > 0 {
-				for i := len(hist) - 1; i >= 0; i-- {
-					m.hist = append(m.hist, hist[i])
+				for _, h := range slices.Backward(hist) {
+					m.hist = append(m.hist, h)
 				}
 				m.histIdx = len(m.hist)
 			}
@@ -345,20 +387,26 @@ func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string, ca
 	}
 	if resumeID != "" {
 		if m.store == nil {
-			return "", fmt.Errorf("cannot resume: session store unavailable")
+			return "", errors.New("cannot resume: session store unavailable")
 		}
 		if err := m.resume(resumeID); err != nil {
 			return "", err
 		}
 	}
+	// Pick up whatever the update check recorded: a notice from an earlier
+	// launch always shows; one discovered by main's background check shows
+	// this launch if its 1 RTT beats startup (first-run trust prompt), else
+	// next launch — the record is durable either way.
+	m.updateLatest = update.Pending(Version)
 	m.startupReport()
 
 	// Inline rendering (no alt-screen): the transcript lives in the normal
 	// terminal scrollback, so terminal scrollback owns history. Mouse capture
-	// is ON but wheel+click only (?1000, no motion ?1002): the wheel scrolls
-	// the viewport (capture off → tmux eats it into copy-mode), ⚡ clicks work,
-	// and a plain drag selects/copies natively (no motion reporting means the
-	// terminal/tmux keeps drag-selection; we never see the drag bytes).
+	// is ON with click+wheel+button-motion (?1000/?1002): the wheel scrolls
+	// the viewport (capture off → tmux eats it into copy-mode), ⚡ clicks
+	// work, and a left drag paints whip's own selection and copies on release
+	// (select.go) — terminals hand the drag to the app once any mouse mode is
+	// on, so native selection isn't available anyway.
 	//
 	// We do NOT use tea.WithMouseCellMotion + an output filter: piping the
 	// program output through a non-TTY makes bubbletea skip terminal-size
@@ -366,6 +414,13 @@ func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string, ca
 	// 0 and the whole layout collapses). Instead we keep the real TTY as the
 	// output and enable click/wheel reporting directly on it.
 	opts := []tea.ProgramOption{}
+	// Bottom-anchor the inline view: move the cursor to the terminal's last
+	// row before bubbletea's first paint, so the view's screen position is
+	// knowable (viewTop = height - viewH). Without this the view starts
+	// wherever the shell prompt left the cursor, and mouse events — which are
+	// ABSOLUTE screen coordinates — map a few rows off (drag-select landing
+	// two lines above the pointer).
+	fmt.Fprint(os.Stdout, "\x1b[9999;1H")
 	if m.mouseOn {
 		enableClickWheelMouse(os.Stdout)
 		applyTmuxMouseFix()
@@ -390,7 +445,12 @@ func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string, ca
 	go m.fetchCatalogs(false)
 	go func() { p.Send(cfgSyncTick{}) }()     // start the config watcher
 	go func() { p.Send(scheduleTickMsg{}) }() // start the wakeup channel
+	// From here the terminal belongs to bubbletea: theme re-detections must
+	// not run raw tty queries (see detectColorScheme) or they kill its input
+	// reader with a spurious EOF.
+	tuiRunning = true
 	_, err = p.Run()
+	tuiRunning = false
 	// The UI has exited (quit, /quit, or a signal). We enabled click/wheel mouse
 	// reporting directly on the TTY (bubbletea doesn't manage it), so release it.
 	if m.mouseOn {
@@ -447,10 +507,10 @@ func (m *model) startupReport() {
 			case mcp.StatusReady:
 				parts = append(parts, fmt.Sprintf("%s ✓ (%d tools)", st.Name, st.Tools))
 			case mcp.StatusFailed:
-				parts = append(parts, fmt.Sprintf("%s ✗", st.Name))
+				parts = append(parts, st.Name+" ✗")
 				warned = true
 			case mcp.StatusDisabled:
-				parts = append(parts, fmt.Sprintf("%s ○", st.Name))
+				parts = append(parts, st.Name+" ○")
 			default:
 				parts = append(parts, st.Name+" ◌")
 			}
@@ -458,6 +518,10 @@ func (m *model) startupReport() {
 		if len(parts) > 0 {
 			line("mcp: %s", strings.Join(parts, " · "))
 		}
+	}
+	if m.updateLatest != "" {
+		line("update available: %s (run: whip update)", m.updateLatest)
+		warned = true
 	}
 	if b.Len() == 0 {
 		return
@@ -470,25 +534,35 @@ func (m *model) startupReport() {
 	}
 }
 
-// enableClickWheelMouse turns on click+wheel mouse reporting (?1000) with SGR
-// coordinates (?1006), WITHOUT motion reporting (?1002/?1003). Writing directly
-// to the real TTY keeps bubbletea's output a terminal so terminal-size detection
-// still works (unlike piping output through an os.Pipe). With ?1000 the wheel
-// and clicks reach whip, but drags are not reported, so the terminal/tmux keeps
-// native drag-selection for copy.
+// enableClickWheelMouse turns on mouse reporting with SGR coordinates
+// (?1006): click+wheel (?1000) plus button-event motion (?1002) so a held
+// left-drag reports motion events — whip turns those into its own selection
+// (select.go), because enabling ?1000 alone makes most terminals hand the drag
+// to the app WITHOUT starting a native selection (Ghostty, kitty), leaving
+// capture-on users with no drag-to-copy at all. Writing directly to the real
+// TTY keeps bubbletea's output a terminal so terminal-size detection still
+// works (unlike piping output through an os.Pipe). ?1002 (not ?1003) means
+// motion bytes only flow while a button is held — passive moves stay silent.
+//
+// ?1002 alone — NOT ?1000 as well: terminals keep ONE mouse-tracking mode, so
+// writing ?1000h after ?1002h silently downgrades tracking to click-only and
+// drags stop reporting motion (no highlight, no copy). ?1002 is a superset of
+// ?1000 (press/release/wheel all still report).
 func enableClickWheelMouse(w *os.File) {
-	fmt.Fprint(w, "\x1b[?1006h\x1b[?1000h")
+	fmt.Fprint(w, "\x1b[?1006h\x1b[?1002h")
 }
 
-// disableClickWheelMouse releases the mouse reporting enableClickWheelMouse set.
+// disableClickWheelMouse releases the mouse reporting enableClickWheelMouse
+// set, plus ?1000 defensively (an older whip or a downgrade may have left it).
 func disableClickWheelMouse(w *os.File) {
-	fmt.Fprint(w, "\x1b[?1000l\x1b[?1006l")
+	fmt.Fprint(w, "\x1b[?1002l\x1b[?1000l\x1b[?1006l")
 }
 
 // applyTmuxMouseFix makes plain drag-to-copy work inside tmux while whip
 // captures the mouse for wheel/clicks. tmux's default MouseDrag1Pane binding
-// checks mouse_any_flag (set by our ?1000) and forwards the drag to the app,
-// which ignores it — so no highlight ever starts. Rebinding it to copy-mode -M
+// checks mouse_any_flag (set by our ?1000/?1002) and forwards the drag to the
+// app — but tmux itself never forwards drag bytes from a terminal, so whip's
+// own selection (select.go) can't see them. Rebinding it to copy-mode -M
 // (only when the pane isn't already in a mode and isn't full mouse-tracking)
 // makes the drag open tmux copy-mode selection instead, restoring drag-to-copy.
 // Wheel still reaches whip: WheelUpPane stays bound to send -M. No-op outside
@@ -500,7 +574,7 @@ func applyTmuxMouseFix() {
 	// Only override when the pane can still use copy-mode: not in alt-screen,
 	// not already in a mode, and not full/all mouse tracking (in which case the
 	// app genuinely wants the drag). Then select via copy-mode -M.
-	_ = exec.Command("tmux", "bind-key", "-T", "root", "MouseDrag1Pane", "if-shell", "-F",
+	_ = exec.CommandContext(context.Background(), "tmux", "bind-key", "-T", "root", "MouseDrag1Pane", "if-shell", "-F",
 		"#{||:#{alternate_on},#{pane_in_mode},#{mouse_all_flag}}", "send-keys -M", "copy-mode -M").Run()
 }
 
@@ -583,6 +657,7 @@ func (m *model) resume(id string) error {
 		m.agent.ContextLimit = m.contextLimitFor(m.provName, m.agent.Model)
 	}
 	m.applyCompactModel()
+	m.applyTaskModel()
 	m.agent.CompactThreshold = compactThresholdFor(m.cfg)
 	m.wireTasks()
 	// Publish before restoring so the settled rows record against this session.
@@ -633,7 +708,7 @@ func (m *model) resume(id string) error {
 		}
 		m.agent.SetUsage(u)
 	}
-	if contains(m.effortsFor(), effort) {
+	if slices.Contains(m.effortsFor(), effort) {
 		m.agent.Effort = effort
 	}
 	m.sessionID = meta.ID
@@ -892,6 +967,9 @@ func buildAgent(cfg *config.Config, modelName, provName, sysPrompt string) (*age
 	ag := agent.New(client, apiID, maxOut, sysPrompt)
 	ag.ModelName, ag.Provider = modelName, provName
 	ag.ContextLimit = ctxLimit
+	if sp := mdl.SamplingParams; sp != nil {
+		ag.Temperature, ag.TopP = sp.Temperature, sp.TopP
+	}
 	// Native browser subsystem: install the shared manager once; screenshots
 	// steer back into the conversation as image parts on vision models.
 	ag.BrowserDisabled = cfg.Browser.Enabled != nil && !*cfg.Browser.Enabled
@@ -940,10 +1018,11 @@ func buildAgent(cfg *config.Config, modelName, provName, sysPrompt string) (*age
 type blockKind int
 
 const (
-	blockText      blockKind = iota // already-styled line(s): re-wrap on resize
-	blockAssistant                  // raw markdown: re-render through glamour
-	blockTool                       // raw tool result: collapsed preview, expandable
-	blockToolRun                    // a running tool call: verb line, collapses on completion
+	blockText       blockKind = iota // already-styled line(s): re-wrap on resize
+	blockAssistant                   // raw markdown: re-render through glamour
+	blockTool                        // raw tool result: collapsed preview, expandable
+	blockToolRun                     // a running tool call: verb line, collapses on completion
+	blockToolQueued                  // a tool call still streaming from the model; replaced by blockToolRun on start
 )
 
 // toolPreviewLines is how many lines of a tool result show when collapsed.
@@ -968,6 +1047,9 @@ type block struct {
 	toolID      string
 	toolRunning bool
 	toolFailed  bool
+	// live is the latest partial-output snapshot for a running bash call,
+	// rendered under the verb line; cleared when the tool ends.
+	live string
 	// y0/y1 are the block's line range in the last rendered content (set by
 	// refreshVP); used to map a mouse click to the block under it.
 	y0, y1 int
@@ -1026,9 +1108,13 @@ func (b block) render(width int) string {
 		hint := fmt.Sprintf("\n  … +%d lines (ctrl+e or click to expand)", len(lines)-toolPreviewLines)
 		return wrap(out+dimStyle.Render(hint), width)
 	case blockToolRun:
-		// While running, the verb line shows in full. On completion the same
-		// block collapses in place to one line (red on failure); ctrl+e expands.
+		// While running, the verb line shows in full with the live output
+		// tail under it. On completion the same block collapses in place to
+		// one line (red on failure); ctrl+e expands.
 		if b.toolRunning || b.expanded {
+			if b.live != "" && b.toolRunning {
+				return wrap(b.text, width) + "\n" + wrap(dimStyle.Render("  "+b.live), width)
+			}
 			return wrap(b.text, width)
 		}
 		line := ansi.Truncate(b.text, width, "…")
@@ -1094,8 +1180,13 @@ func (m *model) refreshVP() {
 	line := 0
 	for i := range m.blocks {
 		if i > 0 {
-			b.WriteString("\n\n") // blank line between blocks
-			line += 2
+			// "\n\n" ends the previous block's last line and leaves ONE blank
+			// row between blocks, so the row counter advances by 1 — adding 2
+			// here would drift every later block's y0/y1 one row low per
+			// separator (the click-mapping math only worked because it shared
+			// the drift).
+			b.WriteString("\n\n")
+			line++
 		}
 		r := m.blocks[i].renderAt(width)
 		m.blocks[i].y0 = line
@@ -1123,32 +1214,39 @@ func (m *model) contentPad() int {
 	return max(m.vp.Height-h, 0)
 }
 
-// viewportView renders the transcript viewport and drops the dead rows at its
-// bottom. The viewport always renders its full allocated height (lipgloss
-// Height pads it out), and the content is bottom-anchored — padding goes on
-// top — so when the transcript is shorter than the viewport the unused rows
-// would otherwise render as a gap between the last message and the input box.
+// viewportView renders the transcript viewport and drops the dead pad rows.
+// The viewport content is `contentPad` blank lines followed by the blocks;
+// SetContent bottom-anchors it, so at the bottom the view's row 0 is the
+// first pad row. We paint the selection highlight in content space FIRST
+// (content row r = view row r + contentPad - YOffset), then drop pad rows by
+// COUNT — never by "looks blank", because a highlighted blank row reads as
+// non-blank and would change the drop count mid-drag (that's what made the
+// transcript jump). Dropping exactly the pad keeps screen rows stable whether
+// or not a selection is active.
 func (m *model) viewportView() string {
 	s := sanitizeView(m.vp.View())
+	if m.sel != nil {
+		s = m.highlightSelection(s) // content space, pre-trim
+	}
 	lines := strings.Split(s, "\n")
+	// Drop leading pad rows by count: the content starts after the pad, but
+	// the view is scrolled (YOffset) and bottom-anchored, so the number of pad
+	// rows actually visible at the top is pad - YOffset (clamped).
+	drop := max(min(m.contentPad()-m.vp.YOffset, len(lines)), 0)
+	// Only drop rows that are actually blank — if the selection highlight
+	// painted a pad row, that row is content now, stop before it.
+	first := 0
+	for first < drop && strings.TrimSpace(ansi.Strip(lines[first])) == "" {
+		first++
+	}
+	m.vpLead = first // selection maps screen rows through the dropped pad
+	lines = lines[first:]
+	// Drop trailing dead rows (the viewport pads to its full height).
 	last := len(lines) - 1
 	for last >= 0 && strings.TrimSpace(ansi.Strip(lines[last])) == "" {
 		last--
 	}
-	lines = lines[:last+1]
-	// Also drop the top padding rows so the transcript bottom-anchors: when
-	// the input box grows (ctrl+j), the tail of the buffer — input rows,
-	// status line — must stay on the SAME screen rows. bubbletea's inline
-	// renderer skips re-painting a row whose text matches the previous frame,
-	// and that cache is only correct for rows that never shift; padding on
-	// top makes the whole transcript shift, but the interactive tail stays
-	// put (its own height didn't change), so a blank pad row can no longer
-	// alias onto an input row and eat its content.
-	first := 0
-	for first < len(lines) && strings.TrimSpace(ansi.Strip(lines[first])) == "" {
-		first++
-	}
-	return strings.Join(lines[first:], "\n")
+	return strings.Join(lines[:last+1], "\n")
 }
 
 func (m *model) Init() tea.Cmd {
@@ -1170,7 +1268,7 @@ func fmtTok(n int) string {
 	case n >= 1000:
 		return fmt.Sprintf("%.1fk", float64(n)/1000)
 	default:
-		return fmt.Sprint(n)
+		return strconv.Itoa(n)
 	}
 }
 
@@ -1202,6 +1300,18 @@ func cwd() string {
 // before auto ever reaches detection. detectColorScheme returns a short
 // human-readable note naming the source of the decision (shown by /theme auto
 // so a wrong pick is diagnosable).
+//
+// tuiRunning and bgCache are declared above Run (see the note there).
+type bgResult struct{ light, valid bool }
+
+// inTmuxEnv reports whether whip runs inside tmux/screen, where the terminal
+// can't be queried directly.
+func inTmuxEnv() bool {
+	return os.Getenv("TMUX") != "" ||
+		strings.HasPrefix(os.Getenv("TERM"), "screen") ||
+		strings.HasPrefix(os.Getenv("TERM"), "tmux")
+}
+
 func detectColorScheme() string {
 	setScheme := func(light bool) {
 		SetLightTheme(light)                  // glamour markdown style
@@ -1215,58 +1325,98 @@ func detectColorScheme() string {
 		setScheme(false)
 		return "WHIP_THEME"
 	}
-	if v := os.Getenv("COLORFGBG"); v != "" {
-		if i := strings.LastIndex(v, ";"); i >= 0 {
-			var bg int
-			if _, err := fmt.Sscanf(v[i+1:], "%d", &bg); err == nil {
-				// standard palette: 0-6 dark, 7+ light (15 = white)
-				setScheme(bg == 7 || bg >= 8)
-				return "COLORFGBG"
-			}
+	// While bubbletea runs, the terminal is OFF LIMITS: the raw-mode OSC 11
+	// query flips the shared tty to VMIN=0/VTIME, and if bubbletea's input
+	// reader issues a read in that window it gets a 0-byte result = io.EOF —
+	// the reader exits SILENTLY and the session never sees input again (the
+	// frozen-whip bug: /theme auto or a config-watcher sync re-ran detection
+	// mid-session). Reuse the startup query's answer instead; env fallbacks
+	// below are read-only and stay available.
+	if tuiRunning {
+		if bgCache.valid {
+			setScheme(bgCache.light)
+			return "terminal query (cached from startup)"
 		}
+		light, ok, how := fallbackScheme(inTmuxEnv(), os.Getenv("COLORFGBG"))
+		if ok {
+			setScheme(light)
+		} else {
+			SetUnknownTheme()
+		}
+		return how
 	}
-	// Query the terminal directly whenever we have one. termenv's query refuses
-	// to run inside tmux/screen (TERM=screen*/tmux*) and silently assumes a dark
+	// Query the terminal directly whenever we have one — the OSC 11 reply is
+	// the terminal's REAL background, so it outranks COLORFGBG (which can be
+	// stale: inherited from an outer shell/terminal with a different bg).
+	// termenv's query refuses to run inside tmux/screen (its termStatusReport
+	// short-circuits on TERM=screen*/tmux*) and silently assumes a dark
 	// background — wrong for a tmux user on a light terminal. queryTerminal-
 	// Background reaches the REAL terminal via DCS passthrough inside tmux, and
 	// via a plain OSC 11 query otherwise, so use it first and keep termenv only
 	// as a fallback for terminals it can query directly.
+	inTmux := inTmuxEnv()
 	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
-	if err != nil {
-		SetUnknownTheme()
-		return "undetermined (no tty) — neutral default"
-	}
-	defer tty.Close()
-	inTmux := os.Getenv("TMUX") != "" ||
-		strings.HasPrefix(os.Getenv("TERM"), "screen") ||
-		strings.HasPrefix(os.Getenv("TERM"), "tmux")
-	if light, ok := queryTerminalBackground(tty, inTmux); ok {
-		setScheme(light)
-		if inTmux {
-			return "terminal query (via tmux passthrough)"
+	if err == nil {
+		if light, ok := queryTerminalBackground(tty, inTmux); ok {
+			_ = tty.Close()
+			setScheme(light)
+			bgCache = bgResult{light: light, valid: true}
+			if inTmux {
+				return "terminal query (inside tmux)"
+			}
+			return "terminal query"
 		}
-		return "terminal query"
+		// fallback: termenv's own query — but NEVER inside tmux/screen, where
+		// termenv can't reach the real terminal (its termStatusReport
+		// short-circuits on TERM=screen*/tmux*) and silently ASSUMES DARK.
+		// That guess rendered the dark palette on light terminals (washed-out
+		// gray text on white) whenever the tmux query got no reply.
+		if !inTmux {
+			type result struct{ light bool }
+			done := make(chan result, 1)
+			go func() {
+				o := termenv.NewOutput(tty)
+				done <- result{light: !o.HasDarkBackground()}
+			}()
+			select {
+			case r := <-done:
+				_ = tty.Close()
+				setScheme(r.light)
+				bgCache = bgResult{light: r.light, valid: true}
+				return "terminal query"
+			case <-time.After(300 * time.Millisecond):
+			}
+		}
+		_ = tty.Close()
 	}
-	// fallback: termenv's own query (non-tmux terminals it can reach)
-	type result struct{ light bool }
-	done := make(chan result, 1)
-	go func() {
-		o := termenv.NewOutput(tty)
-		done <- result{light: !o.HasDarkBackground()}
-	}()
-	select {
-	case r := <-done:
-		setScheme(r.light)
-		return "terminal query"
-	case <-time.After(300 * time.Millisecond):
+	light, ok, how := fallbackScheme(inTmux, os.Getenv("COLORFGBG"))
+	if ok {
+		setScheme(light)
+	} else {
 		// No reliable signal: don't force a dark guess. Neutral default keeps
 		// text at the terminal's own colors instead of inverting contrast.
 		SetUnknownTheme()
-		if inTmux {
-			return "undetermined (tmux needs: set -g allow-passthrough on) — neutral default"
-		}
-		return "undetermined (query timed out) — neutral default"
 	}
+	return how
+}
+
+// fallbackScheme decides the color scheme when no terminal query succeeded:
+// COLORFGBG (set by many terminals; last field is the bg color index) when
+// parseable, otherwise not-ok — the caller falls back to the neutral theme.
+// Pure so the no-query-reply behavior is unit-testable: inside tmux the ONLY
+// acceptable outcomes are COLORFGBG or neutral, never a dark assumption.
+func fallbackScheme(inTmux bool, colorfgbg string) (light, ok bool, how string) {
+	if i := strings.LastIndex(colorfgbg, ";"); i >= 0 {
+		var bg int
+		if _, err := fmt.Sscanf(colorfgbg[i+1:], "%d", &bg); err == nil {
+			// standard palette: 0-6 dark, 7+ light (15 = white)
+			return bg == 7 || bg >= 8, true, "COLORFGBG (query failed)"
+		}
+	}
+	if inTmux {
+		return false, false, "undetermined (no OSC 11 reply through tmux — outer terminal doesn't answer it (e.g. mosh), or tmux <3.4 without `allow-passthrough on`) — neutral default"
+	}
+	return false, false, "undetermined (query timed out) — neutral default"
 }
 
 // inputContentHeight returns the number of lines the input needs to show its
@@ -1275,12 +1425,12 @@ func detectColorScheme() string {
 // the value, not View(): the textarea clamps View() to its current height, so
 // measuring it can never grow the box.
 func (m *model) inputContentHeight() int {
-	contentWidth := m.input.Width() - 2 // minus the "┃ " prompt
-	if contentWidth < 1 {
-		contentWidth = 1
-	}
+	contentWidth := max(
+		// minus the "┃ " prompt
+		m.input.Width()-2, 1,
+	)
 	h := 0
-	for _, line := range strings.Split(m.input.Value(), "\n") {
+	for line := range strings.SplitSeq(m.input.Value(), "\n") {
 		h += max(1, (lipgloss.Width(line)+contentWidth-1)/contentWidth)
 	}
 	return h
@@ -1318,7 +1468,14 @@ func (m *model) growInput() {
 // growing the input box with its content so the whole prompt stays visible.
 func (m *model) layout() {
 	m.growInput()
-	chrome := 4 + m.input.Height() // header + tips + blanks + input + bottom pad
+	// Always-on rows around the viewport: header, tips, blank below tips,
+	// blank above the input, the input itself, blank above the status line,
+	// and the status line. This count MUST match viewBody exactly: if chrome
+	// undercounts, a full transcript renders MORE rows than the terminal has,
+	// every frame scrolls the top rows off-screen, and all mouse math lands
+	// that many rows above the pointer (the off-by-two drag-select bug: the
+	// status line + its blank were never budgeted).
+	chrome := 6 + m.input.Height()
 	if m.iactive != nil {
 		// input box is hidden while a command has the terminal; drop its height
 		// and the leading blank line View inserts before it.
@@ -1342,6 +1499,15 @@ func (m *model) layout() {
 	if len(m.queue) > 0 {
 		chrome += len(m.queue) + 1
 	}
+	if m.rew != nil {
+		chrome += lipgloss.Height(m.rewindView()) + 1 // + the extra blank below
+	}
+	if m.quit1 {
+		chrome++ // "press ctrl+c again to quit"
+	}
+	if m.escClr || (m.esc1 && m.rew == nil && m.namePrompt == nil) {
+		chrome++ // esc hint line (same conditions as viewBody)
+	}
 	if m.taskVP != nil {
 		m.refreshTaskVP() // the task pane owns the free area; size it to fit
 	}
@@ -1354,7 +1520,7 @@ func (m *model) layout() {
 		if m.tasksFocus {
 			m.dockSkip++
 		}
-		chrome += m.dockRows + 1 // strip + the blank line above the input
+		chrome += m.dockRows // the blank above the input is already in the base
 	}
 	// Floor the viewport width too: a degenerate m.width (1–4 cols) would set
 	// the viewport to 1 col and re-slice the transcript into a one-char strip,
@@ -1367,11 +1533,18 @@ func (m *model) layout() {
 }
 
 // dockTop returns the screen row of the first TASK row in the dock: the dock
-// renders as the last dockRows rows above the input box and bottom pad, but
-// dockSkip non-task rows (the focused hint) sit on top of the task rows.
-// layout() keeps both in sync with what View renders.
+// renders below the input as the last dockRows rows above the blank + status
+// line, but dockSkip non-task rows (the focused hint) sit on top of the task
+// rows. layout() keeps both in sync with what View renders. The row is an
+// absolute screen row: counted up from the view's bottom (viewTop+viewH),
+// which equals the terminal bottom while the view is bottom-anchored but
+// stays correct when a shrunk view floats above it.
 func (m *model) dockTop() int {
-	return m.height - 2 - m.input.Height() - m.dockRows + m.dockSkip
+	bottom := m.height
+	if m.viewH > 0 {
+		bottom = m.viewTop + m.viewH
+	}
+	return bottom - 2 - m.dockRows + m.dockSkip
 }
 
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -1392,6 +1565,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		resized := msg.Width != m.width // width change → re-wrap the whole transcript
 		m.width, m.height = msg.Width, msg.Height
+		// re-anchor the view position: after a resize (and on the first size
+		// at startup) assume the view sits at the bottom — the next View()
+		// computes viewTop = height - viewH from this sentinel.
+		m.viewTop = 1 << 30
 		m.input.SetWidth(msg.Width - 2)
 		if resized {
 			m.refreshVP() // every block re-renders at the new width (floored at minRenderWidth)
@@ -1421,7 +1598,13 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.permDialog = &permDialog{req: msg.req, reply: msg.reply}
 		return m, nil
 
+	case selScrollTick:
+		// drag parked past the viewport edge: keep scrolling + extending the
+		// selection until the drag ends or the viewport hits its limit
+		return m, m.selEdgeScroll()
+
 	case tea.KeyMsg:
+		m.sel = nil // any keypress clears a finished selection highlight
 		return m.key(msg)
 
 	case tea.MouseMsg:
@@ -1431,9 +1614,13 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Shift {
 			return m, nil
 		}
+		if handled, cmd := m.handleMouseSelect(msg); handled {
+			return m, cmd
+		}
 		// clicking the ⚡ control in the header cycles reasoning effort
+		// (mouse Y is an absolute screen row; the header is the view's top row)
 		if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft &&
-			msg.Y == 0 && msg.X >= m.effortX {
+			msg.Y == m.viewTop && msg.X >= m.effortX {
 			m.setEffort(nextEffort(m.effortsFor(), m.agent.Effort))
 			return m, nil
 		}
@@ -1474,21 +1661,13 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, nil
 				}
 			}
-			// click on a collapsed tool result expands it (and vice versa)
+			// click on a collapsed tool result expands it (and vice versa).
+			// Presses inside the block range were consumed by handleMouseSelect
+			// (selection); this path is for anything that fell through.
 			if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft &&
-				msg.Y > 1 && m.palette == nil {
-				row := m.vp.YOffset + msg.Y - 2 // viewport starts 2 rows below the header
-				if pad := m.contentPad(); row < pad {
-					row = -1 // top padding: above the first block
-				} else {
-					row -= pad
-				}
-				for i := range m.blocks {
-					if row >= m.blocks[i].y0 && row <= m.blocks[i].y1 && m.blocks[i].toggle() {
-						m.refreshVP()
-						return m, nil
-					}
-				}
+				msg.Y-m.viewTop > 1 && m.palette == nil {
+				m.clickAt(msg.X, msg.Y)
+				return m, nil
 			}
 			var cmd tea.Cmd
 			m.vp, cmd = m.vp.Update(msg)
@@ -1521,9 +1700,26 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case toolCallMsg:
+		// a tool call still streaming from the model: show a dim queued row so
+		// the user sees it before execution starts. toolStartMsg swaps it for
+		// the live running row (matched by tool-call id).
+		row := dimStyle.Render("⋯ " + msg.name + " " + firstLine(msg.args))
+		m.blocks = append(m.blocks, block{kind: blockToolQueued, text: row, toolID: msg.id})
+		m.refreshVP()
+		return m, nil
+
 	case toolStartMsg:
 		m.flushThink()
 		m.flushCurrent()
+		// replace the queued row for this id (if the tool call streamed in)
+		// rather than appending a second row for the same call.
+		for i := range slices.Backward(m.blocks) {
+			if m.blocks[i].kind == blockToolQueued && m.blocks[i].toolID == msg.id {
+				m.blocks = slices.Delete(m.blocks, i, i+1)
+				break
+			}
+		}
 		args := msg.args
 		if msg.name == "browser_exec" || msg.name == "computer_exec" {
 			// Surface the step label (the code's first # comment) as the row
@@ -1540,6 +1736,23 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.refreshVP()
 		return m, nil
 
+	case toolOutputMsg:
+		// partial output for a running bash row: show the tail of what's
+		// arrived so far under the verb line. toolEndMsg replaces it with
+		// the final collapsed row, so no truncation bookkeeping here.
+		for i := len(m.blocks) - 1; i >= 0; i-- {
+			b := &m.blocks[i]
+			if b.kind == blockToolRun && b.toolRunning && b.toolID == msg.id {
+				if tail := lastLines(msg.text, 3); tail != "" {
+					b.live = tail
+					b.stale = true
+					m.refreshVP()
+				}
+				break
+			}
+		}
+		return m, nil
+
 	case toolEndMsg:
 		// store the raw result; render collapses to a preview (ctrl+e /
 		// click expands) and re-wraps on resize
@@ -1551,6 +1764,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if b.kind == blockToolRun && b.toolRunning && b.toolID == msg.id {
 				b.toolRunning = false
 				b.toolFailed = strings.HasPrefix(msg.result, "Error:")
+				b.live = ""
 				b.text = toolStyle.Render("⚒ "+msg.name+" ") + dimStyle.Render(firstLine(msg.result))
 				b.stale = true
 				break
@@ -1563,7 +1777,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			m.append(errStyle.Render("/me: editor failed: " + msg.err.Error()))
 		} else if n := len(config.MeInstructions()); n > 0 {
-			m.append(dimStyle.Render("✓ me.md saved — standing instructions updated (" + fmt.Sprint(n) + " chars)"))
+			m.append(dimStyle.Render("✓ me.md saved — standing instructions updated (" + strconv.Itoa(n) + " chars)"))
 		} else {
 			m.append(dimStyle.Render("me.md saved — no standing instructions set (all comments)"))
 		}
@@ -1638,7 +1852,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.flushThink()
 		m.flushCurrent()
 		switch {
-		case msg.err == context.Canceled:
+		case errors.Is(msg.err, context.Canceled):
 			m.busy = false
 			m.cancel = nil
 			m.append(dimStyle.Render("(interrupted)"))
@@ -1735,7 +1949,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// goal loop: keep working until the model explicitly declares GOAL_MET
 		if m.goal != "" && msg.err == nil {
 			if goalMet(msg.final) {
-				m.append(dimStyle.Render("◎ goal met after " + fmt.Sprint(m.goalRounds) + " round(s)"))
+				m.append(dimStyle.Render("◎ goal met after " + strconv.Itoa(m.goalRounds) + " round(s)"))
 				m.setGoal("")
 				return m, nil
 			}
@@ -1754,6 +1968,26 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case authResultMsg:
 		m.applyAuthResult(msg)
+		return m, nil
+
+	case inferenceNetLoginMsg:
+		m.applyInferenceNetLogin(msg)
+		return m, nil
+
+	case inferenceNetProjectsMsg:
+		m.applyInferenceNetProjects(msg)
+		return m, nil
+
+	case inferenceNetProjectCreatedMsg:
+		m.applyInferenceNetProjectCreated(msg)
+		return m, nil
+
+	case inferenceNetAuthMsg:
+		m.applyInferenceNetAuth(msg)
+		return m, nil
+
+	case inferenceNetKeyMsg:
+		m.applyInferenceNetKey(msg)
 		return m, nil
 
 	case noticeMsg:
@@ -1834,6 +2068,15 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				preview = append(preview[:4], fmt.Sprintf("… +%d lines", len(msg.s2)-4))
 			}
 			fmt.Fprintf(&tv.buf, "%s\n", dimStyle.Render("  "+strings.Join(preview, "\n  ")))
+		case 3: // a steered message reached the running subagent (task_steer / chat)
+			fmt.Fprintf(&tv.buf, "\n%s %s\n", youStyle.Render("↪ steered:"), msg.s)
+		case 4: // follow-up turn settled; unlock the chat input
+			tv.busy, tv.followCancel = false, nil
+			if msg.s != "" {
+				fmt.Fprintf(&tv.buf, "\n%s\n", errStyle.Render(msg.s))
+			} else {
+				tv.buf.WriteString("\n")
+			}
 		}
 		m.refreshTaskVP()
 		return m, nil
@@ -1905,12 +2148,12 @@ func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// newline always lands (and the textarea's own repositionView scrolls
 		// the new line into view), then reapply the visual cap via SetHeight,
 		// which clamps rendering only, never content.
-		cap := m.input.MaxHeight
+		maxHeight := m.input.MaxHeight
 		m.input.MaxHeight = 0
 		var cmd tea.Cmd
 		m.input, cmd = m.input.Update(tea.KeyMsg{Type: tea.KeyCtrlJ})
-		m.input.MaxHeight = cap
-		m.input.SetHeight(cap)
+		m.input.MaxHeight = maxHeight
+		m.input.SetHeight(maxHeight)
 		// bubbles' InsertNewline scrolls the internal viewport to follow the
 		// cursor while the box is still 1 line high (YOffset=1); the deferred
 		// growInput rebuild inherits that stale offset and the first line
@@ -1943,8 +2186,8 @@ func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	switch msg.Type {
 	case tea.KeyCtrlT:
-		// focus the tasks dock (or unfocus it) — the persistent strip above
-		// the input listing background subagents
+		// focus the tasks dock (or unfocus it) — the persistent strip below
+		// the input listing background subagents (↓ on an empty input works too)
 		if len(m.dockTasks()) == 0 {
 			return m, nil
 		}
@@ -2003,8 +2246,9 @@ func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.menu = nil
 		case m.queueSel >= 0: // leave queue navigation
 			m.queueSel = -1
-		case m.tasksFocus: // leave dock navigation, back to the main thread
-			m.tasksFocus = false
+		// NOTE: dock focus deliberately does NOT consume esc — esc stays the
+		// interrupt/rewind key. Leave the dock with ↑ past its top row (it
+		// sits below the input), ctrl+t, or just typing.
 		default:
 			dismissed = false
 		}
@@ -2096,6 +2340,13 @@ func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
+		// empty input + a visible dock below it: ↓ moves focus into the
+		// subagent list (↑ from its top row hands focus back)
+		if m.input.Value() == "" && len(m.dockTasks()) > 0 {
+			m.tasksFocus = true
+			m.taskSel = 0
+			return m, nil
+		}
 		// move within the textarea unless the cursor already sits on the
 		// last (soft-wrapped) row, where ↓ falls through to history recall
 		if !m.cursorOnLastLine() {
@@ -2119,7 +2370,11 @@ func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if m.tasksFocus {
-			m.taskSel = max(m.taskSel-1, 0)
+			if m.taskSel == 0 { // the dock sits below the input: ↑ off its top row hands focus back
+				m.tasksFocus = false
+				return m, nil
+			}
+			m.taskSel--
 			return m, nil
 		}
 		// while busy with a queue and an empty input, ↑ selects queued messages
@@ -2287,6 +2542,9 @@ func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.submit(text)
 	}
 
+	// Typing hands focus back from the dock to the input implicitly — without
+	// this, enter after typing would open the selected task, not submit.
+	m.tasksFocus = false
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
 	m.refreshMenu()
@@ -2301,7 +2559,8 @@ func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 var shiftEnterRe = regexp.MustCompile(
 	`'\[', '1', '3', ';', '2', 'u'` + // CSI 13;2u
 		`|'\[', '2', '7', ';', '2', ';', '1', '3', '~'` + // CSI 27;2;13~
-		`|'\[', 'five', 'seven', 'four', 'four', 'one', 'u'`) // CSI 57441u
+		`|'\[', 'five', 'seven', 'four', 'four', 'one', 'u'`,
+) // CSI 57441u
 
 // isShiftEnterSeq reports whether msg is a shift+enter sequence bubbletea
 // surfaced as an unknown/unmapped key.
@@ -2325,10 +2584,7 @@ func (m *model) busyStats() string {
 	if m.turnStart.IsZero() {
 		return ""
 	}
-	d := m.nowFn().Sub(m.turnStart)
-	if d < 0 {
-		d = 0
-	}
+	d := max(m.nowFn().Sub(m.turnStart), 0)
 	elapsed := d.Round(time.Second)
 	stats := fmt.Sprintf(" %d:%02d", int(elapsed.Minutes()), int(elapsed.Seconds())%60)
 	if u := m.agent.Usage(); u.PromptTokens > 0 || u.CompletionTokens > 0 {
@@ -2548,8 +2804,9 @@ func (m *model) switchModel(name, prov string) {
 	ag.CompactClient, ag.CompactModel = m.agent.CompactClient, m.agent.CompactModel
 	ag.CompactThreshold = m.agent.CompactThreshold
 	m.agent, m.modelName, m.provName = ag, mn, pn
+	m.applyTaskModel()
 	m.wireTasks()
-	if !contains(m.effortsFor(), ag.Effort) {
+	if !slices.Contains(m.effortsFor(), ag.Effort) {
 		m.resetEffort("") // the new model doesn't support the current level
 	}
 	m.cfg.DefaultModel, m.cfg.DefaultProvider = mn, pn // store the switch as the new default
@@ -2824,10 +3081,7 @@ func indentLines(s string, n int) string {
 			continue
 		}
 		lead := len(l) - len(strings.TrimLeft(l, " "))
-		shift := n + lead - docMargin
-		if shift < 0 {
-			shift = 0
-		}
+		shift := max(n+lead-docMargin, 0)
 		lines[i] = strings.Repeat(" ", shift) + strings.TrimLeft(l, " ")
 	}
 	return strings.Join(lines, "\n")
@@ -2943,9 +3197,14 @@ func (m *model) submitTurn(text string, authored bool) (tea.Model, tea.Cmd) {
 	}
 	m.discardFuture() // new activity while rewound kills the redo stack
 	// settled subagents already reported into the transcript; clear them off
-	// the dock strip so a new turn starts with only what's still running
+	// the dock strip so a new turn starts with only what's still running —
+	// except a task whose chat pane is open (its retained subagent is in use)
 	if m.agent != nil {
-		m.agent.Tasks().ClearSettled()
+		var keep []string
+		if m.taskVP != nil {
+			keep = append(keep, m.taskVP.id)
+		}
+		m.agent.Tasks().ClearSettled(keep...)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancel = cancel
@@ -3008,6 +3267,14 @@ func (m *model) submitTurn(text string, authored bool) (tea.Model, tea.Cmd) {
 				send(toolStartMsg{id, n, a})
 			},
 			OnToolEnd: func(id, n, r string) { send(toolEndMsg{id, n, r}) },
+			// tool call still streaming from the model: show a queued row
+			// before execution. Detached send like OnToolOutput — args arrive
+			// in deltas and a parked p.Send must not wedge the stream.
+			OnToolCall: func(id, n, a string) { go send(toolCallMsg{id, n, a}) },
+			// Detached send: snapshots are lossy progress, and a parked
+			// p.Send must never wedge bashrun's ticker goroutine (the ABBA
+			// lesson from docs/concurrency.md — same rule as sendTaskMsg).
+			OnToolOutput: func(id, soFar string) { go send(toolOutputMsg{id, soFar}) },
 			OnSteer: func(s string) {
 				flush()
 				send(steeredMsg(s))
@@ -3059,7 +3326,7 @@ func busyCmd(text string) bool {
 		return false
 	}
 	switch fields[0] {
-	case "/help", "/theme", "/mouse", "/effort", "/tasks", "/cd", "/pwd", "/report":
+	case "/help", "/theme", "/mouse", "/effort", "/subagents", "/tasks", "/subagent", "/cd", "/pwd", "/report":
 		return true
 	case "/auth": // must run now even while busy: an inline key queued as a chat message would be sent to the model
 		return true
@@ -3142,8 +3409,11 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 	case "/pwd":
 		m.append(dimStyle.Render(cwd()))
 		return m, nil
-	case "/tasks":
-		if len(fields) > 1 { // /tasks <id>: jump straight into the detail view
+	case "/subagent": // user-spawned background subagent — the LLM isn't the only driver
+		m.taskCommand(strings.TrimSpace(strings.TrimPrefix(text, "/subagent")))
+		return m, nil
+	case "/subagents", "/tasks": // /tasks kept as an alias
+		if len(fields) > 1 { // /subagents <id>: jump straight into the detail view
 			m.openTask(fields[1])
 			return m, nil
 		}
@@ -3253,7 +3523,7 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 			m.busy = false
 			m.cancel = nil
 			switch {
-			case err != nil && err != context.Canceled:
+			case err != nil && !errors.Is(err, context.Canceled):
 				m.append(errStyle.Render("goal-from-context failed: " + err.Error()))
 			case err == nil && strings.TrimSpace(goal) == "":
 				m.append(errStyle.Render("goal-from-context: model returned an empty goal"))
@@ -3445,7 +3715,24 @@ func (m *model) currentView() string {
 	return wrap(s, m.width) // streamed mid-flight: plain text; markdown renders on flush
 }
 
+// View renders the frame and tracks WHERE it sits on the screen. Mouse events
+// arrive in absolute screen coordinates, so every click/drag mapping needs the
+// view's top row. The inline view starts bottom-anchored (Run moves the cursor
+// to the last row before the first paint); bubbletea's renderer scrolls the
+// top UP when the view grows past the bottom and keeps it FIXED when the view
+// shrinks — so the top row only ever decreases between resizes:
+// viewTop = min(viewTop, height - viewH). A resize resets the sentinel
+// (WindowSizeMsg handler) and the next render re-anchors to the bottom.
 func (m *model) View() string {
+	v := m.viewBody()
+	if m.height > 0 {
+		m.viewH = lipgloss.Height(v)
+		m.viewTop = max(min(m.viewTop, m.height-m.viewH), 0)
+	}
+	return v
+}
+
+func (m *model) viewBody() string {
 	var b strings.Builder
 	left := fmt.Sprintf(" whip · %s @ %s · %s", m.modelName, m.provName, cwd())
 	if m.goal != "" {
@@ -3500,7 +3787,7 @@ func (m *model) View() string {
 	// and the /help command. The bottom hint covers the busy/interactive states.
 	tips := "`ctrl+p` commands"
 	b.WriteString(dimStyle.Render(tips) + "\n\n")
-	b.WriteString(m.viewportView() + "\n")
+	b.WriteString(m.viewportView() + "\n") // selection highlight paints inside
 	if m.curThink != "" {
 		b.WriteString("\n" + m.thinkView() + "\n")
 	}
@@ -3539,10 +3826,6 @@ func (m *model) View() string {
 		}
 	}
 	b.WriteString("\n")
-	// the persistent background-subagent strip sits just above the input box
-	if dock := m.tasksDock(); dock != "" {
-		b.WriteString(dock + "\n")
-	}
 	if m.rew != nil {
 		b.WriteString(m.rewindView() + "\n\n")
 	}
@@ -3573,6 +3856,11 @@ func (m *model) View() string {
 	if m.menu != nil {
 		b.WriteString("\n" + m.menuView())
 	}
+	// the persistent background-subagent strip sits just below the input box
+	// (above the status line): ↓ on an empty input moves focus into it
+	if dock := m.tasksDock(); dock != "" {
+		b.WriteString("\n" + dock)
+	}
 	b.WriteString("\n\n" + m.statusView()) // persistent status line, with a blank line above
 	return b.String()
 }
@@ -3594,7 +3882,23 @@ func (m *model) statusView() string {
 	if cost, ok := m.sessionCost(); ok {
 		spend += " · " + fmtCost(cost)
 	}
-	line := fmt.Sprintf(" %s   %s   %s   %s", shortCWD(), model, m.provName, spend)
+	// The fixed segments (model/provider/spend) are the data that matters; the
+	// cwd is what yields. Old code truncated the whole assembled line from the
+	// right, dropping the completion-token count whenever the path was long.
+	// Instead give the cwd only the space left after the fixed segments —
+	// truncating it to its tail, then dropping it entirely — so the spend
+	// survives whenever the fixed segments fit at all.
+	right := fmt.Sprintf("   %s   %s   %s", model, m.provName, spend)
+	dir := shortCWD()
+	switch budget := max(m.width, 0) - len(" ") - len(right); {
+	case len(dir) <= budget:
+		// fits as-is
+	case budget > 1:
+		dir = "…" + dir[len(dir)-budget+1:] // keep the tail, the recognizable part
+	default:
+		dir = "" // no room for the path at all; show only the fixed segments
+	}
+	line := fmt.Sprintf(" %s%s", dir, right)
 	return dimStyle.Render(truncLine(line, max(m.width, 0)))
 }
 

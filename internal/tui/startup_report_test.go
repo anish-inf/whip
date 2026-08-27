@@ -26,9 +26,7 @@ func TestStartupReportSkillsAndWarnings(t *testing.T) {
 	os.MkdirAll(bad, 0o755)
 	os.WriteFile(filepath.Join(bad, "SKILL.md"), []byte("no frontmatter here"), 0o644)
 
-	wd, _ := os.Getwd()
-	os.Chdir(dir)
-	defer os.Chdir(wd)
+	t.Chdir(dir)
 
 	m := tasksModel("http://unused")
 	m.startupReport()
@@ -66,14 +64,31 @@ func TestStartupReportMCP(t *testing.T) {
 // TestStartupReportSilent: nothing loaded, nothing said.
 func TestStartupReportSilent(t *testing.T) {
 	dir := t.TempDir()
-	wd, _ := os.Getwd()
-	os.Chdir(dir)
-	defer os.Chdir(wd)
+	t.Chdir(dir)
 	t.Setenv("HOME", t.TempDir()) // no ~/.whip/skills either
 
 	m := tasksModel("http://unused")
 	m.startupReport()
 	if len(m.blocks) != 0 {
 		t.Errorf("expected silence, got %q", m.blocks[0].text)
+	}
+}
+
+// TestStartupReportUpdateNotice: a pending newer release (spotted by main's
+// background check) renders as a notice line naming `whip update`.
+func TestStartupReportUpdateNotice(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	t.Setenv("HOME", t.TempDir())
+
+	m := tasksModel("http://unused")
+	m.updateLatest = "v0.4.0"
+	m.startupReport()
+	if len(m.blocks) == 0 {
+		t.Fatal("no report rendered")
+	}
+	out := m.blocks[0].text
+	if !strings.Contains(out, "update available: v0.4.0") || !strings.Contains(out, "whip update") {
+		t.Errorf("missing update notice:\n%s", out)
 	}
 }

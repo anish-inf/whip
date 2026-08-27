@@ -1,7 +1,7 @@
 # Features
 
 whip is a minimal coding-agent harness: an interactive bubbletea TUI driving an
-LLM tool-use loop (bash / read / write / edit / task) with provider-routable
+LLM tool-use loop (bash / read / write / edit / subagent) with provider-routable
 models. This document is the map of what's shipped and where it lives. Each
 section links the behavior to the code and its tests.
 
@@ -33,6 +33,42 @@ unlock bookkeeping.
 Tests: `parallel_test.go` — `TestToolCallsRunInParallel` (overlap measured via
 a concurrency counter), `TestSamePathEditsSerialize`, `TestToolMutationPath`,
 `TestCanonicalPathKey`.
+
+### Bash output feedback: live streaming + truncation spill
+
+Two ways a bash command stops being a black box (pi's bash tool has both):
+
+- **Streamed partial output.** `bashrun.Options.OnUpdate` reports the
+  accumulated combined stdout/stderr at most every 100ms
+  (`bashrun.updateInterval`) from a snapshot ticker goroutine owned by the
+  run — it snapshots the shared buffer under the drains' mutex and exits on a
+  done-channel close when `runPiped` returns (one trailing tick may land after
+  return; the TUI's `toolRunning` check makes it a no-op). The TUI callback
+  uses a detached `go p.Send(...)`, so a wedged UI queue can never park the
+  ticker goroutine (docs/concurrency.md's ABBA rule). The bash
+  tool receives the callback through a **per-call context value**
+  (`tools.WithOnUpdate`), not a package var, so parallel tool calls can't
+  cross wires; `agent.runTools` attaches it when `Events.OnToolOutput` is set
+  and the call is bash. The TUI (`toolOutputMsg`) renders the last three
+  non-empty lines under the running tool row's verb line (`block.live`);
+  `toolEndMsg` clears it and collapses the row as before. The final output
+  still arrives via the tool result — snapshots are progress, never state.
+- **Truncation spill.** When combined output exceeds `maxOutput` (50KB) and
+  `TruncateTail` fires, `bashrun.Spill` writes the **full** bytes to
+  `$TMPDIR/whip-bash-<pid>/*.log` (0600, OS-reaped) and the tool result
+  appends `[full output (N bytes): <path>]` so the model can read/grep the
+  head it never saw. Spill failure degrades silently — a broken temp dir must
+  not cost the tool result.
+
+Tests: `internal/tools/bashrun/feedback_test.go` — `TestOnUpdateThrottle`
+(≥95ms between fires, prefix-growing snapshots), `TestOnUpdateNil`,
+`TestOnUpdateFastCommand`, `TestSpill` (content round-trip + 0600 perms);
+`internal/tools/bash_feedback_test.go` — `TestBashToolSpillOnTruncation`
+(notice + file holds the truncated-away head), `TestBashToolNoSpillUnderCap`,
+`TestBashToolOnUpdateCtx`; `internal/agent/tool_output_test.go` —
+`TestOnToolOutputStreamsBash` (event carries the tool-call id, fires mid-run);
+`internal/tui/tool_output_test.go` — `TestToolOutputMsgUpdatesRunningRow`
+(unknown id ignored, tail replaces, end clears), `TestLastLines`.
 
 ### Compaction
 
@@ -78,7 +114,7 @@ Tests: `agent_test.go` — `TestTurnAutoCompactsOnContextLimit`,
 
 ### Background subagents
 
-`internal/agent/background.go` — `task` with `background: true` launches a
+`internal/agent/background.go` — the `subagent` tool with `background: true` launches a
 subagent that runs **concurrently with the parent** instead of blocking the
 turn. This is the channel-native port of opencode's `background-job.ts`
 registry.
@@ -86,7 +122,7 @@ registry.
 Each task is a `BackgroundTask` with a `Done chan struct{}`. When the subagent
 settles, the registry `settle()`s and **closes `Done` once** — closing a
 channel broadcasts to every waiter at once, so the tool caller, the TUI, and
-`/tasks` all wake together with no per-waiter state (opencode needs a per-job
+`/subagents` (alias `/tasks`) all wake together with no per-waiter state (opencode needs a per-job
 `Deferred` for the same thing). On settle the report fans back into the parent
 as a **steered message**, so the model sees it on the next loop boundary.
 
@@ -94,30 +130,72 @@ as a **steered message**, so the model sees it on the next loop boundary.
 - `Tasks().OnChange` — the TUI installs a callback that sends a message to
   redraw live. `Tasks().OnRecord` — a second hook the TUI uses to upsert the
   task into the session store on start and settle.
-- `/tasks` lists running/done subagents with report previews; a `⚙ N sub`
-  header badge shows the running count. The persistent dock strip above the
-  input is mouse-clickable: `dockTop()` maps screen rows to task rows,
-  skipping the focused hint row (`dockSkip`) so a click opens the row
-  actually clicked.
+- `/subagents` (alias `/tasks`) lists running/done subagents with report previews; a `⚙ N sub`
+  header badge shows the running count. The persistent dock strip renders
+  **below the input** (above the status line), so focus follows the cursor's
+  geometry: ↓ on an empty input (or ctrl+t) moves focus into the list, ↑ past
+  its top row — or simply typing — hands focus back, and esc is never
+  consumed by the dock (it stays the interrupt/rewind key). The strip is
+  mouse-clickable: `dockTop()` maps screen rows to task rows, skipping the
+  focused hint row (`dockSkip`) so a click opens the row actually clicked.
 - **Persisted across resume.** The session store's `tasks` table records
   every start/settle; `resume()` seeds the registry via `RestoreTask`
   (settled, `Done` pre-closed, marked `Restored`). A row still `running` on
   disk means the subagent died with the last process exit, so it comes back
   as `error` — "interrupted — whip exited". Restored tasks are history:
-  `/tasks` lists them with a `(restored)` marker; the dock never shows them.
+  `/subagents` (alias `/tasks`) lists them with a `(restored)` marker; the dock never shows them.
   The dock itself shows running tasks plus ones settled within a one-minute
   grace window (`dockSettledGrace`) — long enough to notice the ✓, then the
   strip cleans itself.
 
 Background tasks use a context **not** tied to the current turn — they outlive
-it by design. Cancelling a task cancels its subagent's turn.
+it by design. Cancelling a task cancels its subagent's turn. `settle()`
+notifies/persists **before** closing `Done`, so a waiter woken by the close
+always sees the recorded final state.
+
+**Subagent model routing** (`internal/agent/subagent.go` `SubModel`,
+`internal/tui/taskmodel.go`): subagents default to the cheap fast
+`deepseek-v4-flash-0731` route (`config.DefaultTaskModel`, same default as
+compaction); config `taskModel`/`taskProvider` pins a different one; the main
+model overrides per call via the `subagent` tool's optional `model`/`provider`
+params. Resolution chain: taskModel → built-in default → catalog id ending in
+`/<default>` (openrouter-style vendor prefixes) → silently fall back to the
+session model. The agent stays config-free: the TUI/`whip run` inject a
+`ResolveModel` closure over a `cfg.Snapshot()` (the resolver runs on tool
+worker goroutines while `/auth` mutates live config on the UI goroutine).
+
+**User-spawned subagents**: `/subagent [-m model[@provider]] <prompt>` starts a
+background task by hand — it runs mid-turn too (listed with the
+works-while-busy commands), so the LLM isn't the only driver.
+
+**Chat with a subagent** — a task IS a session. The retained subagent lives on
+its `BackgroundTask`; the detail view (enter from the dock) has a chat input:
+
+- while the task **runs**, enter **steers** it (`Agent.SteerTask` → the
+  child's own `pendingSteer` queue — the parent→child pipe reuses the existing
+  steer primitive, no new synchronization); the model gets the same power via
+  the `subagent_steer` tool (`{id, message}`).
+- once it **settles**, enter runs **follow-up turns** on its preserved context
+  (`Agent.FollowupTask`) — status/report/`Done` stay as they settled, usage
+  rolls into the parent session. ctrl+x cancels the running task or the
+  in-flight follow-up. Follow-up chats are live-only by design (not
+  persisted); restored tasks are read-only — their process died.
+  `ClearSettled(keep…)` protects a task whose pane is open from the new-turn
+  dock sweep.
 
 Tests: `TestBackgroundTaskDeliversReport`, `TestBackgroundTaskBroadcastsToManyWaiters`
 (8 waiters all woken by one channel close), `TestBackgroundTaskCancel`;
 persistence: `session.TestTaskRoundTrip`, `TestRestoreTaskSettledAndVisible`,
 `TestResumeRestoresTasks`, `TestTaskPersistsOnStartAndSettle`;
 dock click hit-testing: `TestDockClickOpensClickedRow`,
-`TestDockClickIgnoredWhilePaletteOpen`.
+`TestDockClickIgnoredWhilePaletteOpen`; routing: `submodel_test.go` —
+`TestTaskModelOverride`, `TestTaskDefaultRoutesSubagents`,
+`TestTaskModelOverrideErrors`; chat: `TestSteerTaskReachesRunningSubagent`,
+`TestFollowupTaskChatsOnRetainedContext`, `TestClearSettledKeep`;
+TUI: `taskmodel_test.go` — `TestTaskDefaultForResolvesDefault`,
+`TestTaskDefaultForFallbacks`, `TestTaskDefaultForCatalogSuffix`,
+`TestTaskCommandSpawns`, `TestTaskViewChat`, `TestTaskViewRestoredReadOnly`,
+`TestTaskViewCtrlXCancels`.
 
 ## Models & providers
 
@@ -180,6 +258,30 @@ so re-authing fixes a 401 without a `/model` round-trip. Tests:
 re-auth keeps other providers/models), `tui/auth_cmd_test.go` (usage,
 masked prompt open/cancel, good/bad result, live-session rekey).
 
+`cmd/whip/auth_inferencenet.go`, `internal/inferencenet/`,
+`internal/config/inferencenet.go`, `internal/tui/auth_inferencenet_cmd.go` —
+first-class Inference.net auth. `whip auth inference-net login` runs the
+**OAuth device-authorization flow** against the relay
+(`internal/inferencenet/device.go`): request a code, open the dashboard's
+approval page in the browser, poll until approved — then select the account's
+primary project and **mint a machine API key** (`whip-<host>-<timestamp>`)
+via the relay's tRPC (`apiKey.create`), all without the user touching a key.
+State lands in `~/.whip/inference-net.json` (0600 — session token + machine
+key, kept out of config.json); the provider entry carries no key material and
+resolves the machine key from that file at request time (`Provider.ResolveKey`
+fallback, ahead of the legacy `~/.inf/config.json` read). BYOK is supported
+too: `login --key <k>` / `--env` validates against the gateway (`GET /models`)
+before writing. Subcommands: `status`, `logout` (archives the machine key +
+closes the remote session), `key rotate`. The tRPC client
+(`internal/inferencenet/trpc.go`) is stdlib-only — the superjson transport is
+plain JSON plus a `{"json": …}` envelope for the shapes whip touches. The
+provider key was renamed `inference` → `inference-net`; `Config.normalize`
+migrates old configs (provider, model routes, default/compact provider)
+transparently on load. Tests: `inferencenet/inferencenet_test.go` (stubbed
+relay: full device login + key mint, store round-trip, key validation),
+`config/inferencenet_test.go` (rename migration, upsert modes, key fallback),
+`cmd/whip/auth_inferencenet_test.go`, `tui/auth_inferencenet_cmd_test.go`.
+
 ## The TUI
 
 `internal/tui/tui.go` — bubbletea fullscreen alt-screen. Highlights:
@@ -218,7 +320,7 @@ masked prompt open/cancel, good/bad result, live-session rekey).
 - Queueing (enter while busy), steering (empty enter), history recall (↑/↓),
   `@file` mentions, `$skill` invocation, `/goal` loop, `/resume` session
   picker, `/effort` reasoning levels — see the roadmap for the full list.
-- **Settings commands run mid-turn.** `/theme`, `/mouse`, `/effort`, `/tasks`,
+- **Settings commands run mid-turn.** `/theme`, `/mouse`, `/effort`, `/subagents` (alias `/tasks`),
   `/help`, `/cd`, `/pwd`, and the non-submitting `/goal` forms (bare, `clear`,
   `rounds`) execute immediately while busy instead of queueing — queued text
   is sent to the model verbatim after the turn, which is nonsense for a
@@ -256,6 +358,7 @@ masked prompt open/cancel, good/bad result, live-session rekey).
   `agent.GoalFromContextMessages`); the TUI command mirrors `/compact`'s
   goroutine + `goalFromContextMsg` pattern, refusing while busy and running
   inline when headless. Tests: `goal_test.go` (`TestGoalFromContext*`).
+  User-facing walkthrough: [goal-from-context.md](goal-from-context.md).
 
 ## Conversation time travel
 
@@ -409,6 +512,34 @@ prompts, killed after 15s of no input.
 
 Tests: `killall_test.go` — `TestKillAllReapsChildren` (kills a live `sleep 60`),
 `TestBackgroundGrandchildDoesNotHang`.
+
+## Update check
+
+`internal/update/update.go` — on interactive startup `main` fires
+`update.Check(version)` in a goroutine, concurrent with the trust prompt and
+agent setup, so its ~1 RTT is usually free: when the check wins, the notice
+shows in that very startup report; when startup wins, the recorded notice is
+durable and shows next launch.
+
+The check reads `~/.whip/update.json` first and skips the network when a
+notice is pending for a release not yet installed (never nags twice about the
+same version) or the last check is under 24h old. Otherwise it GETs
+`api.github.com/.../releases/latest` (2s timeout, `gh` token / `GH_TOKEN`
+auth mirroring `install.sh` while the repo is private), and a strictly newer
+semver (prereleases sort before their release) is written to the notice file
+atomically (tmp+rename). The startup report shows `update available: vX.Y.Z
+(run: whip update)`; a successful `whip update` calls `update.Acknowledge()`
+so an installed release stops nagging — and a user who updates out of band
+(curl|sh) has the now-stale notice cleared on next launch, so checks resume.
+`dev` builds never check. Every failure — offline, rate-limited, corrupt
+notice — is silent by design: a version check must never break startup.
+
+Tests: `internal/update/update_test.go` (`TestCheckNewerRelease`,
+`TestCheckSkips` — pending notice / fresh TTL / dev build never fetch,
+`TestCheckStaleTTLRefetches`, `TestCheckOutOfBandUpdate` clears the stale
+notice of a curl|sh updater, `TestCheckFetchFailure` still records the
+attempt, `TestCheckCorruptNotice`, `TestNewer`, `TestPendingAndAcknowledge`);
+`tui/startup_report_test.go` (`TestStartupReportUpdateNotice`).
 
 ## LSP diagnostics
 

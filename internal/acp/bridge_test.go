@@ -75,33 +75,43 @@ func (c *fakeClient) RequestPermission(_ context.Context, p acp.RequestPermissio
 func (c *fakeClient) ReadTextFile(context.Context, acp.ReadTextFileRequest) (acp.ReadTextFileResponse, error) {
 	return acp.ReadTextFileResponse{}, acp.NewMethodNotFound("fs/read_text_file")
 }
+
 func (c *fakeClient) WriteTextFile(context.Context, acp.WriteTextFileRequest) (acp.WriteTextFileResponse, error) {
 	return acp.WriteTextFileResponse{}, acp.NewMethodNotFound("fs/write_text_file")
 }
+
 func (c *fakeClient) CreateTerminal(context.Context, acp.CreateTerminalRequest) (acp.CreateTerminalResponse, error) {
 	return acp.CreateTerminalResponse{}, acp.NewMethodNotFound("terminal/create")
 }
+
 func (c *fakeClient) KillTerminal(context.Context, acp.KillTerminalRequest) (acp.KillTerminalResponse, error) {
 	return acp.KillTerminalResponse{}, nil
 }
+
 func (c *fakeClient) TerminalOutput(context.Context, acp.TerminalOutputRequest) (acp.TerminalOutputResponse, error) {
 	return acp.TerminalOutputResponse{}, acp.NewMethodNotFound("terminal/output")
 }
+
 func (c *fakeClient) ReleaseTerminal(context.Context, acp.ReleaseTerminalRequest) (acp.ReleaseTerminalResponse, error) {
 	return acp.ReleaseTerminalResponse{}, nil
 }
+
 func (c *fakeClient) WaitForTerminalExit(context.Context, acp.WaitForTerminalExitRequest) (acp.WaitForTerminalExitResponse, error) {
 	return acp.WaitForTerminalExitResponse{}, nil
 }
+
 func (c *fakeClient) UnstableCompleteElicitation(context.Context, acp.UnstableCompleteElicitationNotification) error {
 	return nil
 }
+
 func (c *fakeClient) UnstableCreateElicitation(context.Context, acp.UnstableCreateElicitationRequest) (acp.UnstableCreateElicitationResponse, error) {
 	return acp.UnstableCreateElicitationResponse{}, acp.NewMethodNotFound("elicitation/create")
 }
+
 func (c *fakeClient) UnstableConnectMcp(context.Context, acp.UnstableConnectMcpRequest) (acp.UnstableConnectMcpResponse, error) {
 	return acp.UnstableConnectMcpResponse{}, acp.NewMethodNotFound("mcp/connect")
 }
+
 func (c *fakeClient) UnstableDisconnectMcp(context.Context, acp.UnstableDisconnectMcpRequest) (acp.UnstableDisconnectMcpResponse, error) {
 	return acp.UnstableDisconnectMcpResponse{}, acp.NewMethodNotFound("mcp/disconnect")
 }

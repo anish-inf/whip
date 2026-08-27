@@ -76,7 +76,7 @@ func ParseClaude(data []byte) (map[string]ServerConfig, error) {
 // is not an error (returns nil map + os.IsNotExist-satisfying error) so
 // callers can treat discovery as best-effort.
 func LoadClaude(path string) (map[string]ServerConfig, error) {
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) //nolint:gosec // G304: reading the caller-named config file is the function's contract
 	if err != nil {
 		return nil, err
 	}

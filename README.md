@@ -5,7 +5,7 @@
         whip — a fast coding-agent harness in Go
 ```
 
-An LLM tool-use loop (bash / read / write / edit / task), an interactive
+An LLM tool-use loop (bash / read / write / edit / subagent), an interactive
 bubbletea session, and provider-routable models. One binary, no runtime,
 config you can read.
 

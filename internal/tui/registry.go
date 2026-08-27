@@ -23,7 +23,7 @@ type registryEntry struct {
 // their hint/keybind in palette.go as constants, so a keybind or description
 // still has exactly one home even when it's not a slash command.
 var registry = []registryEntry{
-	{Name: "/auth", Hint: "openrouter [key] — connect OpenRouter: validates the key, wires the provider, /model lists the whole catalog (bare = masked prompt; also: whip auth openrouter)", Category: "Agent"},
+	{Name: "/auth", Hint: "<provider> [key] — connect a provider: inference-net (bare = browser login) or openrouter (bare = masked prompt). /model lists the catalog; also: whip auth <provider>", Category: "Agent"},
 	{Name: "/cd", Hint: "[dir] — change working directory (bare prints it)", Category: "Session"},
 	{Name: "/clear", Hint: "— reset conversation", Category: "Session"},
 	{Name: "/compact", Hint: "[model] [provider]|off — compact now, or pick the compaction model (off restores the default); retry undoes the last compaction, log lists them; compaction level: ctrl+p › Compaction level", Category: "Session"},
@@ -45,7 +45,8 @@ var registry = []registryEntry{
 	{Name: "/report", Hint: "— bug-report bundle: prefilled GitHub-issue link + copy-pastable environment snippet (terminal, theme, versions)", Category: "App"},
 	{Name: "/resume", Hint: "[id] — resume a previous session", Category: "Session"},
 	{Name: "/schedule", Hint: "@every 10m|<@at time> <prompt> — schedule a wakeup turn; list | cancel <n>", Category: "Session"},
-	{Name: "/tasks", Hint: "[id] — background subagents: focus the dock, or open one subagent's live view", Keybind: "ctrl+t", Category: "Session"},
+	{Name: "/subagent", Hint: "[-m model[@provider]] <prompt> — spawn a background subagent yourself (works mid-turn)", Category: "Session"},
+	{Name: "/subagents", Hint: "[id] — background subagents: focus the dock, or open one subagent's live view (alias /tasks)", Keybind: "ctrl+t", Category: "Session"},
 	{Name: "/theme", Hint: "[light|dark|auto] — color scheme (bare opens the switcher)", Category: "Display"},
 	{Name: "!cmd", Hint: "— run a shell command locally; output lands in the transcript and the conversation", Category: "App"},
 }

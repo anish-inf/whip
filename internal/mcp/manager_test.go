@@ -3,7 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -80,7 +80,7 @@ func waitReady(t *testing.T, m *Manager) {
 func newTestManager(t *testing.T, cfgs map[string]ServerConfig) *Manager {
 	t.Helper()
 	m := NewManager(cfgs)
-	m.connectTransport = func(cfg ServerConfig, stderr *ringBuffer) (sdkmcp.Transport, error) {
+	m.connectTransport = func(_ context.Context, cfg ServerConfig, stderr *ringBuffer) (sdkmcp.Transport, error) {
 		return serveTestServer(t, cfg.Command[0]), nil // Command[0] is the server name in tests
 	}
 	t.Cleanup(m.Close)
@@ -155,7 +155,7 @@ func TestManagerStructuredAndMedia(t *testing.T) {
 func TestManagerFailedServerDegradesToErrorString(t *testing.T) {
 	m := NewManager(map[string]ServerConfig{"ghost": testCfg("ghost")})
 	// No transport registered for "ghost": connect fails.
-	m.connectTransport = func(cfg ServerConfig, stderr *ringBuffer) (sdkmcp.Transport, error) {
+	m.connectTransport = func(_ context.Context, cfg ServerConfig, stderr *ringBuffer) (sdkmcp.Transport, error) {
 		return nil, context.DeadlineExceeded
 	}
 	t.Cleanup(m.Close)
@@ -225,7 +225,7 @@ func TestManagerParallelCallsRaceClean(t *testing.T) {
 	ts := m.Tools()
 
 	done := make(chan struct{}, 32)
-	for i := 0; i < 32; i++ {
+	for i := range 32 {
 		go func(i int) {
 			name := "mcp__a__greet"
 			if i%2 == 1 {
@@ -238,7 +238,7 @@ func TestManagerParallelCallsRaceClean(t *testing.T) {
 			done <- struct{}{}
 		}(i)
 	}
-	for i := 0; i < 32; i++ {
+	for range 32 {
 		<-done
 	}
 	if calls.Load() != 32 {
@@ -249,7 +249,7 @@ func TestManagerParallelCallsRaceClean(t *testing.T) {
 func TestManagerCallRespectsCancel(t *testing.T) {
 	m := NewManager(map[string]ServerConfig{"slowpoke": testCfg("slowpoke")})
 	// Server that never settles its connect: transport that blocks forever.
-	m.connectTransport = func(cfg ServerConfig, stderr *ringBuffer) (sdkmcp.Transport, error) {
+	m.connectTransport = func(_ context.Context, cfg ServerConfig, stderr *ringBuffer) (sdkmcp.Transport, error) {
 		return &hangTransport{}, nil
 	}
 	t.Cleanup(m.Close)
@@ -271,14 +271,14 @@ func TestManagerCallRespectsCancel(t *testing.T) {
 func TestManagerCallFailFast(t *testing.T) {
 	m := NewManager(map[string]ServerConfig{
 		"dead":   {Command: []string{"nope-not-a-binary"}, StartupTimeout: 2},
-		"off":    {Command: []string{"true"}, Enabled: boolp(false)},
+		"off":    {Command: []string{"true"}, Enabled: new(false)},
 		"wedged": {Command: []string{"wedged"}, StartupTimeout: 30}, // connect hangs
 	})
-	m.connectTransport = func(cfg ServerConfig, stderr *ringBuffer) (sdkmcp.Transport, error) {
+	m.connectTransport = func(_ context.Context, cfg ServerConfig, stderr *ringBuffer) (sdkmcp.Transport, error) {
 		if cfg.Command[0] == "wedged" {
 			return &hangTransport{}, nil
 		}
-		return nil, fmt.Errorf("spawn failed: no such binary")
+		return nil, errors.New("spawn failed: no such binary")
 	}
 	t.Cleanup(m.Close)
 	m.Start(context.Background())
@@ -360,12 +360,12 @@ func TestManagerAutoReconnectGivesUp(t *testing.T) {
 
 	var connects atomic.Int64
 	m := NewManager(map[string]ServerConfig{"flaky": testCfg("flaky")})
-	m.connectTransport = func(cfg ServerConfig, stderr *ringBuffer) (sdkmcp.Transport, error) {
+	m.connectTransport = func(_ context.Context, cfg ServerConfig, stderr *ringBuffer) (sdkmcp.Transport, error) {
 		connects.Add(1)
 		if connects.Load() == 1 {
 			return serveTestServer(t, "flaky"), nil // first connect succeeds
 		}
-		return nil, fmt.Errorf("server keeps dying") // every reconnect fails
+		return nil, errors.New("server keeps dying") // every reconnect fails
 	}
 	t.Cleanup(m.Close)
 	m.Start(context.Background())
@@ -449,7 +449,7 @@ func TestServerInstructions(t *testing.T) {
 		})
 
 	m := NewManager(map[string]ServerConfig{"docs": testCfg("docs"), "plain": testCfg("plain")})
-	m.connectTransport = func(cfg ServerConfig, stderr *ringBuffer) (sdkmcp.Transport, error) {
+	m.connectTransport = func(_ context.Context, cfg ServerConfig, stderr *ringBuffer) (sdkmcp.Transport, error) {
 		if cfg.Command[0] == "docs" {
 			ct, st := sdkmcp.NewInMemoryTransports()
 			ss, err := srvWithInstr.Connect(context.Background(), st, nil)
@@ -494,7 +494,10 @@ func TestServerInstructions(t *testing.T) {
 	deadline = time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
 		s.mu.Lock()
-		terminal := s.status == StatusReady || (s.status == StatusFailed && s.autoTries >= autoReconnectMax)
+		// Ready is only terminal with a live session: the drop watcher clears
+		// sess/instr under s.mu before it flips status to Failed, so a bare
+		// Ready can be a transient pre-Failed window.
+		terminal := (s.status == StatusReady && s.sess != nil) || (s.status == StatusFailed && s.autoTries >= autoReconnectMax)
 		s.mu.Unlock()
 		if terminal {
 			break
@@ -540,5 +543,32 @@ func TestProbe(t *testing.T) {
 	}
 	if res.Elapsed > 15*time.Second {
 		t.Errorf("probe blew far past the startup timeout: %s", res.Elapsed)
+	}
+}
+
+func TestStatusString(t *testing.T) {
+	want := map[Status]string{
+		StatusDisabled:   "disabled",
+		StatusConnecting: "connecting",
+		StatusReady:      "ready",
+		StatusFailed:     "failed",
+		Status(99):       "unknown",
+	}
+	for s, w := range want {
+		if got := s.String(); got != w {
+			t.Errorf("Status(%d).String() = %q, want %q", s, got, w)
+		}
+	}
+}
+
+func TestSetOnChange(t *testing.T) {
+	m := NewManager(nil)
+	m.FireOnChangeForTest() // nil callback must be a no-op, not a panic
+	fired := 0
+	m.SetOnChange(func() { fired++ })
+	m.FireOnChangeForTest()
+	m.FireOnChangeForTest()
+	if fired != 2 {
+		t.Fatalf("callback fired %d times, want 2", fired)
 	}
 }

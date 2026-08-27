@@ -10,7 +10,9 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/context-labs/whip/internal/browser"
@@ -45,7 +47,7 @@ func parseHelperProgram(code string) ([]helperStmt, error) {
 		out = append(out, st)
 	}
 	if len(out) == 0 {
-		return nil, fmt.Errorf("no helper calls in code — e.g. goto(\"https://example.com\"); print(info())")
+		return nil, errors.New("no helper calls in code — e.g. goto(\"https://example.com\"); print(info())")
 	}
 	return out, nil
 }
@@ -66,7 +68,7 @@ func splitStatements(code string) []string {
 	// quote-aware scan, or an apostrophe inside a comment ("TextEdit's")
 	// opens a phantom quote that swallows the following real statement.
 	var lines []string
-	for _, ln := range strings.Split(code, "\n") {
+	for ln := range strings.SplitSeq(code, "\n") {
 		if t := strings.TrimSpace(ln); strings.HasPrefix(t, "#") || strings.HasPrefix(t, "//") {
 			continue
 		}
@@ -110,7 +112,7 @@ func parseStatement(s string) (helperStmt, error) {
 	if name == "print" {
 		inner = strings.TrimSpace(inner)
 		if inner == "" {
-			return helperStmt{}, fmt.Errorf("print() needs an argument")
+			return helperStmt{}, errors.New("print() needs an argument")
 		}
 		// print(helper(...)) nests the call; print("lit") passes the string.
 		if strings.Contains(inner, "(") && strings.HasSuffix(inner, ")") {
@@ -332,7 +334,7 @@ func (s helperStmt) exec(ctx context.Context, b browser.Backend) (out string, sh
 		if err != nil {
 			return "", nil, err
 		}
-		return fmt.Sprintf("%v", found), nil, nil
+		return strconv.FormatBool(found), nil, nil
 	case "ax":
 		tree, err := b.AXTree(ctx)
 		return tree, nil, err
@@ -365,7 +367,7 @@ func (s helperStmt) exec(ctx context.Context, b browser.Backend) (out string, sh
 			return "", nil, err
 		}
 		if len(s.args) < 2 {
-			return "", nil, fmt.Errorf("upload: missing paths array")
+			return "", nil, errors.New("upload: missing paths array")
 		}
 		var paths []string
 		switch v := s.args[1].(type) {
@@ -373,14 +375,14 @@ func (s helperStmt) exec(ctx context.Context, b browser.Backend) (out string, sh
 			for _, p := range v {
 				ps, ok := p.(string)
 				if !ok {
-					return "", nil, fmt.Errorf("upload: paths must be strings")
+					return "", nil, errors.New("upload: paths must be strings")
 				}
 				paths = append(paths, ps)
 			}
 		case string:
 			paths = []string{v}
 		default:
-			return "", nil, fmt.Errorf("upload: paths must be an array or string")
+			return "", nil, errors.New("upload: paths must be an array or string")
 		}
 		return "", nil, b.UploadFiles(ctx, sel, paths)
 	case "dialog":

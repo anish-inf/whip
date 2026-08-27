@@ -14,7 +14,7 @@ func TestLoadSaveDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.DefaultModel != "kimi-k3-fast" || cfg.Providers["inference"].BaseURL != "https://api.inference.net/v1" {
+	if cfg.DefaultModel != "kimi-k3-fast" || cfg.Providers["inference-net"].BaseURL != "https://api.inference.net/v1" {
 		t.Fatalf("defaults: %+v", cfg)
 	}
 	cfg.DefaultModel = "glm-5.2-fast"
@@ -215,7 +215,8 @@ func TestLoadPreservesMCPImportOnClobber(t *testing.T) {
 	dir := filepath.Join(home, ".whip")
 	os.MkdirAll(dir, 0o700)
 	os.WriteFile(filepath.Join(dir, "config.json"), []byte(
-		`{"providers":null,"models":null,"mcpImport":{"codex":{"enabled":false}}}`), 0o600)
+		`{"providers":null,"models":null,"mcpImport":{"codex":{"enabled":false}}}`,
+	), 0o600)
 	cfg, err := Load()
 	if err != nil {
 		t.Fatal(err)
@@ -428,5 +429,27 @@ func TestLoadMixedTokenFields(t *testing.T) {
 	m2 := cfg.Models["m2"]
 	if m2.ContextWindow() != 200000 || m2.MaxOut != 64000 {
 		t.Fatalf("m2: %+v", m2)
+	}
+}
+
+// Snapshot hands worker goroutines an isolated view: mutating the original's
+// maps after the snapshot must not show through.
+func TestSnapshotIsolatesMaps(t *testing.T) {
+	cfg := Default()
+	snap := cfg.Snapshot()
+	cfg.Providers["late"] = Provider{BaseURL: "http://late"}
+	cfg.Models["late-model"] = Model{Providers: []string{"late"}}
+	cfg.DefaultModel = "changed"
+	if _, ok := snap.Providers["late"]; ok {
+		t.Fatal("snapshot providers must not see later mutations")
+	}
+	if _, ok := snap.Models["late-model"]; ok {
+		t.Fatal("snapshot models must not see later mutations")
+	}
+	if snap.DefaultModel == "changed" {
+		t.Fatal("snapshot scalars are copies")
+	}
+	if len(snap.Providers) != len(Default().Providers) || len(snap.Models) != len(Default().Models) {
+		t.Fatal("snapshot should carry the original entries")
 	}
 }

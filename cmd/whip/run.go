@@ -21,6 +21,7 @@ import (
 	"github.com/context-labs/whip/internal/config"
 	"github.com/context-labs/whip/internal/llm"
 	"github.com/context-labs/whip/internal/session"
+	"github.com/context-labs/whip/internal/tui"
 )
 
 func runCLI(args []string) error {
@@ -64,7 +65,7 @@ func runCLI(args []string) error {
 	}
 	if prompt == "" {
 		fs.Usage()
-		return fmt.Errorf("no prompt given (pass one as an argument or pipe it on stdin)")
+		return errors.New("no prompt given (pass one as an argument or pipe it on stdin)")
 	}
 
 	cfg, err := config.Load()
@@ -179,6 +180,18 @@ func runCLI(args []string) error {
 	} else {
 		ev.OnText = func(d string) { fmt.Fprint(os.Stdout, d) }
 		ev.OnToolStart = func(_, name, args string) { note("⚒ %s", name) }
+	}
+
+	// Subagent routing: same default chain as the TUI (taskModel → built-in
+	// default → catalog suffix → the run's own model). Headless runs never
+	// mutate cfg, so no snapshot is needed for the resolver.
+	ag.ResolveModel = func(model, provider string) (agent.SubModel, error) {
+		return tui.SubModelFor(cfg, model, provider)
+	}
+	if o, terr := tui.TaskDefaultFor(cfg); terr == nil {
+		ag.TaskDefault = o
+	} else {
+		note("task model: %v — subagents use the run's model", terr)
 	}
 
 	final, err := ag.Turn(ctx, prompt, ev)

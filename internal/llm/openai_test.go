@@ -1,7 +1,9 @@
 package llm
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -41,7 +43,7 @@ func TestStreamStripsAuthoredFlag(t *testing.T) {
 
 	sent := time.Now()
 	msgs := []Message{{Role: "user", Content: "typed by me", Authored: true, SentAt: &sent}}
-	if _, _, err := New(srv.URL, "test-key").Stream(context.Background(), Request{Model: "m", Messages: msgs}, nil, nil); err != nil {
+	if _, _, err := New(srv.URL, "test-key").Stream(context.Background(), Request{Model: "m", Messages: msgs}, nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(string(body), "authored") {
@@ -111,7 +113,7 @@ func TestStreamTextAndToolCalls(t *testing.T) {
 	defer srv.Close()
 
 	var streamed strings.Builder
-	msg, _, err := New(srv.URL, "test-key").Stream(context.Background(), Request{Model: "m"}, func(d string) { streamed.WriteString(d) }, nil)
+	msg, _, err := New(srv.URL, "test-key").Stream(context.Background(), Request{Model: "m"}, func(d string) { streamed.WriteString(d) }, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,6 +129,39 @@ func TestStreamTextAndToolCalls(t *testing.T) {
 	}
 }
 
+// onToolCall fires for each streaming tool-call delta once the call has an
+// id, with the id/name/args snapshot at that point — so the UI can render a
+// pending row before execution. A nil onToolCall must not panic.
+func TestStreamOnToolCallFiresPerDelta(t *testing.T) {
+	srv := sseServer(t,
+		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","type":"function","function":{"name":"ba","arguments":"{\"comm"}}]}}]}`,
+		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"name":"sh","arguments":"and\":\"ls\"}"}}]}}]}`,
+		`data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}`,
+		`data: [DONE]`,
+	)
+	defer srv.Close()
+
+	type snap struct{ id, name, args string }
+	var got []snap
+	_, _, err := New(srv.URL, "test-key").Stream(context.Background(), Request{Model: "m"}, nil, nil,
+		func(id, name, args string) { got = append(got, snap{id, name, args}) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) < 2 {
+		t.Fatalf("onToolCall should fire per delta once the id exists, got %d calls: %+v", len(got), got)
+	}
+	for _, s := range got {
+		if s.id != "c1" {
+			t.Fatalf("snapshot missing id: %+v", s)
+		}
+	}
+	last := got[len(got)-1]
+	if last.name != "bash" || last.args != `{"command":"ls"}` {
+		t.Fatalf("final snapshot should have the assembled name+args, got %+v", last)
+	}
+}
+
 func TestStreamLengthDiscardsToolCalls(t *testing.T) {
 	srv := sseServer(t,
 		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"bash","arguments":"{\"comm"}}]}}]}`,
@@ -135,7 +170,7 @@ func TestStreamLengthDiscardsToolCalls(t *testing.T) {
 	)
 	defer srv.Close()
 
-	msg, _, err := New(srv.URL, "test-key").Stream(context.Background(), Request{Model: "m"}, nil, nil)
+	msg, _, err := New(srv.URL, "test-key").Stream(context.Background(), Request{Model: "m"}, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,7 +185,7 @@ func TestStreamLengthDiscardsToolCalls(t *testing.T) {
 func TestStreamAPIError(t *testing.T) {
 	srv := sseServer(t, `data: {"error":{"message":"boom"}}`)
 	defer srv.Close()
-	_, _, err := New(srv.URL, "test-key").Stream(context.Background(), Request{Model: "m"}, nil, nil)
+	_, _, err := New(srv.URL, "test-key").Stream(context.Background(), Request{Model: "m"}, nil, nil, nil)
 	if err == nil || !strings.Contains(err.Error(), "boom") {
 		t.Fatalf("expected api error, got %v", err)
 	}
@@ -168,7 +203,7 @@ func TestStreamReasoningRoutedToOnThink(t *testing.T) {
 
 	var think, text strings.Builder
 	msg, _, err := New(srv.URL, "test-key").Stream(context.Background(), Request{Model: "m"},
-		func(d string) { text.WriteString(d) }, func(d string) { think.WriteString(d) })
+		func(d string) { text.WriteString(d) }, func(d string) { think.WriteString(d) }, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,7 +220,7 @@ func TestStreamHTTPError(t *testing.T) {
 	srv := sseServer(t)
 	defer srv.Close()
 	c.BaseURL = srv.URL
-	_, _, err := c.Stream(context.Background(), Request{Model: "m"}, nil, nil)
+	_, _, err := c.Stream(context.Background(), Request{Model: "m"}, nil, nil, nil)
 	if err == nil || !strings.Contains(err.Error(), "401") {
 		t.Fatalf("expected 401 error, got %v", err)
 	}
@@ -200,12 +235,12 @@ func TestNewTool(t *testing.T) {
 
 func TestStreamTransportErrors(t *testing.T) {
 	noSleep(t) // connection-refused is retryable; don't burn real backoff
-	if _, _, err := New("http://\x7f", "k").Stream(context.Background(), Request{}, nil, nil); err == nil {
+	if _, _, err := New("http://\x7f", "k").Stream(context.Background(), Request{}, nil, nil, nil); err == nil {
 		t.Fatal("expected bad-url error")
 	}
 	srv := sseServer(t)
 	srv.Close() // connection refused
-	if _, _, err := New(srv.URL, "test-key").Stream(context.Background(), Request{}, nil, nil); err == nil {
+	if _, _, err := New(srv.URL, "test-key").Stream(context.Background(), Request{}, nil, nil, nil); err == nil {
 		t.Fatal("expected connection error")
 	}
 }
@@ -218,6 +253,18 @@ func TestReasoningEffortSerialized(t *testing.T) {
 	b, _ = json.Marshal(Request{Model: "m"})
 	if strings.Contains(string(b), "reasoning_effort") {
 		t.Fatalf("empty effort must be omitted: %s", b)
+	}
+}
+
+func TestSamplingParamsSerialized(t *testing.T) {
+	temp, topP := 0.2, 0.9
+	b, _ := json.Marshal(Request{Model: "m", Temperature: &temp, TopP: &topP})
+	if !strings.Contains(string(b), `"temperature":0.2`) || !strings.Contains(string(b), `"top_p":0.9`) {
+		t.Fatalf("missing sampling params: %s", b)
+	}
+	b, _ = json.Marshal(Request{Model: "m"})
+	if strings.Contains(string(b), "temperature") || strings.Contains(string(b), "top_p") {
+		t.Fatalf("unset sampling params must be omitted: %s", b)
 	}
 }
 
@@ -267,7 +314,7 @@ func TestStreamUsageParsed(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, u, err := New(srv.URL, "k").Stream(context.Background(), Request{Model: "m"}, nil, nil)
+	_, u, err := New(srv.URL, "k").Stream(context.Background(), Request{Model: "m"}, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -367,5 +414,88 @@ func TestSessionCost(t *testing.T) {
 		if got := SessionCost(c.u, c.in, c.out, c.cacheRead); math.Abs(got-c.want) > 1e-12 {
 			t.Errorf("%s: SessionCost = %v, want %v", c.name, got, c.want)
 		}
+	}
+}
+
+func TestImagePart(t *testing.T) {
+	data := []byte{0x89, 'P', 'N', 'G'}
+	p := ImagePart("png", data)
+	if p.Type != "image_url" || p.ImageURL == nil {
+		t.Fatalf("part = %+v", p)
+	}
+	wantPrefix := "data:image/png;base64,"
+	if !strings.HasPrefix(p.ImageURL.URL, wantPrefix) {
+		t.Fatalf("URL = %q", p.ImageURL.URL)
+	}
+	decoded, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(p.ImageURL.URL, wantPrefix))
+	if err != nil || !bytes.Equal(decoded, data) {
+		t.Fatalf("payload round-trip = %q, %v", decoded, err)
+	}
+	// jpg must be normalized to the real MIME type
+	if jp := ImagePart("jpg", data); !strings.HasPrefix(jp.ImageURL.URL, "data:image/jpeg;base64,") {
+		t.Fatalf("jpg URL = %q", jp.ImageURL.URL)
+	}
+}
+
+func TestModelInfoSupportsVision(t *testing.T) {
+	if !(ModelInfo{InputModalities: []string{"text", "image"}}).SupportsVision() {
+		t.Error("image modality should report vision")
+	}
+	if (ModelInfo{InputModalities: []string{"text"}}).SupportsVision() {
+		t.Error("text-only model should not report vision")
+	}
+	if (ModelInfo{}).SupportsVision() {
+		t.Error("nil modalities should not report vision")
+	}
+}
+
+func TestMessageJSONMultimodalRoundTrip(t *testing.T) {
+	m := Message{Role: "user", Content: "look at this", Parts: []ContentPart{ImagePart("png", []byte("img"))}}
+	data, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// wire form: content array with the text part first, then the image
+	var wire struct {
+		Content []ContentPart `json:"content"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		t.Fatal(err)
+	}
+	if len(wire.Content) != 2 || wire.Content[0].Type != "text" || wire.Content[0].Text != "look at this" || wire.Content[1].Type != "image_url" {
+		t.Fatalf("wire content = %+v", wire.Content)
+	}
+
+	var back Message
+	if err := json.Unmarshal(data, &back); err != nil {
+		t.Fatal(err)
+	}
+	if back.Content != "look at this" || len(back.Parts) != 1 || back.Parts[0].ImageURL.URL != m.Parts[0].ImageURL.URL {
+		t.Fatalf("round-trip = %+v", back)
+	}
+	if back.TextContent() != "look at this" {
+		t.Fatalf("TextContent = %q", back.TextContent())
+	}
+}
+
+func TestMessageUnmarshalPlainString(t *testing.T) {
+	var m Message
+	if err := json.Unmarshal([]byte(`{"role":"assistant","content":"hi","model":"m @ p"}`), &m); err != nil {
+		t.Fatal(err)
+	}
+	if m.Role != "assistant" || m.Content != "hi" || m.Model != "m @ p" {
+		t.Fatalf("m = %+v", m)
+	}
+	// null / absent content is fine (tool-call-only assistant messages)
+	var empty Message
+	if err := json.Unmarshal([]byte(`{"role":"assistant"}`), &empty); err != nil {
+		t.Fatal(err)
+	}
+	if empty.Content != "" {
+		t.Fatalf("empty content = %q", empty.Content)
+	}
+	// malformed content shape must error, not vanish silently
+	if err := json.Unmarshal([]byte(`{"role":"user","content":42}`), &m); err == nil {
+		t.Fatal("numeric content should error")
 	}
 }

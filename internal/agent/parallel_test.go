@@ -18,7 +18,7 @@ import (
 
 // slowTool returns a tool that records how many copies of itself are running
 // concurrently, to prove parallel execution actually overlaps.
-func slowTool(name string, conc *atomic.Int32, maxConc *atomic.Int32) tools.Tool {
+func slowTool(name string, conc, maxConc *atomic.Int32) tools.Tool {
 	return tools.Tool{
 		Def: llm.NewTool(name, "slow", `{"type":"object","properties":{"s":{"type":"string"}}}`),
 		Run: func(ctx context.Context, args json.RawMessage) (string, error) {
@@ -120,7 +120,7 @@ func TestBackgroundTaskDeliversReport(t *testing.T) {
 	defer srv.Close()
 
 	ag := New(llm.New(srv.URL, "k"), "m", 100, "sys")
-	task := ag.StartBackground(context.Background(), "probe", "do the thing")
+	task := ag.StartBackground("probe", "do the thing", SubModel{})
 
 	// wait on the Done channel — closes exactly once on settle
 	select {
@@ -139,7 +139,7 @@ func TestBackgroundTaskDeliversReport(t *testing.T) {
 	// the report should be queued for steering into the parent. Steer runs in
 	// the task goroutine right after settle closes Done, so poll briefly.
 	var pending []pendingSteer
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		if pending = ag.drainPending(); len(pending) > 0 {
 			break
 		}
@@ -160,21 +160,19 @@ func TestBackgroundTaskBroadcastsToManyWaiters(t *testing.T) {
 	defer srv.Close()
 
 	ag := New(llm.New(srv.URL, "k"), "m", 100, "sys")
-	task := ag.StartBackground(context.Background(), "d", "p")
+	task := ag.StartBackground("d", "p", SubModel{})
 
 	const waiters = 8
 	var woken atomic.Int32
 	var wg sync.WaitGroup
-	for i := 0; i < waiters; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range waiters {
+		wg.Go(func() {
 			select {
 			case <-task.Done:
 				woken.Add(1)
 			case <-time.After(5 * time.Second):
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	if woken.Load() != waiters {
@@ -192,7 +190,7 @@ func TestBackgroundTaskCancel(t *testing.T) {
 	defer srv.Close()
 
 	ag := New(llm.New(srv.URL, "k"), "m", 100, "sys")
-	task := ag.StartBackground(context.Background(), "d", "p")
+	task := ag.StartBackground("d", "p", SubModel{})
 	if !ag.Tasks().Cancel(task.ID) {
 		t.Fatal("cancel should succeed on a running task")
 	}
@@ -233,7 +231,7 @@ func TestTaskListStableOrder(t *testing.T) {
 		}
 	}
 	// repeated calls never reshuffle
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		got := r.List()
 		for j := range want {
 			if got[j].ID != want[j] {
@@ -265,6 +263,57 @@ func TestClearSettledKeepsRunning(t *testing.T) {
 	}
 	if _, ok := r.Get("task-1"); ok {
 		t.Fatal("settled task should be gone")
+	}
+}
+
+// The global lock (bash) admits one holder at a time: a second acquire
+// blocks until the first releases.
+func TestAcquireGlobalSerializes(t *testing.T) {
+	f := newFileLocks()
+	release := f.acquireGlobal()
+
+	acquired := make(chan struct{})
+	go func() {
+		r2 := f.acquireGlobal()
+		close(acquired)
+		r2()
+	}()
+	select {
+	case <-acquired:
+		t.Fatal("second global acquire should block while the first holds it")
+	case <-time.After(50 * time.Millisecond):
+	}
+	release()
+	select {
+	case <-acquired:
+	case <-time.After(5 * time.Second):
+		t.Fatal("release never unblocked the waiter")
+	}
+}
+
+// SetSessionID publishes (and clears) the session tasks record against, and
+// settle hands that id to OnRecord.
+func TestRegistrySessionID(t *testing.T) {
+	r := newTaskRegistry()
+	if got := r.recordSession(); got != "" {
+		t.Fatalf("fresh registry session: %q", got)
+	}
+	r.SetSessionID("s1")
+	if got := r.recordSession(); got != "s1" {
+		t.Fatalf("after set: %q", got)
+	}
+	r.SetSessionID("") // /clear and /fork
+	if got := r.recordSession(); got != "" {
+		t.Fatalf("after clear: %q", got)
+	}
+
+	var recorded string
+	r.OnRecord = func(id string, _ *BackgroundTask) { recorded = id }
+	r.SetSessionID("s2")
+	r.tasks["task-1"] = &BackgroundTask{ID: "task-1", Status: TaskRunning, Done: make(chan struct{})}
+	r.settle("task-1", TaskDone, "report")
+	if recorded != "s2" {
+		t.Fatalf("settle should record against the published session, got %q", recorded)
 	}
 }
 
@@ -306,7 +355,7 @@ func TestBackgroundTaskSubscribersSeeLiveStream(t *testing.T) {
 	defer srv.Close()
 
 	ag := New(llm.New(srv.URL, "k"), "m", 100, "sys")
-	task := ag.StartBackground(context.Background(), "d", "p")
+	task := ag.StartBackground("d", "p", SubModel{})
 
 	var got atomic.Int32
 	ok := ag.Tasks().Subscribe(task.ID, Events{OnText: func(s string) { got.Add(int32(len(s))) }})
@@ -371,7 +420,7 @@ func TestBackgroundTaskSubscriberSeesToolEvents(t *testing.T) {
 	defer srv.Close()
 
 	ag := New(llm.New(srv.URL, "k"), "m", 100, "sys")
-	task := ag.StartBackground(context.Background(), "d", "p")
+	task := ag.StartBackground("d", "p", SubModel{})
 
 	var mu sync.Mutex
 	var seq []string
@@ -408,11 +457,11 @@ func TestBackgroundTaskManySubscribers(t *testing.T) {
 	defer srv.Close()
 
 	ag := New(llm.New(srv.URL, "k"), "m", 100, "sys")
-	task := ag.StartBackground(context.Background(), "d", "p")
+	task := ag.StartBackground("d", "p", SubModel{})
 
 	const subs = 4
 	var counts [subs]atomic.Int32
-	for i := 0; i < subs; i++ {
+	for i := range subs {
 		if !ag.Tasks().Subscribe(task.ID, Events{OnText: func(s string) { counts[i].Add(int32(len(s))) }}) {
 			t.Fatalf("subscriber %d rejected", i)
 		}
@@ -449,7 +498,7 @@ func TestBackgroundTaskUsageRollsIntoParent(t *testing.T) {
 	defer srv.Close()
 
 	ag := New(llm.New(srv.URL, "k"), "m", 100, "sys")
-	task := ag.StartBackground(context.Background(), "d", "p")
+	task := ag.StartBackground("d", "p", SubModel{})
 	select {
 	case <-task.Done:
 	case <-time.After(5 * time.Second):
@@ -510,7 +559,7 @@ func TestBroadcastBlockingSubscriberCannotDeadlock(t *testing.T) {
 	defer srv.Close()
 
 	ag := New(llm.New(srv.URL, "k"), "m", 100, "sys")
-	task := ag.StartBackground(context.Background(), "probe", "p")
+	task := ag.StartBackground("probe", "p", SubModel{})
 
 	inCallback := make(chan struct{})
 	notify := sync.OnceFunc(func() { close(inCallback) })

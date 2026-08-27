@@ -64,12 +64,12 @@ Runs through `internal/tools/bashrun` so the agent can:
 - **suggest next steps** — the schema nudges the model toward batching
   independent calls in one turn, which the loop then runs in parallel.
 
-## Subagents (`task`)
+## Subagents (`subagent`)
 
-A `task` call launches a fresh `Agent` with its own context — used for
+A `subagent` call launches a fresh `Agent` with its own context — used for
 context-heavy exploration or self-contained work. With `background: true` it
 runs concurrently with the parent and reports back as a steered message when
-done; `/tasks` shows live status. The parent only ever receives the final
+done; `/subagents` shows live status. The parent only ever receives the final
 report, which keeps the main conversation small.
 
 ## MCP tools

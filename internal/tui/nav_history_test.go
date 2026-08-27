@@ -134,7 +134,7 @@ func TestUpCyclesGlobalCrossSessionHistory(t *testing.T) {
 	m.input.CursorEnd()
 
 	var got []string
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		tm, _ := m.key(tea.KeyMsg{Type: tea.KeyUp})
 		m = tm.(*model)
 		got = append(got, m.input.Value())
@@ -163,7 +163,7 @@ func TestHeldUpStaysOnCurrentMessage(t *testing.T) {
 	m.input.CursorEnd()
 
 	// hold ↑: repeats arrive 40ms apart. The cursor climbs to the top line…
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		tm, _ := m.key(tea.KeyMsg{Type: tea.KeyUp})
 		m = tm.(*model)
 		clk.advance(40 * time.Millisecond)
@@ -172,7 +172,7 @@ func TestHeldUpStaysOnCurrentMessage(t *testing.T) {
 		t.Fatalf("held ↑ should have climbed to the first line, got line %d", m.input.Line())
 	}
 	// …and keeps going: every repeated press must be swallowed, never recall
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		tm, _ := m.key(tea.KeyMsg{Type: tea.KeyUp})
 		m = tm.(*model)
 		clk.advance(40 * time.Millisecond)

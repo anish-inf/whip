@@ -65,7 +65,7 @@ func TestStreamRetriesTransientStatus(t *testing.T) {
 	var retries []RetryEvent
 	c.OnRetry = func(ev RetryEvent) { retries = append(retries, ev) }
 
-	msg, _, err := c.Stream(context.Background(), Request{Model: "m"}, nil, nil)
+	msg, _, err := c.Stream(context.Background(), Request{Model: "m"}, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +94,7 @@ func TestStreamRetriesTransportError(t *testing.T) {
 	var retried int
 	c.OnRetry = func(RetryEvent) { retried++ }
 
-	_, _, err := c.Stream(context.Background(), Request{Model: "m"}, nil, nil)
+	_, _, err := c.Stream(context.Background(), Request{Model: "m"}, nil, nil, nil)
 	if err == nil {
 		t.Fatal("expected error after retries exhausted")
 	}
@@ -113,7 +113,7 @@ func TestStreamDoesNotRetryPermanentStatus(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, _, err := New(srv.URL, "k").Stream(context.Background(), Request{Model: "m"}, nil, nil)
+	_, _, err := New(srv.URL, "k").Stream(context.Background(), Request{Model: "m"}, nil, nil, nil)
 	if err == nil || !strings.Contains(err.Error(), "401") {
 		t.Fatalf("expected 401, got %v", err)
 	}
@@ -129,12 +129,12 @@ func TestStreamDoesNotRetryContextLimit(t *testing.T) {
 	var calls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
-		w.WriteHeader(400)
+		w.WriteHeader(http.StatusBadRequest)
 		fmt.Fprint(w, `{"error":{"code":"context_length_exceeded"}}`)
 	}))
 	defer srv.Close()
 
-	_, _, err := New(srv.URL, "k").Stream(context.Background(), Request{Model: "m"}, nil, nil)
+	_, _, err := New(srv.URL, "k").Stream(context.Background(), Request{Model: "m"}, nil, nil, nil)
 	if !IsContextLimit(err) {
 		t.Fatalf("expected context-limit error, got %v", err)
 	}
@@ -161,7 +161,7 @@ func TestStreamDoesNotRetryAfterEmission(t *testing.T) {
 	var retried int
 	c.OnRetry = func(RetryEvent) { retried++ }
 	_, _, err := c.Stream(context.Background(), Request{Model: "m"},
-		func(d string) { streamed.WriteString(d) }, nil)
+		func(d string) { streamed.WriteString(d) }, nil, nil)
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -179,13 +179,13 @@ func TestMaxRetriesConfigurable(t *testing.T) {
 	var calls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
-		w.WriteHeader(500)
+		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	defer srv.Close()
 
 	c := New(srv.URL, "k")
 	c.MaxRetries = 2
-	if _, _, err := c.Stream(context.Background(), Request{Model: "m"}, nil, nil); err == nil {
+	if _, _, err := c.Stream(context.Background(), Request{Model: "m"}, nil, nil, nil); err == nil {
 		t.Fatal("expected error")
 	}
 	if calls.Load() != 2 {
@@ -194,7 +194,7 @@ func TestMaxRetriesConfigurable(t *testing.T) {
 
 	calls.Store(0)
 	c.MaxRetries = 1
-	if _, _, err := c.Stream(context.Background(), Request{Model: "m"}, nil, nil); err == nil {
+	if _, _, err := c.Stream(context.Background(), Request{Model: "m"}, nil, nil, nil); err == nil {
 		t.Fatal("expected error")
 	}
 	if calls.Load() != 1 {
@@ -206,7 +206,7 @@ func TestMaxRetriesConfigurable(t *testing.T) {
 func TestRetryEventCarriesMax(t *testing.T) {
 	noSleep(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(500)
+		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	defer srv.Close()
 
@@ -214,7 +214,7 @@ func TestRetryEventCarriesMax(t *testing.T) {
 	c.MaxRetries = 3
 	var evs []RetryEvent
 	c.OnRetry = func(ev RetryEvent) { evs = append(evs, ev) }
-	_, _, _ = c.Stream(context.Background(), Request{Model: "m"}, nil, nil)
+	_, _, _ = c.Stream(context.Background(), Request{Model: "m"}, nil, nil, nil)
 	if len(evs) != 2 {
 		t.Fatalf("events: %d, want 2", len(evs))
 	}
@@ -229,7 +229,7 @@ func TestCompleteRetriesTransientStatus(t *testing.T) {
 	var calls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if calls.Add(1) < 2 {
-			w.WriteHeader(429)
+			w.WriteHeader(http.StatusTooManyRequests)
 			fmt.Fprint(w, "rate limited")
 			return
 		}
@@ -249,7 +249,7 @@ func TestCompleteRetriesTransientStatus(t *testing.T) {
 // Caller cancellation during backoff must abort the retry loop promptly.
 func TestRetryRespectsCancellation(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(500)
+		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	defer srv.Close()
 
@@ -257,7 +257,7 @@ func TestRetryRespectsCancellation(t *testing.T) {
 	go func() { time.Sleep(50 * time.Millisecond); cancel() }()
 
 	start := time.Now()
-	_, _, err := New(srv.URL, "k").Stream(ctx, Request{Model: "m"}, nil, nil)
+	_, _, err := New(srv.URL, "k").Stream(ctx, Request{Model: "m"}, nil, nil, nil)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context.Canceled, got %v", err)
 	}

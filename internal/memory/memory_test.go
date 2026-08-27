@@ -94,3 +94,47 @@ func TestForgetPreservesUserProse(t *testing.T) {
 		t.Fatalf("hand-written prose must survive:\n%s", data)
 	}
 }
+
+// Scope constructors resolve under the whip home (WHIP_HOME overrides it).
+func TestScopeConstructors(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("WHIP_HOME", home)
+
+	inst := Installation()
+	if inst.Path != filepath.Join(home, "memory.md") || inst.Name != "installation" {
+		t.Fatalf("Installation() = %+v", inst)
+	}
+	sess := Session("abcd1234")
+	if sess.Path != filepath.Join(home, "sessions", "abcd1234.memory.md") || sess.Name != "session" {
+		t.Fatalf("Session() = %+v", sess)
+	}
+	// no session id yet → the zero scope, which rejects writes and reads empty
+	zero := Session("")
+	if zero != (Scope{}) {
+		t.Fatalf("Session(\"\") = %+v, want zero scope", zero)
+	}
+	if got := zero.Entries(); got != nil {
+		t.Fatalf("zero scope should read empty, got %v", got)
+	}
+	if err := zero.Remember("x"); err == nil {
+		t.Fatal("remember on the zero scope should error")
+	}
+	if err := zero.Forget(1); err == nil {
+		t.Fatal("forget on the zero scope should error")
+	}
+	// constructors and the round-trip compose: remember lands in WHIP_HOME
+	if err := inst.Remember("a fact"); err != nil {
+		t.Fatal(err)
+	}
+	if es := Installation().Entries(); len(es) != 1 || es[0].Text != "a fact" {
+		t.Fatalf("entries via constructor: %+v", es)
+	}
+}
+
+// Forget with no file yet reports "no memories" instead of failing oddly.
+func TestForgetMissingFile(t *testing.T) {
+	s := Scope{Path: filepath.Join(t.TempDir(), "none.md"), Name: "session"}
+	if err := s.Forget(1); err == nil {
+		t.Fatal("forget with no file should error")
+	}
+}

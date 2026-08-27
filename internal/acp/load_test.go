@@ -209,7 +209,7 @@ func TestListSessions(t *testing.T) {
 	}
 
 	// cwd filter
-	resp2, err := f.conn.ListSessions(context.Background(), acp.ListSessionsRequest{Cwd: acp.Ptr("/elsewhere")})
+	resp2, err := f.conn.ListSessions(context.Background(), acp.ListSessionsRequest{Cwd: new("/elsewhere")})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -20,7 +20,7 @@ func TestStdioServerEndToEnd(t *testing.T) {
 		t.Skip("set WHIP_TEST_SELFHOST=1 to run")
 	}
 	bin := filepath.Join(t.TempDir(), "whip")
-	if out, err := exec.Command("go", "build", "-o", bin, "../../cmd/whip").CombinedOutput(); err != nil {
+	if out, err := exec.CommandContext(context.Background(), "go", "build", "-o", bin, "../../cmd/whip").CombinedOutput(); err != nil {
 		t.Fatalf("build: %v\n%s", err, out)
 	}
 

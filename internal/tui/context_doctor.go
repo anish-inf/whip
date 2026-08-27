@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/context-labs/whip/internal/agent"
@@ -168,5 +169,5 @@ func tok(n int) string {
 	if n >= 1000 {
 		return fmt.Sprintf("%.1fk", float64(n)/1000)
 	}
-	return fmt.Sprintf("%d", n)
+	return strconv.Itoa(n)
 }

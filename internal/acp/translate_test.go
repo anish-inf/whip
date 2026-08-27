@@ -98,7 +98,8 @@ func TestPromptFromBlocks(t *testing.T) {
 		acp.TextBlock("hello"),
 		{ResourceLink: &acp.ContentBlockResourceLink{Type: "resource_link", Uri: "file:///a/b.go", Name: "b.go"}},
 		{Resource: &acp.ContentBlockResource{Type: "resource", Resource: acp.EmbeddedResourceResource{
-			TextResourceContents: &acp.TextResourceContents{Uri: "file:///c.go", Text: "package c"}}}},
+			TextResourceContents: &acp.TextResourceContents{Uri: "file:///c.go", Text: "package c"},
+		}}},
 	}
 	text, parts := promptFromBlocks(blocks, false)
 	want := "hello\n\n@file:///a/b.go\n\nFile: file:///c.go\n```\npackage c\n```"
@@ -112,7 +113,8 @@ func TestPromptFromBlocks(t *testing.T) {
 
 func TestPromptImageVision(t *testing.T) {
 	img := acp.ContentBlock{Image: &acp.ContentBlockImage{
-		Type: "image", Data: base64.StdEncoding.EncodeToString([]byte("PNG")), MimeType: "image/png"}}
+		Type: "image", Data: base64.StdEncoding.EncodeToString([]byte("PNG")), MimeType: "image/png",
+	}}
 
 	text, parts := promptFromBlocks([]acp.ContentBlock{img}, true)
 	if len(parts) != 1 || parts[0].ImageURL == nil {

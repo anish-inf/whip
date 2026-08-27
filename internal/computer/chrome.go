@@ -11,6 +11,7 @@ package computer
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -60,14 +61,14 @@ return out`)
 		return nil, err
 	}
 	var tabs []ChromeTab
-	for _, line := range strings.Split(out, "\n") {
+	for line := range strings.SplitSeq(out, "\n") {
 		f := strings.SplitN(line, "￨", 4)
 		if len(f) != 4 {
 			continue
 		}
 		var w, i int
-		fmt.Sscanf(f[0], "%d", &w)
-		fmt.Sscanf(f[1], "%d", &i)
+		_, _ = fmt.Sscanf(f[0], "%d", &w)
+		_, _ = fmt.Sscanf(f[1], "%d", &i)
 		tabs = append(tabs, ChromeTab{Window: w, Index: i, URL: f[2], Title: f[3]})
 	}
 	return tabs, nil
@@ -120,7 +121,7 @@ func ChromeReload() error {
 }
 
 // ErrJSFromAppleEvents surfaces the Chrome toggle requirement.
-var ErrJSFromAppleEvents = fmt.Errorf("chrome's 'Allow JavaScript from Apple Events' is off — enable it in Chrome: View → Developer → Allow JavaScript from Apple Events")
+var ErrJSFromAppleEvents = errors.New("chrome's 'Allow JavaScript from Apple Events' is off — enable it in Chrome: View → Developer → Allow JavaScript from Apple Events")
 
 // ChromeJS evaluates JavaScript in the front window's active tab and returns
 // the result (AppleScript stringifies it). Requires the Chrome toggle; a
@@ -145,7 +146,7 @@ func ChromeFindTab(urlPart string) (*ChromeTab, error) {
 			return &t, nil
 		}
 	}
-	return nil, nil
+	return nil, nil //nolint:nilnil // nil tab = no match; callers handle "not found" as a nil tab with nil error
 }
 
 // ChromeState is the JSON shape the model gets from `chrome_state()`.

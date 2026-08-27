@@ -95,9 +95,9 @@ The summarizer defaults to `deepseek-v4-flash-0731`
 
 ## Background subagents
 
-`task` with `background: true` runs a subagent concurrently and reports back
+the `subagent` tool with `background: true` runs a subagent concurrently and reports back
 as a steered message on completion — one channel close wakes the tool
-caller, the TUI redraw, and `/tasks` simultaneously. Details:
+caller, the TUI redraw, and `/subagents` simultaneously. Details:
 [concurrency.md](concurrency.md#2-background-subagents--one-channel-close-many-waiters).
 
 ## Read next

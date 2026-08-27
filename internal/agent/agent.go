@@ -16,15 +16,22 @@ import (
 
 // Events receives streaming callbacks during a turn. All fields are optional.
 type Events struct {
-	OnText      func(delta string)               // assistant text as it streams
-	OnThink     func(delta string)               // reasoning/thinking tokens as they stream
-	OnToolStart func(id, name, args string)      // a tool call is about to run
-	OnToolEnd   func(id, name, result string)    // a tool call finished
-	OnSteer     func(text string)                // a steered message was injected
-	OnCompact   func(took, kept int)             // context was auto-compacted (messages removed/kept)
-	OnCompacted func(summary string, cutoff int) // a compaction ran; record it (raw log survives)
-	OnUsage     func(u llm.Usage)                // a request reported its token usage
-	OnRetry     func(ev llm.RetryEvent)          // a transient request failure is being retried
+	OnText      func(delta string)            // assistant text as it streams
+	OnThink     func(delta string)            // reasoning/thinking tokens as they stream
+	OnToolStart func(id, name, args string)   // a tool call is about to run
+	OnToolEnd   func(id, name, result string) // a tool call finished
+	// OnToolCall fires as a tool call streams in (id/name/args snapshots; args
+	// may be partial mid-stream), so the UI can show a pending row before
+	// execution starts. Distinct from OnToolStart, which fires at run time.
+	OnToolCall func(id, name, args string)
+	// OnToolOutput streams partial output for a running tool call (bash only —
+	// throttled snapshots, ~100ms apart). Fires from tool worker goroutines.
+	OnToolOutput func(id, outputSoFar string)
+	OnSteer      func(text string)                // a steered message was injected
+	OnCompact    func(took, kept int)             // context was auto-compacted (messages removed/kept)
+	OnCompacted  func(summary string, cutoff int) // a compaction ran; record it (raw log survives)
+	OnUsage      func(u llm.Usage)                // a request reported its token usage
+	OnRetry      func(ev llm.RetryEvent)          // a transient request failure is being retried
 }
 
 // OnTodos is the agent-level hook fired by setTodos (the todowrite tool)
@@ -46,8 +53,12 @@ type Agent struct {
 	Provider  string // config provider name
 	MaxTokens int
 	Effort    string // reasoning effort: "" = parameter omitted from requests
-	Tools     []tools.Tool
-	Messages  []llm.Message
+	// Temperature/TopP are optional per-model sampling knobs for outbound
+	// requests. nil omits the field, preserving provider defaults.
+	Temperature *float64
+	TopP        *float64
+	Tools       []tools.Tool
+	Messages    []llm.Message
 
 	// ContextLimit is the model's context window in tokens, as advertised by
 	// the provider's GET /models (0 when unadvertised — proactive compaction
@@ -60,6 +71,15 @@ type Agent struct {
 	// CompactThreshold is the fraction of ContextLimit at which Turn compacts
 	// proactively; 0 uses defaultCompactThreshold.
 	CompactThreshold float64
+
+	// TaskDefault is the default subagent route (config taskModel); the zero
+	// value runs subagents on the conversation's own client and model.
+	TaskDefault SubModel
+	// ResolveModel resolves a per-task model override named in a task call.
+	// Installed by the front-end (TUI or `whip run`) so the agent stays
+	// config-free; nil rejects overrides. It runs on tool worker goroutines,
+	// so implementations must not share mutable state with the UI.
+	ResolveModel func(model, provider string) (SubModel, error)
 
 	// MaxTurns caps the tool-call loop (rounds of model→tools→model) so a
 	// scripted run can't run away. 0 = uncapped (the TUI default).
@@ -212,7 +232,7 @@ func New(client *llm.Client, model string, maxTokens int, systemPrompt string) *
 	if !a.ComputerDisabled {
 		a.Tools = append(a.Tools, tools.ComputerExec())
 	}
-	a.Tools = append(a.Tools, taskTool(a))
+	a.Tools = append(a.Tools, taskTool(a), taskSteerTool(a))
 	a.Tools = append(a.Tools, todoTool(a))
 	a.Tools = append(a.Tools, memoryTools(a)...)
 	a.files = newFileLocks()
@@ -332,7 +352,9 @@ func (a *Agent) turn(ctx context.Context, input string, parts []llm.ContentPart,
 			Messages:        msgs,
 			Tools:           tools.Defs(a.AllTools()),
 			ReasoningEffort: a.Effort,
-		}, ev.OnText, ev.OnThink)
+			Temperature:     a.Temperature,
+			TopP:            a.TopP,
+		}, ev.OnText, ev.OnThink, ev.OnToolCall)
 		a.Client.OnRetry = nil
 		a.AddUsage(usage)
 		if ev.OnUsage != nil {
@@ -447,7 +469,13 @@ func (a *Agent) runTools(ctx context.Context, calls []llm.ToolCall, ev Events) [
 				ev.OnToolStart(tc.ID, name, args)
 			}
 			start := time.Now()
-			out := tools.Execute(ctx, a.AllTools(), name, json.RawMessage(args))
+			callCtx := ctx
+			if ev.OnToolOutput != nil && name == "bash" {
+				callCtx = tools.WithOnUpdate(ctx, func(soFar string) {
+					ev.OnToolOutput(tc.ID, soFar)
+				})
+			}
+			out := tools.Execute(callCtx, a.AllTools(), name, json.RawMessage(args))
 			ms := time.Since(start).Milliseconds()
 			if ev.OnToolEnd != nil {
 				ev.OnToolEnd(tc.ID, name, out)

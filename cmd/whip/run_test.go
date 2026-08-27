@@ -106,7 +106,7 @@ func TestRunJSONStream(t *testing.T) {
 		t.Fatal(err)
 	}
 	var sawText, sawDone bool
-	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+	for line := range strings.SplitSeq(strings.TrimSpace(out), "\n") {
 		var ev map[string]string
 		if err := json.Unmarshal([]byte(line), &ev); err != nil {
 			t.Fatalf("line not JSON: %q: %v", line, err)
@@ -285,7 +285,7 @@ func TestRunQuietJSON(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+	for line := range strings.SplitSeq(strings.TrimSpace(out), "\n") {
 		var ev map[string]string
 		if err := json.Unmarshal([]byte(line), &ev); err != nil {
 			t.Fatalf("stdout should be clean NDJSON, got line %q: %v", line, err)
@@ -296,3 +296,113 @@ func TestRunQuietJSON(t *testing.T) {
 func configDir() (string, error) { return os.Getenv("WHIP_HOME"), nil }
 
 func sessionOpen(dir string) (*session.Store, error) { return session.Open(dir + "/sessions.db") }
+
+// Bad flags, an unknown --format, and a missing prompt all fail before any
+// provider is contacted.
+func TestRunArgValidation(t *testing.T) {
+	runFixture(t, "never used", nil)
+
+	for _, c := range []struct {
+		name, want string
+		args       []string
+	}{
+		{"unknown flag", "not defined", []string{"-nosuchflag"}},
+		{"bad format", "unknown --format", []string{"--format", "xml", "hi"}},
+		{"no prompt", "no prompt given", nil},
+	} {
+		_, err := runCapture(t, "", c.args...)
+		if err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: got %v, want an error containing %q", c.name, err, c.want)
+		}
+	}
+}
+
+// Routing and system-prompt failures are reported before the turn starts.
+func TestRunResolveErrors(t *testing.T) {
+	runFixture(t, "never used", nil)
+
+	if _, err := runCapture(t, "", "-m", "nosuchmodel", "hi"); err == nil {
+		t.Error("an unroutable model should error")
+	}
+	missing := filepath.Join(t.TempDir(), "absent.md")
+	_, err := runCapture(t, "", "-system-file", missing, "hi")
+	if err == nil || !strings.Contains(err.Error(), "-system-file") {
+		t.Errorf("a missing -system-file should name the flag, got %v", err)
+	}
+
+	// a provider with no key at all: nothing to authenticate with
+	home := t.TempDir()
+	t.Setenv("WHIP_HOME", home)
+	cfg := `{
+		"defaultModel": "test",
+		"providers": {"testprov": {"baseUrl": "https://example.invalid", "api": "openai-completions"}},
+		"models": {"test": {"providers": ["testprov"], "maxOut": 100}}
+	}`
+	if werr := os.WriteFile(filepath.Join(home, "config.json"), []byte(cfg), 0o600); werr != nil {
+		t.Fatal(werr)
+	}
+	if _, err := runCapture(t, "", "hi"); err == nil || !strings.Contains(err.Error(), "no API key") {
+		t.Errorf("a keyless provider should error, got %v", err)
+	}
+}
+
+// An unreadable config dir fails the run instead of falling back to defaults
+// that would reach the network.
+func TestRunUnreadableConfig(t *testing.T) {
+	unusableHome(t)
+	if _, err := runCapture(t, "", "hi"); err == nil {
+		t.Error("an unusable WHIP_HOME should error")
+	}
+}
+
+// In --format json the tool calls are events too, and a failed run ends with
+// an error event rather than a done event.
+func TestRunJSONToolEvents(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "target.txt")
+	if err := os.WriteFile(target, []byte("file body"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// a server that always answers with a read tool call: only -max-turns ends it
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		args, _ := json.Marshal(map[string]string{"path": target})
+		call, _ := json.Marshal(string(args))
+		fmt.Fprintf(w, `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"t1","type":"function","function":{"name":"read","arguments":%s}}]}}]}`+"\n\n", call)
+		fmt.Fprint(w, `data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}`+"\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer srv.Close()
+
+	home := t.TempDir()
+	t.Setenv("WHIP_HOME", home)
+	cfg := fmt.Sprintf(`{
+		"defaultModel": "test",
+		"providers": {"testprov": {"baseUrl": %q, "api": "openai-completions", "apiKey": "k"}},
+		"models": {"test": {"providers": ["testprov"], "maxOut": 100}}
+	}`, srv.URL)
+	if err := os.WriteFile(filepath.Join(home, "config.json"), []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runCapture(t, "", "-format", "json", "-max-turns", "2", "-quiet", "-no-session", "read it")
+	if err == nil {
+		t.Fatal("a capped run should error")
+	}
+	seen := map[string]string{}
+	for line := range strings.SplitSeq(strings.TrimSpace(out), "\n") {
+		var ev map[string]string
+		if uerr := json.Unmarshal([]byte(line), &ev); uerr != nil {
+			t.Fatalf("stdout should be NDJSON, got %q: %v", line, uerr)
+		}
+		seen[ev["type"]] = ev["name"] + ev["result"] + ev["error"]
+	}
+	if seen["tool_start"] != "read" {
+		t.Errorf("a tool call should emit tool_start for the tool, got %q", seen["tool_start"])
+	}
+	if !strings.Contains(seen["tool_end"], "file body") {
+		t.Errorf("tool_end should carry the tool result, got %q", seen["tool_end"])
+	}
+	if !strings.Contains(seen["error"], "max turns") {
+		t.Errorf("a failed run should end with an error event, got %q", seen["error"])
+	}
+}

@@ -4,8 +4,10 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -44,11 +46,35 @@ func (p Provider) ResolveKey() (string, error) {
 		}
 		return k, nil
 	}
-	// ponytail: special-case fallback to the inf CLI's stored key; generalize to apiKeyFile if more providers need it
+	// Inference.net fallbacks: the machine key provisioned by
+	// `whip auth inference-net login`, then the inf CLI's stored key.
 	if strings.Contains(p.BaseURL, "api.inference.net") {
+		if k := whipInferenceNetKey(); k != "" {
+			return k, nil
+		}
 		return infKey(), nil
 	}
 	return "", nil
+}
+
+// whipInferenceNetKey reads the machine key from ~/.whip/inference-net.json
+// (written by `whip auth inference-net login`).
+func whipInferenceNetKey() string {
+	dir, err := Dir()
+	if err != nil {
+		return ""
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "inference-net.json"))
+	if err != nil {
+		return ""
+	}
+	var a struct {
+		MachineKey string `json:"machineKey"`
+	}
+	if json.Unmarshal(data, &a) != nil {
+		return ""
+	}
+	return a.MachineKey
 }
 
 // infKey reads apiKey/codingAgentApiKey from ~/.inf/config.json (written by `inf auth set-key`).
@@ -94,6 +120,18 @@ type Model struct {
 	// gets a pointer note instead, so a text-only model isn't sent a request it
 	// would reject. A provider-advertised input_modalities entry overrides this.
 	Vision bool `json:"vision,omitempty"`
+	// SamplingParams are optional per-model sampling knobs (temperature, top_p)
+	// applied to outbound chat-completion requests for this model. Fields are
+	// omitted from requests when unset, so provider defaults are preserved.
+	SamplingParams *SamplingParams `json:"samplingParams,omitempty"`
+}
+
+// SamplingParams holds optional per-model sampling knobs sent on outbound
+// chat-completion requests. Pointer fields: a 0.0 temperature/top_p is a
+// legitimate value, and nil means "don't send" (provider default).
+type SamplingParams struct {
+	Temperature *float64 `json:"temperature,omitempty"`
+	TopP        *float64 `json:"top_p,omitempty"`
 }
 
 // ContextWindow returns the model's context (input) size, honoring the legacy
@@ -111,6 +149,13 @@ func (m Model) ContextWindow() int {
 // conversation's model when it's not in the user's config.
 const DefaultCompactModel = "deepseek-v4-flash-0731"
 
+// DefaultTaskModel is the built-in subagent-model default: subagents are
+// high-volume, self-contained work, so they run on the same cheap fast route
+// compaction uses unless the user pins taskModel or the main model overrides
+// per task. Falls back to the conversation's model when it's not resolvable
+// (an openrouter-only config resolves it via a catalog suffix match first).
+const DefaultTaskModel = DefaultCompactModel
+
 // DefaultCompactPct is the built-in compaction threshold: compact once the
 // estimated context use crosses this percent of the model's context window.
 // 50% keeps compaction deterministic instead of letting the context bloat.
@@ -124,6 +169,8 @@ type Config struct {
 	CompactModel    string              `json:"compactModel,omitempty"`    // model for compaction summaries; "" = the built-in default
 	CompactProvider string              `json:"compactProvider,omitempty"` // provider for the compaction model; "" = the model's default routing
 	CompactPct      int                 `json:"compactPct,omitempty"`      // compact at this % of the context window; 0 = DefaultCompactPct
+	TaskModel       string              `json:"taskModel,omitempty"`       // model subagents (the task tool) run on; "" = the built-in default
+	TaskProvider    string              `json:"taskProvider,omitempty"`    // provider for the subagent model; "" = the model's default routing
 	Theme           string              `json:"theme,omitempty"`           // "light", "dark", or "" (auto-detect at startup)
 	Mouse           *bool               `json:"mouse,omitempty"`           // false disables capture so native terminal selection works
 	Thinking        *bool               `json:"thinking,omitempty"`        // nil defaults to on; false hides reasoning tokens (ctrl+o)
@@ -145,10 +192,10 @@ type Config struct {
 	// disable the built-in registry (gopls).
 	LSPServers map[string]LSPServer `json:"lsp,omitempty"`
 	// Browser configures the native browser subsystem (internal/browser).
-	Browser BrowserConfig `json:"browser,omitempty"`
+	Browser BrowserConfig `json:"browser,omitzero"`
 	// Computer configures computer-use (internal/computer): which apps
 	// computer_exec may drive.
-	Computer ComputerConfig `json:"computer,omitempty"`
+	Computer ComputerConfig `json:"computer,omitzero"`
 }
 
 // ComputerConfig gates computer_exec per app (codex's per-bundle-id model).
@@ -234,7 +281,7 @@ type MCPServer struct {
 // far away from the real config.
 func Dir() (string, error) {
 	if d := os.Getenv("WHIP_HOME"); d != "" {
-		return d, os.MkdirAll(d, 0o700)
+		return d, os.MkdirAll(d, 0o700) //nolint:gosec // G703: WHIP_HOME is the user's own env override for the config dir
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -308,7 +355,37 @@ func Load() (*Config, error) {
 		return def, def.Save()
 	}
 	logf("config.load", "ok (%s)", cfg.fingerprint())
+	cfg.normalize()
 	return &cfg, nil
+}
+
+// normalize upgrades legacy config shapes in place. Today: the provider key
+// "inference" was renamed to "inference-net" — old configs (and model routes
+// pointing at it) are migrated transparently. No file write happens here;
+// the next Save persists the rename.
+func (c *Config) normalize() {
+	p, ok := c.Providers["inference"]
+	if !ok {
+		return
+	}
+	if _, clash := c.Providers["inference-net"]; !clash {
+		c.Providers["inference-net"] = p
+	}
+	delete(c.Providers, "inference")
+	for name, m := range c.Models {
+		for i, prov := range m.Providers {
+			if prov == "inference" {
+				m.Providers[i] = "inference-net"
+			}
+		}
+		c.Models[name] = m
+	}
+	if c.DefaultProvider == "inference" {
+		c.DefaultProvider = "inference-net"
+	}
+	if c.CompactProvider == "inference" {
+		c.CompactProvider = "inference-net"
+	}
 }
 
 // Save writes the config back to ~/.whip/config.json. The write is atomic
@@ -343,7 +420,7 @@ func (c *Config) Save() error {
 			logf("config.save", "before=(unparseable, %d bytes) after=(%s)", len(existing), c.fingerprint())
 		}
 		// best-effort backup before replacing
-		_ = os.WriteFile(p+".bak", existing, 0o600)
+		_ = os.WriteFile(p+".bak", existing, 0o600) //nolint:gosec // G703: p is the whip-owned config path
 	} else {
 		logf("config.save", "first write (%s)", c.fingerprint())
 	}
@@ -449,13 +526,24 @@ func (c *Config) resolveFromCatalog(model, provider string) (Model, string, erro
 		Context:   h.mi.ContextLength,
 		MaxOut:    h.mi.MaxCompletionTokens,
 	}
-	for _, mod := range h.mi.InputModalities {
-		if mod == "image" {
-			m.Vision = true
-			break
-		}
+	if slices.Contains(h.mi.InputModalities, "image") {
+		m.Vision = true
 	}
 	return m, h.prov, nil
+}
+
+// Snapshot returns a copy of the config safe to read from another goroutine
+// while the original keeps being mutated on the UI goroutine (the subagent
+// model resolver runs on tool workers). Maps are copied one level deep —
+// their struct values are plain data; nested slices are never mutated in
+// place, only replaced wholesale with the map entry.
+func (c *Config) Snapshot() *Config {
+	snap := *c
+	snap.Providers = make(map[string]Provider, len(c.Providers))
+	maps.Copy(snap.Providers, c.Providers)
+	snap.Models = make(map[string]Model, len(c.Models))
+	maps.Copy(snap.Models, c.Models)
+	return &snap
 }
 
 func keys[V any](m map[string]V) string {
@@ -474,8 +562,9 @@ func Default() *Config {
 	return &Config{
 		DefaultModel: "kimi-k3-fast",
 		CompactModel: DefaultCompactModel,
+		//nolint:gosec // G101: APIKeyEnv holds env var NAMES, not credentials
 		Providers: map[string]Provider{
-			"inference": {
+			"inference-net": {
 				Name:      "Inference.net",
 				BaseURL:   "https://api.inference.net/v1",
 				API:       "openai-completions",
@@ -483,10 +572,10 @@ func Default() *Config {
 			},
 		},
 		Models: map[string]Model{
-			"kimi-k3":                {Providers: []string{"inference"}, Context: 1048576, Vision: true},
-			"kimi-k3-fast":           {Providers: []string{"inference"}, Context: 1048576, Vision: true},
-			"glm-5.2-fast":           {Providers: []string{"inference"}, Context: 128000},
-			"deepseek-v4-flash-0731": {Providers: []string{"inference"}, Context: 384000},
+			"kimi-k3":                {Providers: []string{"inference-net"}, Context: 1048576, Vision: true},
+			"kimi-k3-fast":           {Providers: []string{"inference-net"}, Context: 1048576, Vision: true},
+			"glm-5.2-fast":           {Providers: []string{"inference-net"}, Context: 128000},
+			"deepseek-v4-flash-0731": {Providers: []string{"inference-net"}, Context: 384000},
 		},
 	}
 }

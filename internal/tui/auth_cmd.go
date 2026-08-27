@@ -23,11 +23,16 @@ import (
 
 func (m *model) authCommand(args []string) {
 	if len(args) == 0 {
-		m.append(dimStyle.Render("usage: /auth openrouter [key] — paste a key, or bare to type it invisibly (get one at https://openrouter.ai/keys)"))
+		m.append(dimStyle.Render("usage: /auth <provider> [key] — inference-net (bare = browser login) or openrouter (bare = masked prompt)"))
 		return
 	}
-	if args[0] != "openrouter" {
-		m.append(errStyle.Render("unknown provider " + args[0] + " (supported: openrouter)"))
+	switch args[0] {
+	case "inference-net", "inference":
+		m.authInferenceNetCommand(args)
+		return
+	case "openrouter":
+	default:
+		m.append(errStyle.Render("unknown provider " + args[0] + " (supported: inference-net, openrouter)"))
 		return
 	}
 	if len(args) > 1 {
@@ -98,6 +103,7 @@ func (m *model) applyAuthResult(res authResultMsg) {
 			ag.CompactClient, ag.CompactModel = m.agent.CompactClient, m.agent.CompactModel
 			ag.CompactThreshold = m.agent.CompactThreshold
 			m.agent = ag
+			m.applyTaskModel()
 			m.wireTasks()
 		}
 	}
