@@ -124,7 +124,7 @@ func TestAuthOpenRouterReauthKeepsOtherState(t *testing.T) {
 	if cfg.Providers["openrouter"].APIKey != "sk-or-new" {
 		t.Error("re-auth should replace the key")
 	}
-	if _, ok := cfg.Providers["inference"]; !ok {
+	if _, ok := cfg.Providers["inference-net"]; !ok {
 		t.Error("re-auth clobbered the default provider")
 	}
 	if len(cfg.Models) == 0 {

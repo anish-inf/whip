@@ -216,6 +216,30 @@ so re-authing fixes a 401 without a `/model` round-trip. Tests:
 re-auth keeps other providers/models), `tui/auth_cmd_test.go` (usage,
 masked prompt open/cancel, good/bad result, live-session rekey).
 
+`cmd/whip/auth_inferencenet.go`, `internal/inferencenet/`,
+`internal/config/inferencenet.go`, `internal/tui/auth_inferencenet_cmd.go` —
+first-class Inference.net auth. `whip auth inference-net login` runs the
+**OAuth device-authorization flow** against the relay
+(`internal/inferencenet/device.go`): request a code, open the dashboard's
+approval page in the browser, poll until approved — then select the account's
+primary project and **mint a machine API key** (`whip-<host>-<timestamp>`)
+via the relay's tRPC (`apiKey.create`), all without the user touching a key.
+State lands in `~/.whip/inference-net.json` (0600 — session token + machine
+key, kept out of config.json); the provider entry carries no key material and
+resolves the machine key from that file at request time (`Provider.ResolveKey`
+fallback, ahead of the legacy `~/.inf/config.json` read). BYOK is supported
+too: `login --key <k>` / `--env` validates against the gateway (`GET /models`)
+before writing. Subcommands: `status`, `logout` (archives the machine key +
+closes the remote session), `key rotate`. The tRPC client
+(`internal/inferencenet/trpc.go`) is stdlib-only — the superjson transport is
+plain JSON plus a `{"json": …}` envelope for the shapes whip touches. The
+provider key was renamed `inference` → `inference-net`; `Config.normalize`
+migrates old configs (provider, model routes, default/compact provider)
+transparently on load. Tests: `inferencenet/inferencenet_test.go` (stubbed
+relay: full device login + key mint, store round-trip, key validation),
+`config/inferencenet_test.go` (rename migration, upsert modes, key fallback),
+`cmd/whip/auth_inferencenet_test.go`, `tui/auth_inferencenet_cmd_test.go`.
+
 ## The TUI
 
 `internal/tui/tui.go` — bubbletea fullscreen alt-screen. Highlights:

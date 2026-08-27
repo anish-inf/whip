@@ -1939,6 +1939,14 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.applyAuthResult(msg)
 		return m, nil
 
+	case inferenceNetAuthMsg:
+		m.applyInferenceNetAuth(msg)
+		return m, nil
+
+	case inferenceNetKeyMsg:
+		m.applyInferenceNetKey(msg)
+		return m, nil
+
 	case noticeMsg:
 		m.append(dimStyle.Render(string(msg)))
 		return m, nil
