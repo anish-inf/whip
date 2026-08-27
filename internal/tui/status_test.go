@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"path"
 	"strings"
 	"testing"
 
@@ -34,11 +35,12 @@ func TestStatusLineAlwaysShown(t *testing.T) {
 			t.Errorf("status line should show %q\n--- view tail ---\n%s", want, tailLines(v, 6))
 		}
 	}
-	// the directory is present (compacted to its last segments) — assert
-	// against the actual cwd via shortCWD, not a hardcoded checkout name:
-	// tests run from internal/tui regardless of the repo folder's name.
-	if dir := shortCWD(); !strings.Contains(v, dir) {
-		t.Errorf("status line should show the working directory %q\n%s", dir, tailLines(v, 6))
+	// the directory is present (compacted to its last segments). On a narrow
+	// terminal the cwd is the segment that yields to keep the spend visible,
+	// so assert the last path segment survives, not the full string.
+	base := path.Base(cwd())
+	if !strings.Contains(v, base) {
+		t.Errorf("status line should show the working directory's last segment %q\n%s", base, tailLines(v, 6))
 	}
 }
 
@@ -137,6 +139,31 @@ func tailLines(s string, n int) string {
 
 // Cost appears in the spend segment when the provider's catalog advertises
 // pricing for the current model, and is hidden otherwise.
+// On a narrow terminal the cwd is the segment that yields, not the spend: the
+// completion-token count and provider must survive even when the path is too
+// long to fit. Regression for the whole-line truncation that dropped them.
+func TestStatusLineTruncatesCWDNotSpend(t *testing.T) {
+	m := statusModel()
+	m.modelName = "kimi-k3-fast"
+	m.provName = "inference"
+	m.agent.Effort = "high"
+	m.agent.AddUsage(llm.Usage{PromptTokens: 45230, CompletionTokens: 3120})
+	// Wide enough for the fixed segments (model+provider+spend) but not the
+	// full path: the cwd must shrink or vanish before the spend is touched.
+	m.width = 58
+
+	v := m.statusView()
+	if !strings.Contains(v, "3.1k") {
+		t.Errorf("completion tokens must survive cwd truncation, got %q", v)
+	}
+	if !strings.Contains(v, "45.2k") {
+		t.Errorf("prompt tokens must survive cwd truncation, got %q", v)
+	}
+	if !strings.Contains(v, "inference") {
+		t.Errorf("provider must survive cwd truncation, got %q", v)
+	}
+}
+
 func TestStatusLineShowsCost(t *testing.T) {
 	m := statusModel()
 	m.modelName = "m"

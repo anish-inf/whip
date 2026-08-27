@@ -3882,7 +3882,23 @@ func (m *model) statusView() string {
 	if cost, ok := m.sessionCost(); ok {
 		spend += " · " + fmtCost(cost)
 	}
-	line := fmt.Sprintf(" %s   %s   %s   %s", shortCWD(), model, m.provName, spend)
+	// The fixed segments (model/provider/spend) are the data that matters; the
+	// cwd is what yields. Old code truncated the whole assembled line from the
+	// right, dropping the completion-token count whenever the path was long.
+	// Instead give the cwd only the space left after the fixed segments —
+	// truncating it to its tail, then dropping it entirely — so the spend
+	// survives whenever the fixed segments fit at all.
+	right := fmt.Sprintf("   %s   %s   %s", model, m.provName, spend)
+	dir := shortCWD()
+	switch budget := max(m.width, 0) - len(" ") - len(right); {
+	case len(dir) <= budget:
+		// fits as-is
+	case budget > 1:
+		dir = "…" + dir[len(dir)-budget+1:] // keep the tail, the recognizable part
+	default:
+		dir = "" // no room for the path at all; show only the fixed segments
+	}
+	line := fmt.Sprintf(" %s%s", dir, right)
 	return dimStyle.Render(truncLine(line, max(m.width, 0)))
 }
 
