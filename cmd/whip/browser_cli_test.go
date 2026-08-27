@@ -62,3 +62,44 @@ func TestBrowserInstall(t *testing.T) {
 		t.Errorf("install output should walk through the manual load:\n%s", out)
 	}
 }
+
+// install can't proceed without a home directory, and reports the write
+// failure (rather than a partial install) when the whip dir can't be made.
+func TestBrowserInstallHomeErrors(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+
+	t.Setenv("HOME", "")
+	if err := browserCLI([]string{"install"}); err == nil {
+		t.Error("install without a home directory should error")
+	}
+
+	file := filepath.Join(t.TempDir(), "home-is-a-file")
+	if err := os.WriteFile(file, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", file)
+	err := browserCLI([]string{"install"})
+	if err == nil || !strings.Contains(err.Error(), "write extension") {
+		t.Errorf("an unwritable home should fail on the extension write, got %v", err)
+	}
+}
+
+// The relay state file is part of the install: if it can't be written, the
+// install fails loudly rather than leaving an extension with no token.
+func TestBrowserInstallRelayStateError(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("PATH", t.TempDir())
+
+	// occupy the state path with a directory, which os.WriteFile can't replace
+	state := extrelay.RelayStatePath(home)
+	if err := os.MkdirAll(state, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	var err error
+	_ = captureStdout(t, func() { err = browserCLI([]string{"install"}) })
+	if err == nil || !strings.Contains(err.Error(), "write relay state") {
+		t.Errorf("an unwritable relay state should fail the install, got %v", err)
+	}
+}

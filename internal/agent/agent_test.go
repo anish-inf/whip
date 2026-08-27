@@ -196,7 +196,12 @@ func TestTurnAPIError(t *testing.T) {
 		http.Error(w, "nope", http.StatusInternalServerError)
 	}))
 	defer srv.Close()
-	ag := New(llm.New(srv.URL, "k"), "m", 100, "sys")
+	// Single attempt: this test is about the error surfacing from Turn, not
+	// about the retry ladder (covered in internal/llm/retry_test.go). Leaving
+	// retries on made it sleep through the full backoff — ~80s for one assert.
+	c := llm.New(srv.URL, "k")
+	c.MaxRetries = 1
+	ag := New(c, "m", 100, "sys")
 	if _, err := ag.Turn(context.Background(), "go", Events{}); err == nil {
 		t.Fatal("expected error")
 	}
@@ -568,7 +573,12 @@ func TestCompactThresholdExplicitOverride(t *testing.T) {
 
 	// CompactThreshold wins over the default: same history at the default 50%
 	// would have compacted
-	ag2 := New(llm.New(srv.URL, "m"), "m", 100, "sys")
+	// The compaction call fails here by design (textServer speaks SSE, compact
+	// uses the non-streaming Complete) — that failure is the signal compaction
+	// was attempted. Single attempt so the assert doesn't wait out the backoff.
+	c2 := llm.New(srv.URL, "m")
+	c2.MaxRetries = 1
+	ag2 := New(c2, "m", 100, "sys")
 	ag2.ContextLimit = 1000
 	for range 8 {
 		ag2.Messages = append(ag2.Messages, llm.Message{Role: "user", Content: strings.Repeat("x", 360)})
@@ -872,10 +882,48 @@ func TestManualCompactFiresEvent(t *testing.T) {
 		)
 	}
 	var fired bool
-	if err := ag.ManualCompact(context.Background(), Events{OnCompact: func(took, kept int) { fired = true }}); err != nil {
+	var gotSummary string
+	ev := Events{
+		OnCompact:   func(took, kept int) { fired = true },
+		OnCompacted: func(summary string, cutoff int) { gotSummary = summary },
+	}
+	if err := ag.ManualCompact(context.Background(), ev); err != nil {
 		t.Fatalf("manual compact: %v", err)
 	}
 	if !fired {
 		t.Fatal("OnCompact should fire for ManualCompact")
+	}
+	if gotSummary != "sim" {
+		t.Fatalf("OnCompacted summary = %q", gotSummary)
+	}
+
+	// Too little history: the error surfaces instead of a silent no-op.
+	empty := New(llm.New(srv.URL, "k"), "m", 100, "sys")
+	if err := empty.ManualCompact(context.Background(), Events{}); err == nil {
+		t.Fatal("ManualCompact on a fresh agent should report too little history")
+	}
+}
+
+// MessagesSnapshot hands out a copy — mutating it must not touch the agent's
+// transcript (the TUI reads it while a turn runs).
+func TestMessagesSnapshotIsACopy(t *testing.T) {
+	ag := New(nil, "m", 0, "sys")
+	ag.AppendUser("hello")
+	snap := ag.MessagesSnapshot()
+	if len(snap) != len(ag.Messages) {
+		t.Fatalf("snapshot len %d, agent %d", len(snap), len(ag.Messages))
+	}
+	snap[0].Content = "clobbered"
+	if ag.Messages[0].Content == "clobbered" {
+		t.Fatal("snapshot must not alias the agent's messages")
+	}
+}
+
+func TestTruncateField(t *testing.T) {
+	if got := truncateField("  a\nb  ", 10); got != "a b" {
+		t.Errorf("newlines/trim: %q", got)
+	}
+	if got := truncateField("abcdefghij", 5); got != "abcd…" {
+		t.Errorf("truncation: %q", got)
 	}
 }
