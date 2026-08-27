@@ -14,7 +14,7 @@ func TestLoadSaveDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.DefaultModel != "kimi-k3-fast" || cfg.Providers["inference"].BaseURL != "https://api.inference.net/v1" {
+	if cfg.DefaultModel != "kimi-k3-fast" || cfg.Providers["inference-net"].BaseURL != "https://api.inference.net/v1" {
 		t.Fatalf("defaults: %+v", cfg)
 	}
 	cfg.DefaultModel = "glm-5.2-fast"

@@ -45,11 +45,35 @@ func (p Provider) ResolveKey() (string, error) {
 		}
 		return k, nil
 	}
-	// ponytail: special-case fallback to the inf CLI's stored key; generalize to apiKeyFile if more providers need it
+	// Inference.net fallbacks: the machine key provisioned by
+	// `whip auth inference-net login`, then the inf CLI's stored key.
 	if strings.Contains(p.BaseURL, "api.inference.net") {
+		if k := whipInferenceNetKey(); k != "" {
+			return k, nil
+		}
 		return infKey(), nil
 	}
 	return "", nil
+}
+
+// whipInferenceNetKey reads the machine key from ~/.whip/inference-net.json
+// (written by `whip auth inference-net login`).
+func whipInferenceNetKey() string {
+	dir, err := Dir()
+	if err != nil {
+		return ""
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "inference-net.json"))
+	if err != nil {
+		return ""
+	}
+	var a struct {
+		MachineKey string `json:"machineKey"`
+	}
+	if json.Unmarshal(data, &a) != nil {
+		return ""
+	}
+	return a.MachineKey
 }
 
 // infKey reads apiKey/codingAgentApiKey from ~/.inf/config.json (written by `inf auth set-key`).
@@ -309,7 +333,37 @@ func Load() (*Config, error) {
 		return def, def.Save()
 	}
 	logf("config.load", "ok (%s)", cfg.fingerprint())
+	cfg.normalize()
 	return &cfg, nil
+}
+
+// normalize upgrades legacy config shapes in place. Today: the provider key
+// "inference" was renamed to "inference-net" — old configs (and model routes
+// pointing at it) are migrated transparently. No file write happens here;
+// the next Save persists the rename.
+func (c *Config) normalize() {
+	p, ok := c.Providers["inference"]
+	if !ok {
+		return
+	}
+	if _, clash := c.Providers["inference-net"]; !clash {
+		c.Providers["inference-net"] = p
+	}
+	delete(c.Providers, "inference")
+	for name, m := range c.Models {
+		for i, prov := range m.Providers {
+			if prov == "inference" {
+				m.Providers[i] = "inference-net"
+			}
+		}
+		c.Models[name] = m
+	}
+	if c.DefaultProvider == "inference" {
+		c.DefaultProvider = "inference-net"
+	}
+	if c.CompactProvider == "inference" {
+		c.CompactProvider = "inference-net"
+	}
 }
 
 // Save writes the config back to ~/.whip/config.json. The write is atomic
@@ -474,7 +528,7 @@ func Default() *Config {
 		CompactModel: DefaultCompactModel,
 		//nolint:gosec // G101: APIKeyEnv holds env var NAMES, not credentials
 		Providers: map[string]Provider{
-			"inference": {
+			"inference-net": {
 				Name:      "Inference.net",
 				BaseURL:   "https://api.inference.net/v1",
 				API:       "openai-completions",
@@ -482,10 +536,10 @@ func Default() *Config {
 			},
 		},
 		Models: map[string]Model{
-			"kimi-k3":                {Providers: []string{"inference"}, Context: 1048576, Vision: true},
-			"kimi-k3-fast":           {Providers: []string{"inference"}, Context: 1048576, Vision: true},
-			"glm-5.2-fast":           {Providers: []string{"inference"}, Context: 128000},
-			"deepseek-v4-flash-0731": {Providers: []string{"inference"}, Context: 384000},
+			"kimi-k3":                {Providers: []string{"inference-net"}, Context: 1048576, Vision: true},
+			"kimi-k3-fast":           {Providers: []string{"inference-net"}, Context: 1048576, Vision: true},
+			"glm-5.2-fast":           {Providers: []string{"inference-net"}, Context: 128000},
+			"deepseek-v4-flash-0731": {Providers: []string{"inference-net"}, Context: 384000},
 		},
 	}
 }

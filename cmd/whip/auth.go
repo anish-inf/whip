@@ -33,13 +33,15 @@ import (
 // interactive terminal we offer to append the export to the shell rc file.
 func authCLI(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: whip auth <provider> [<key>]   (providers: openrouter)")
+		return errors.New("usage: whip auth <provider> [<args>]\n  providers: inference-net (login [flags] | status | logout | key rotate), openrouter [--env] [<key>]")
 	}
 	switch args[0] {
+	case "inference-net", "inference":
+		return authInferenceNetCLI(args[1:])
 	case "openrouter":
 		return authOpenRouterCLI(args[1:])
 	default:
-		return fmt.Errorf("unknown provider %q (supported: openrouter)", args[0])
+		return fmt.Errorf("unknown provider %q (supported: inference-net, openrouter)", args[0])
 	}
 }
 
