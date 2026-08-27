@@ -86,7 +86,7 @@ func (p *Policy) Deny(app string) {
 func (p *Policy) Summary() string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	var out []string
+	out := make([]string, 0, len(p.allow)+len(p.sessionAllow))
 	for a := range p.allow {
 		out = append(out, a)
 	}

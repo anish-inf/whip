@@ -449,7 +449,7 @@ func (m *Manager) publish(key, uri string, version int, diags []Diagnostic) {
 func (m *Manager) Statuses() []Status {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	var out []Status
+	out := make([]Status, 0, len(m.specs))
 	names := make([]string, 0, len(m.specs))
 	for n := range m.specs {
 		names = append(names, n)

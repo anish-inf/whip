@@ -1005,7 +1005,7 @@ func buildAgent(cfg *config.Config, modelName, provName, sysPrompt string) (*age
 	}
 	if modelSupportsVision(cfg, modelName, apiID, config.LoadCatalogs(), provName) {
 		tools.ScreenshotSink = func(jpegs [][]byte) {
-			var parts []llm.ContentPart
+			parts := make([]llm.ContentPart, 0, len(jpegs))
 			for _, j := range jpegs {
 				parts = append(parts, llm.ImagePart("jpg", j))
 			}
