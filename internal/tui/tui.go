@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -306,9 +305,9 @@ func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string, ca
 	// alone makes most terminals (Ghostty, kitty) suppress their native
 	// drag-selection without sending the drag to anyone. With capture off,
 	// tmux's WheelUpPane binding sees mouse_any_flag=0 and runs 'copy-mode -e',
-	// scrolling tmux's own scrollback instead of the transcript. In tmux the
-	// drag never reaches whip, so applyTmuxMouseFix routes MouseDrag1Pane to
-	// copy-mode for drag-to-copy there. Explicit config wins.
+	// scrolling tmux's own scrollback instead of the transcript. Inside tmux,
+	// tmux forwards the drag to whip (mouse_any_flag is set), so whip's own
+	// selection handles drag-to-copy there too. Explicit config wins.
 	mouseOn := true
 	if cfg.Mouse != nil {
 		mouseOn = *cfg.Mouse
@@ -429,7 +428,6 @@ func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string, ca
 	fmt.Fprint(os.Stdout, "\x1b[9999;1H")
 	if m.mouseOn {
 		enableClickWheelMouse(os.Stdout)
-		applyTmuxMouseFix()
 	}
 	// pick the glamour style that matches the pick/detection resolution;
 	// keep how detection resolved so /report can name the source
@@ -564,25 +562,11 @@ func disableClickWheelMouse(w *os.File) {
 	fmt.Fprint(w, "\x1b[?1002l\x1b[?1000l\x1b[?1006l")
 }
 
-// applyTmuxMouseFix makes plain drag-to-copy work inside tmux while whip
-// captures the mouse for wheel/clicks. tmux's default MouseDrag1Pane binding
-// checks mouse_any_flag (set by our ?1000/?1002) and forwards the drag to the
-// app — but tmux itself never forwards drag bytes from a terminal, so whip's
-// own selection (select.go) can't see them. Rebinding it to copy-mode -M
-// (only when the pane isn't already in a mode and isn't full mouse-tracking)
-// makes the drag open tmux copy-mode selection instead, restoring drag-to-copy.
-// Wheel still reaches whip: WheelUpPane stays bound to send -M. No-op outside
-// tmux or if tmux isn't available.
-func applyTmuxMouseFix() {
-	if os.Getenv("TMUX") == "" {
-		return
-	}
-	// Only override when the pane can still use copy-mode: not in alt-screen,
-	// not already in a mode, and not full/all mouse tracking (in which case the
-	// app genuinely wants the drag). Then select via copy-mode -M.
-	_ = exec.CommandContext(context.Background(), "tmux", "bind-key", "-T", "root", "MouseDrag1Pane", "if-shell", "-F",
-		"#{||:#{alternate_on},#{pane_in_mode},#{mouse_all_flag}}", "send-keys -M", "copy-mode -M").Run()
-}
+// (No applyTmuxMouseFix: inside tmux the drag IS forwarded to whip — tmux's
+// factory MouseDrag1Pane binding checks mouse_any_flag, which our ?1002 sets,
+// and sends every press/motion/release into the pane (verified live). whip's
+// own selection (select.go) paints and copies, exactly like Claude Code. The
+// old copy-mode override was what made "tmux capture kick in".)
 
 // catalogLites converts llm model records into the catalog-cache shape.
 func catalogLites(infos []llm.ModelInfo) []config.ModelInfoLite {
@@ -3497,12 +3481,10 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 			m.append(errStyle.Render("config save failed: " + err.Error()))
 		}
 		m.append(dimStyle.Render("mouse capture: " + onOff(m.mouseOn) + " (on = wheel scroll + ⚡ clicks, the default, drag to select/copy; off = native drag-to-copy, but tmux captures the wheel)"))
-		// We manage click/wheel reporting directly (no motion ?1002), so toggle
-		// the escape ourselves rather than tea.EnableMouseCellMotion (which would
-		// turn motion back on and break native drag-to-copy).
+		// We manage mouse reporting directly, so toggle the escape ourselves
+		// rather than tea.EnableMouseCellMotion.
 		if m.mouseOn {
 			enableClickWheelMouse(os.Stdout)
-			applyTmuxMouseFix()
 		} else {
 			disableClickWheelMouse(os.Stdout)
 		}
