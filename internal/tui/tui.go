@@ -1755,7 +1755,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// delta with the cumulative snapshot, so update the row for this id in
 		// place — appending per delta would stack one row per fragment.
 		// toolStartMsg swaps it for the live running row (matched by id).
-		row := dimStyle.Render("⋯ " + msg.name + " " + firstLine(msg.args))
+		row := dimStyle.Render("⋯ " + msg.name + m.batchSuffix(msg.name, msg.id) + " " + queuedSubject(msg.name, msg.args))
 		for i := len(m.blocks) - 1; i >= 0; i-- {
 			if m.blocks[i].kind == blockToolQueued && m.blocks[i].toolID == msg.id {
 				m.blocks[i].text, m.blocks[i].stale = row, true
@@ -1763,13 +1763,26 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 		}
-		m.blocks = append(m.blocks, block{kind: blockToolQueued, text: row, toolID: msg.id})
+		m.blocks = append(m.blocks, block{kind: blockToolQueued, text: row, toolID: msg.id, toolName: msg.name, toolArgs: msg.args})
+		// A batch's first row queued before its siblings existed: renumber the
+		// same-name rows now that the batch grew (1/3, 2/3, …). Queued rows are
+		// transient — replaced on toolStartMsg — so rewriting their text is safe.
+		for i := range m.blocks {
+			if b := &m.blocks[i]; b.kind == blockToolQueued && b.toolName == msg.name && b.toolID != msg.id {
+				b.text = dimStyle.Render("⋯ " + b.toolName + m.batchSuffix(b.toolName, b.toolID) + " " + queuedSubject(b.toolName, b.toolArgs))
+				b.stale = true
+			}
+		}
 		m.refreshVP()
 		return m, nil
 
 	case toolStartMsg:
 		m.flushThink()
 		m.flushCurrent()
+		// batch suffix computed before the queued row is deleted: deleting it
+		// first would shrink the same-name count by one and misnumber the
+		// last-started call in a parallel batch.
+		suffix := m.batchSuffix(msg.name, msg.id)
 		// replace the queued row for this id (if the tool call streamed in)
 		// rather than appending a second row for the same call.
 		for i := range slices.Backward(m.blocks) {
@@ -1779,17 +1792,23 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		args := msg.args
-		if msg.name == "browser_exec" || msg.name == "computer_exec" {
+		switch msg.name {
+		case "browser_exec", "computer_exec":
 			// Surface the step label (the code's first # comment) as the row
 			// text instead of raw JSON — the model writes it for the user.
 			if label := browserStepLabel(msg.args); label != "" {
 				args = label
 			}
+		case "subagent":
+			// Surface the task's description as the subject instead of the raw
+			// JSON blob — it names what the subagent is actually doing, matching
+			// the completed row's "Subagent(description)" header.
+			args = toolSubject("subagent", msg.args)
 		}
 		// a running row: icon + present-participle verb + full args (the
 		// command being run is always fully visible). On toolEndMsg the same
 		// block collapses in place to one line.
-		row := toolStyle.Render("⚒ "+toolVerb(msg.name)+" ") + dimStyle.Render(args)
+		row := toolStyle.Render("⚒ "+toolVerb(msg.name)+suffix+" ") + dimStyle.Render(args)
 		m.blocks = append(m.blocks, block{kind: blockToolRun, text: row, toolID: msg.id, toolRunning: true, toolName: msg.name, toolArgs: msg.args})
 		m.refreshVP()
 		return m, nil

@@ -120,12 +120,41 @@ func (r *taskRegistry) List() []BackgroundTask {
 	return out
 }
 
-// taskIDNum parses the monotonic counter out of a "sub-N" id ("task-N" on
-// rows restored from sessions that predate the rename; 0 on malformed ids,
-// which sort first — fine for a tiebreak).
+// taskIDNum parses the monotonic counter out of a task id for stable sorting.
+// New ids are "slug-<counter>" (the counter is the trailing number); legacy
+// ids were "sub-N"/"task-N" with the number right after the prefix. 0 on
+// malformed ids, which sort first — fine for a tiebreak.
 func taskIDNum(id string) int64 {
-	n, _ := strconv.ParseInt(strings.TrimPrefix(strings.TrimPrefix(id, "sub-"), "task-"), 10, 64)
-	return n
+	if i := strings.LastIndexByte(id, '-'); i >= 0 {
+		n, _ := strconv.ParseInt(id[i+1:], 10, 64)
+		return n
+	}
+	return 0
+}
+
+// taskSlug builds a human-meaningful task id from the description plus a
+// monotonic counter for uniqueness: "survey-context-in-pi-3". Falls back to
+// "sub-<n>" when the description yields nothing usable. A description-derived
+// id is what /subagents, the ⚙ badge tooltip, and steer messages show, so it
+// should name the work, not a bare sequence number.
+func taskSlug(description string, n int64) string {
+	words := strings.FieldsFunc(strings.ToLower(description), func(r rune) bool {
+		return r < 'a' || r > 'z' && (r < '0' || r > '9')
+	})
+	var kept []string
+	for _, w := range words {
+		if w != "" {
+			kept = append(kept, w)
+		}
+		if len(kept) == 5 {
+			break
+		}
+	}
+	slug := strings.Join(kept, "-")
+	if slug == "" {
+		slug = "sub"
+	}
+	return fmt.Sprintf("%s-%d", slug, n)
 }
 
 // Get returns a snapshot of one task, or false if unknown.
@@ -214,7 +243,7 @@ func (a *Agent) StartBackground(description, prompt string, o SubModel) *Backgro
 	if a.bg == nil {
 		a.bg = newTaskRegistry()
 	}
-	id := fmt.Sprintf("sub-%d", taskIDCounter.Add(1))
+	id := taskSlug(description, taskIDCounter.Add(1))
 	taskCtx, cancel := context.WithCancel(context.Background())
 	t := &BackgroundTask{
 		ID: id, Description: description, Prompt: prompt,
