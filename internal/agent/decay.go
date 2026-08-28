@@ -237,7 +237,7 @@ func supersededNotice(path string, s sighting) string {
 // it landed, and where the full text lives. When the result was never
 // truncated at ingestion (no spill marker to inherit), the full content is
 // spilled now so the placeholder still points at a recoverable copy.
-func decayNotice(msgs []llm.Message, i int, turnsAgo int) string {
+func decayNotice(msgs []llm.Message, i, turnsAgo int) string {
 	m := msgs[i]
 	what := m.Name
 	switch m.Name {
