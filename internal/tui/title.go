@@ -32,6 +32,9 @@ func (m *model) maybeTitle() tea.Cmd {
 	if cli == nil {
 		cli = m.agent.Client
 	}
+	if cli == nil {
+		return nil // headless tests build agents without a client
+	}
 	if mdl == "" {
 		mdl = m.agent.Model
 	}

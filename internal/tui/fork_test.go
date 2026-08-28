@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -8,6 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/context-labs/whip/internal/agent"
+	"github.com/context-labs/whip/internal/config"
 	"github.com/context-labs/whip/internal/llm"
 	"github.com/context-labs/whip/internal/session"
 )
@@ -24,6 +26,17 @@ func forkModel(t *testing.T) *model {
 		agent:    &agent.Agent{},
 		store:    st,
 		queueSel: -1,
+		// routable config: the busy-fork turn-end switch rebuilds the agent
+		// through buildAgent (model "m" on provider "p", matching the session
+		// rows Create/Save stamp below)
+		cfg: &config.Config{
+			DefaultModel:    "m",
+			DefaultProvider: "p",
+			Providers:       map[string]config.Provider{"p": {BaseURL: "https://x", APIKey: "k"}},
+			Models:          map[string]config.Model{"m": {Providers: []string{"p"}}},
+		},
+		modelName: "m",
+		provName:  "p",
 	}
 	m.width = 80
 	m.input.SetWidth(m.width - 2)
@@ -163,6 +176,239 @@ func TestForkWhileRewoundIntoFuture(t *testing.T) {
 	// point with no forward tail
 	if len(m.future) != 0 {
 		t.Fatalf("remaining future: %+v", m.future)
+	}
+}
+
+// TestForkWhileBusyCopiesImmediatelyAndDefersSwitch covers the reported
+// behavior: mid-turn /fork must create the copy right away (resumable from
+// another whip process) instead of queueing, then switch to it at turn end.
+func TestForkWhileBusyCopiesImmediatelyAndDefersSwitch(t *testing.T) {
+	m := forkModel(t)
+	m.busy = true
+	origID := m.sessionID
+
+	m.command("/fork experiment")
+
+	// the copy exists NOW, with the full stored conversation and the title
+	if m.pendingForkID == "" {
+		t.Fatalf("busy fork should mark a pending switch; blocks=%v", m.blocks)
+	}
+	meta, msgs, err := m.store.Load(m.pendingForkID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.Title != "experiment" || meta.ForkedFrom != origID || len(msgs) != 4 {
+		t.Fatalf("copy: %+v (%d msgs)", meta, len(msgs))
+	}
+	// nothing about the live window moved yet
+	if m.sessionID != origID || len(m.agent.Messages) != 5 {
+		t.Fatalf("live session should be untouched until turn end: %s (%d msgs)", m.sessionID, len(m.agent.Messages))
+	}
+	if !strings.Contains(tailBlock(m), "whip --resume "+m.pendingForkID) {
+		t.Fatalf("the confirmation should tell the user how to open the copy: %q", tailBlock(m))
+	}
+	// a second mid-turn fork is refused — one pending switch at a time
+	m.command("/fork another")
+	meta2, _, _ := m.store.Load(m.pendingForkID)
+	if meta2.Title != "experiment" {
+		t.Fatalf("second fork should not replace the pending one: %+v", meta2)
+	}
+	if recent, _ := m.store.Recent(10); len(recent) != 2 {
+		t.Fatalf("the refused fork must not create a session: %+v", recent)
+	}
+
+	// turn end: whip moves onto the copy
+	tm, _ := m.Update(turnDoneMsg{})
+	m = tm.(*model)
+	if m.busy {
+		t.Fatal("turnDoneMsg should clear busy")
+	}
+	if m.pendingForkID != "" || m.sessionID == origID {
+		t.Fatalf("switch should have happened: pending=%q session=%q", m.pendingForkID, m.sessionID)
+	}
+	meta, msgs, err = m.store.Load(m.sessionID)
+	if err != nil || meta.Title != "experiment" {
+		t.Fatalf("live session should be the fork: %+v %v", meta, err)
+	}
+	if len(m.agent.Messages) != 5 || len(msgs) != 4 {
+		t.Fatalf("the fork's conversation should be live: msgs=%d stored=%d", len(m.agent.Messages), len(msgs))
+	}
+	// the original kept its rows — the switch didn't take them away
+	if _, origMsgs, err := m.store.Load(origID); err != nil || len(origMsgs) != 4 {
+		t.Fatalf("original should survive untouched: %v %d", err, len(origMsgs))
+	}
+	if !strings.Contains(tailBlock(m), "⑂ switched to the fork") {
+		t.Fatalf("switch confirmation: %q", tailBlock(m))
+	}
+}
+
+// TestForkWhileBusyBareOpensPrompt: bare /fork mid-turn still names the copy
+// inline; enter commits and the copy lands immediately.
+func TestForkWhileBusyBareOpensPrompt(t *testing.T) {
+	m := forkModel(t)
+	m.busy = true
+
+	m.command("/fork")
+	if m.namePrompt == nil || m.input.Value() != "q1 (fork #1)" {
+		t.Fatalf("prompt: %+v input=%q", m.namePrompt, m.input.Value())
+	}
+	m.input.SetValue("mid-turn")
+	press(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+
+	if m.namePrompt != nil {
+		t.Fatal("enter should close the prompt")
+	}
+	if m.pendingForkID == "" {
+		t.Fatal("the committed name should fork immediately, even while busy")
+	}
+	meta, msgs, err := m.store.Load(m.pendingForkID)
+	if err != nil || meta.Title != "mid-turn" || len(msgs) != 4 {
+		t.Fatalf("copy: %+v %v (%d msgs)", meta, err, len(msgs))
+	}
+}
+
+// TestForkWhileBusyWithoutStoredSession: the very first turn hasn't persisted
+// anything, so there is nothing to copy — report it instead of forking air.
+func TestForkWhileBusyWithoutStoredSession(t *testing.T) {
+	m := forkModel(t)
+	m.busy = true
+	m.sessionID = "" // simulate the never-persisted first turn
+
+	m.command("/fork too-early")
+	if m.pendingForkID != "" {
+		t.Fatal("nothing stored yet — no fork should land")
+	}
+	if !strings.Contains(tailBlock(m), "nothing to fork yet") {
+		t.Fatalf("explanation: %q", tailBlock(m))
+	}
+}
+
+// TestEnterWhileBusyForksImmediately drives the REAL user path: with a turn
+// in flight, typing /fork + enter must run the command (not queue it as a
+// chat message for the model).
+func TestEnterWhileBusyForksImmediately(t *testing.T) {
+	m := forkModel(t)
+	m.busy = true
+	_, m.cancel = context.WithCancel(context.Background()) // busy models carry one
+	m.queueSel = -1
+
+	m.input.SetValue("/fork typed-mid-turn")
+	m = press(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+
+	if len(m.queue) != 0 {
+		t.Fatalf("/fork must never enter the chat queue: %v", m.queue)
+	}
+	if m.pendingForkID == "" {
+		t.Fatal("enter on /fork while busy should fork immediately")
+	}
+	meta, _, err := m.store.Load(m.pendingForkID)
+	if err != nil || meta.Title != "typed-mid-turn" {
+		t.Fatalf("copy: %+v %v", meta, err)
+	}
+	if m.hist[len(m.hist)-1] != "/fork typed-mid-turn" {
+		t.Fatalf("the command belongs in input recall: %v", m.hist)
+	}
+}
+
+// TestForkSwitchClearsQueue: messages queued for the OLD conversation must
+// not drain into the fork after the switch — they were typed in its context.
+func TestForkSwitchClearsQueue(t *testing.T) {
+	m := forkModel(t)
+	m.busy = true
+	m.queue = []string{"follow up for the old conversation"}
+	m.queueSel = -1
+
+	m.command("/fork clean-slate")
+	if m.pendingForkID == "" {
+		t.Fatal("fork should be pending")
+	}
+
+	tm, _ := m.Update(turnDoneMsg{})
+	m = tm.(*model)
+	if len(m.queue) != 0 {
+		t.Fatalf("the switch must drop queued messages: %v", m.queue)
+	}
+	if m.busy {
+		t.Fatal("nothing should submit after the switch — the turn is over")
+	}
+}
+
+// TestForkSwitchKeepsTurnOnOriginal: a turn that was mid-flight when the fork
+// was created persists its completion to the ORIGINAL session — the fork
+// branched off before it. The live window converges onto the fork anyway.
+func TestForkSwitchKeepsTurnOnOriginal(t *testing.T) {
+	m := forkModel(t)
+	m.busy = true
+	origID := m.sessionID
+	m.command("/fork branch-point")
+
+	// The turn completes. A real turn's final messages arrive via the turn
+	// goroutine before turnDoneMsg; here the turn is simulated, so append
+	// them while nothing owns Messages (busy is about to flip) and let
+	// turnDoneMsg's persist write them to the ORIGINAL — it runs before the
+	// switch and m.sessionID still names the source session.
+	m.busy = false // the append below stands in for the turn goroutine's
+	m.agent.Messages = append(m.agent.Messages,
+		llm.Message{Role: "assistant", Content: "finished answer"})
+	m.busy = true
+	tm, _ := m.Update(turnDoneMsg{})
+	m = tm.(*model)
+
+	if _, msgs, err := m.store.Load(origID); err != nil || len(msgs) != 5 {
+		t.Fatalf("the original should have kept the finished turn: %v %d", err, len(msgs))
+	}
+	_, forkMsgs, err := m.store.Load(m.sessionID)
+	if err != nil || len(forkMsgs) != 4 {
+		t.Fatalf("the fork branched before the turn ended: %v %d", err, len(forkMsgs))
+	}
+	if len(m.agent.Messages) != 5 { // system + the fork's 4 stored rows
+		t.Fatalf("the live window is the fork: %d", len(m.agent.Messages))
+	}
+}
+
+// TestForkSwitchThenNextTurnLandsOnFork: after the switch, the next turn
+// continues INSIDE the fork (that's the clone the user keeps). The turn is
+// driven synchronously through Agent.Turn on the switched fork's own agent —
+// the same primitive submitTurn wraps in a goroutine — so there's no live
+// goroutine to race when persist() writes the result.
+func TestForkSwitchThenNextTurnLandsOnFork(t *testing.T) {
+	m := forkModel(t)
+	m.busy = true
+	origID := m.sessionID
+	m.command("/fork continuation")
+	tm, _ := m.Update(turnDoneMsg{})
+	m = tm.(*model)
+
+	tm, _ = m.Update(turnDoneMsg{}) // no-op guard: a stray turnDone must not re-switch
+	m = tm.(*model)
+	if m.sessionID == origID || m.pendingForkID != "" {
+		t.Fatal("the switch is one-shot")
+	}
+
+	// the next turn on the switched fork: Agent.Turn appends the authored
+	// user row and the stub's assistant reply, exactly as production
+	m.agent.Client = stubLLM()
+	m.busy = false // the switch is done; the window is idle like a real turn start
+	if _, err := m.agent.Turn(context.Background(), "next question", agent.Events{}); err != nil {
+		t.Fatal(err)
+	}
+	m.persist() // what turnDoneMsg does when the goroutine reports back
+
+	_, msgs, err := m.store.Load(m.sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, msg := range msgs {
+		if msg.Role == "user" && msg.Content == "next question" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("the new turn should persist on the fork: %+v", msgs[len(msgs)-2:])
+	}
+	if _, origMsgs, _ := m.store.Load(origID); len(origMsgs) != 4 {
+		t.Fatalf("the original must not grow after the switch: %d", len(origMsgs))
 	}
 }
 

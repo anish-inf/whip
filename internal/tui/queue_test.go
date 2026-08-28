@@ -130,12 +130,13 @@ func TestQueueSelResetsOnSteer(t *testing.T) {
 }
 
 // TestBusyCmdAllowList pins which commands run mid-turn (and which /goal
-// forms do) — anything else must queue as a message.
+// forms do) — anything else must queue as a message. /fork runs mid-turn by
+// design: it only copies stored rows (busyFork), never the live conversation.
 func TestBusyCmdAllowList(t *testing.T) {
 	runs := []string{
 		"/help", "/theme", "/theme dark", "/mouse", "/effort", "/effort high",
 		"/tasks", "/tasks abc123", "/goal", "/goal clear", "/goal rounds 5",
-		"/cd", "/cd /tmp", "/pwd",
+		"/cd", "/cd /tmp", "/pwd", "/fork", "/fork experiment",
 	}
 	for _, c := range runs {
 		if !busyCmd(c) {
@@ -144,7 +145,7 @@ func TestBusyCmdAllowList(t *testing.T) {
 	}
 	queues := []string{
 		"/goal resume", "/goal ship the release", "/model", "/model x",
-		"/compact", "/clear", "/fork", "/rename", "/resume", "/quit",
+		"/compact", "/clear", "/rename", "/resume", "/quit",
 		"/bogus", "hello",
 	}
 	for _, c := range queues {
