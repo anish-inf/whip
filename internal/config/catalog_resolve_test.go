@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -127,5 +128,32 @@ func TestResolveCatalogFallbackMisses(t *testing.T) {
 	}
 	if _, _, _, err := cfg.Resolve("phantom-model", ""); err == nil {
 		t.Fatal("catalog for an unconfigured provider must not resolve")
+	}
+}
+
+// A total miss (neither config nor any catalog) is typed *UnknownModelError
+// so startup entrypoints can force-refresh the catalogs and retry once; the
+// other Resolve failures (unknown provider, ambiguous catalog id) stay
+// untyped so they never trigger a pointless refresh.
+func TestResolveUnknownModelErrorTyping(t *testing.T) {
+	catalogFixture(t, "inference", ModelInfoLite{ID: "kimi-k3"})
+	cfg := cfgWithProviders("inference")
+	cfg.Models["glm-5.2-fast"] = Model{Providers: []string{"inference"}}
+
+	_, _, _, err := cfg.Resolve("nope", "")
+	var unknown *UnknownModelError
+	if !errors.As(err, &unknown) {
+		t.Fatalf("miss should be *UnknownModelError, got %T (%v)", err, err)
+	}
+	if unknown.Model != "nope" {
+		t.Errorf("error should carry the missed name, got %q", unknown.Model)
+	}
+	want := `unknown model "nope" (models: glm-5.2-fast)`
+	if err.Error() != want {
+		t.Errorf("message changed: got %q want %q", err.Error(), want)
+	}
+
+	if _, _, _, err = cfg.Resolve("glm-5.2-fast", "ghost"); errors.As(err, &unknown) {
+		t.Error("unknown provider must not be typed as a refreshable miss")
 	}
 }

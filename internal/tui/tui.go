@@ -287,7 +287,7 @@ func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string, ca
 		return "", errors.New("folder not trusted")
 	}
 
-	ag, mn, pn, err := buildAgent(cfg, modelName, provName, sysPrompt)
+	ag, mn, pn, err := buildAgentWithRefresh(cfg, modelName, provName, sysPrompt)
 	if err != nil {
 		return "", err
 	}
@@ -602,16 +602,15 @@ func catalogLites(infos []llm.ModelInfo) []config.ModelInfoLite {
 	return lites
 }
 
-// fetchCatalogs refreshes each provider's cached model list in the background
-// and sends the merged result to the UI. force bypasses the 24h TTL
-// (/model refresh) so newly announced models appear immediately.
-func (m *model) fetchCatalogs(force bool) {
+// refreshCatalogs synchronously refreshes the cached model list of every
+// configured provider that needs it (missing/stale cache, or any provider
+// when force) and persists the result. Fetch or key failures skip that
+// provider, keeping its stale cache; it returns the merged catalogs (never
+// nil) whether or not anything was written.
+func refreshCatalogs(cfg *config.Config, force bool) map[string]config.Catalog {
 	cats := config.LoadCatalogs()
-	if cats == nil { // defensive; LoadCatalogs already returns non-nil
-		cats = map[string]config.Catalog{}
-	}
 	dirty := false
-	for name, prov := range m.cfg.Providers {
+	for name, prov := range cfg.Providers {
 		if c, ok := cats[name]; ok && !force && !c.Stale() && c.BaseURL == prov.BaseURL {
 			continue
 		}
@@ -637,9 +636,54 @@ func (m *model) fetchCatalogs(force bool) {
 	if dirty {
 		_ = config.SaveCatalogs(cats) // best-effort; the TUI still gets the fresh data
 	}
+	return cats
+}
+
+// fetchCatalogs refreshes each provider's cached model list in the background
+// and sends the merged result to the UI. force bypasses the 24h TTL
+// (/model refresh) so newly announced models appear immediately.
+func (m *model) fetchCatalogs(force bool) {
+	cats := refreshCatalogs(m.cfg, force)
 	if m.prog != nil { // nil in tests that drive the command dispatch directly
 		m.prog.Send(catalogsMsg(cats))
 	}
+}
+
+// buildAgentWithRefresh retries a launch-time buildAgent once when the model
+// misses: an "unknown model" may only mean the provider's cached catalog is
+// stale or absent (deleted ~/.whip/models.json, or a model announced after
+// the last fetch), so it force-refreshes the catalogs and retries. The happy
+// path performs no network fetch; a persistent failure surfaces the ORIGINAL
+// error (the refresh's failures are already logged by refreshCatalogs).
+func buildAgentWithRefresh(cfg *config.Config, modelName, provName, sysPrompt string) (*agent.Agent, string, string, error) {
+	ag, mn, pn, err := buildAgent(cfg, modelName, provName, sysPrompt)
+	var unknown *config.UnknownModelError
+	if !errors.As(err, &unknown) {
+		return ag, mn, pn, err
+	}
+	config.LogEvent("catalog.fetch", fmt.Sprintf("startup resolve missed %q — force-refreshing catalogs", unknown.Model))
+	refreshCatalogs(cfg, true)
+	if ag, mn, pn, rerr := buildAgent(cfg, modelName, provName, sysPrompt); rerr == nil {
+		return ag, mn, pn, nil
+	}
+	return nil, "", "", err
+}
+
+// ResolveWithRefresh is the same retry-on-miss wrapper for the headless
+// entrypoints (whip run, whip acp), which call cfg.Resolve directly instead
+// of building an agent.
+func ResolveWithRefresh(cfg *config.Config, modelName, provName string) (config.Provider, config.Model, string, error) {
+	prov, mdl, id, err := cfg.Resolve(modelName, provName)
+	var unknown *config.UnknownModelError
+	if !errors.As(err, &unknown) {
+		return prov, mdl, id, err
+	}
+	config.LogEvent("catalog.fetch", fmt.Sprintf("startup resolve missed %q — force-refreshing catalogs", unknown.Model))
+	refreshCatalogs(cfg, true)
+	if prov, mdl, id, rerr := cfg.Resolve(modelName, provName); rerr == nil {
+		return prov, mdl, id, nil
+	}
+	return config.Provider{}, config.Model{}, "", err
 }
 
 // resume replaces the conversation with a stored session.

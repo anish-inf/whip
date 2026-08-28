@@ -489,6 +489,19 @@ func (c *Config) Resolve(model, provider string) (Provider, Model, string, error
 	return p, m, id, nil
 }
 
+// UnknownModelError flags a Resolve miss the caller may recover from by
+// refreshing the provider catalogs and retrying: the model is absent from
+// both cfg.Models and every provider's cached /models list, which a stale
+// (or deleted) ~/.whip/models.json causes even for live models.
+type UnknownModelError struct {
+	Model string
+	known string // config model names, for the message
+}
+
+func (e *UnknownModelError) Error() string {
+	return fmt.Sprintf("unknown model %q (models: %s)", e.Model, e.known)
+}
+
 // resolveFromCatalog synthesizes a Model for an id advertised in a provider's
 // cached /models catalog but absent from cfg.Models. Capabilities (context,
 // max output, vision) come from the catalog entry; the provider routing is the
@@ -513,7 +526,7 @@ func (c *Config) resolveFromCatalog(model, provider string) (Model, string, erro
 		}
 	}
 	if len(hits) == 0 {
-		return Model{}, "", fmt.Errorf("unknown model %q (models: %s)", model, keys(c.Models))
+		return Model{}, "", &UnknownModelError{Model: model, known: keys(c.Models)}
 	}
 	if len(hits) > 1 {
 		names := make([]string, len(hits))

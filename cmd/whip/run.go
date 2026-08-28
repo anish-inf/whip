@@ -72,7 +72,7 @@ func runCLI(args []string) error {
 	if err != nil {
 		return err
 	}
-	prov, mdl, apiID, err := cfg.Resolve(*modelFlag, *providerFlag)
+	prov, mdl, apiID, err := tui.ResolveWithRefresh(cfg, *modelFlag, *providerFlag)
 	if err != nil {
 		return err
 	}
