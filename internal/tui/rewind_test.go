@@ -303,20 +303,28 @@ func TestRewindPickerShowsTurnUsageAndCost(t *testing.T) {
 		// turn 1: two assistant rounds (tool loop) priced on m1. The second
 		// round's prompt is the whole grown chat.
 		llm.Message{Role: "user", Content: "q1", Authored: true},
-		llm.Message{Role: "assistant", Content: "a1a", Model: "m1 @ p1",
-			Usage: &llm.Usage{PromptTokens: 10000, CompletionTokens: 500, PromptTokensDetails: cached8k}},
-		llm.Message{Role: "assistant", Content: "a1b", Model: "m1 @ p1",
-			Usage: &llm.Usage{PromptTokens: 23000, CompletionTokens: 300, PromptTokensDetails: cached21k}},
+		llm.Message{
+			Role: "assistant", Content: "a1a", Model: "m1 @ p1",
+			Usage: &llm.Usage{PromptTokens: 10000, CompletionTokens: 500, PromptTokensDetails: cached8k},
+		},
+		llm.Message{
+			Role: "assistant", Content: "a1b", Model: "m1 @ p1",
+			Usage: &llm.Usage{PromptTokens: 23000, CompletionTokens: 300, PromptTokensDetails: cached21k},
+		},
 		// turn 2: usage recorded but the model is unpriced
 		llm.Message{Role: "user", Content: "q2", Authored: true},
-		llm.Message{Role: "assistant", Content: "a2", Model: "m2 @ p2",
-			Usage: &llm.Usage{PromptTokens: 1000, CompletionTokens: 100}},
+		llm.Message{
+			Role: "assistant", Content: "a2", Model: "m2 @ p2",
+			Usage: &llm.Usage{PromptTokens: 1000, CompletionTokens: 100},
+		},
 		// turn 3: legacy row, no usage at all
 		llm.Message{Role: "user", Content: "q3-old", Authored: true},
 		// turn 4: usage again; its growth must diff against q2 (skipping q3)
 		llm.Message{Role: "user", Content: "q4", Authored: true},
-		llm.Message{Role: "assistant", Content: "a4", Model: "m2 @ p2",
-			Usage: &llm.Usage{PromptTokens: 2500, CompletionTokens: 120}},
+		llm.Message{
+			Role: "assistant", Content: "a4", Model: "m2 @ p2",
+			Usage: &llm.Usage{PromptTokens: 2500, CompletionTokens: 120},
+		},
 	)
 	m.catalogs = map[string]config.Catalog{
 		"p1": {Models: []config.ModelInfoLite{{ID: "m1", InPrice: 1e-6, OutPrice: 5e-6, CacheReadPrice: 1e-7}}},
