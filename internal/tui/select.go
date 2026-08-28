@@ -25,8 +25,9 @@ import (
 // The copy goes to the system clipboard via OSC 52 (works locally and over
 // SSH/tmux, subject to the terminal's clipboard-osc52 setting); pbcopy /
 // wl-copy / xclip is the fallback for terminals that ignore OSC 52
-// (Terminal.app). tmux users keep the applyTmuxMouseFix copy-mode binding —
-// tmux swallows the drag before whip ever sees it.
+// (Terminal.app). Inside tmux the drag reaches whip too (tmux forwards it
+// because mouse_any_flag is set), so this same selection works there — no
+// copy-mode override.
 //
 // ponytail: selection is only tracked over the transcript viewport (the common
 // case: copying agent output). The header/dock/input rows aren't selectable,
