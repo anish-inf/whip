@@ -268,10 +268,121 @@ func (m *model) rewindView() string {
 		} else {
 			b.WriteString("  " + e.text)
 		}
-		b.WriteString("\n    " + dimStyle.Render(rewindWhen(e.when)))
+		b.WriteString("\n    " + m.rewindTurnMeta(row))
 	}
 	fmt.Fprintf(&b, "\n%s", dimStyle.Render(fmt.Sprintf("  (%d/%d) ↑ older · ↓ newer", r.sel+1, len(r.entries))))
 	return b.String()
+}
+
+// turnUsage sums the usage of the turn that starts at conversation index cut
+// (the authored user message): every assistant message up to the next user
+// message. A tool-looping turn is several API calls, so the sum is the turn's
+// total burn. last is the final assistant message's usage: its prompt size is
+// the chat's size when the turn ended, which is how the user watches context
+// grow turn over turn. ok is false when the turn recorded no usage at all.
+func (m *model) turnUsage(cut int) (sum, last llm.Usage, ok bool) {
+	for i := cut + 1; i < len(m.agent.Messages)+len(m.future); i++ {
+		msg := m.messageAt(i)
+		if msg.Role == "user" {
+			break // the turn ends where the next submission begins
+		}
+		if msg.Role == "assistant" && msg.Usage != nil {
+			ok = true
+			last = *msg.Usage
+			sum.PromptTokens += msg.Usage.PromptTokens
+			sum.CompletionTokens += msg.Usage.CompletionTokens
+			if c := msg.Usage.Cached(); c > 0 {
+				if sum.PromptTokensDetails == nil {
+					sum.PromptTokensDetails = &struct {
+						CachedTokens int `json:"cached_tokens"`
+					}{}
+				}
+				sum.PromptTokensDetails.CachedTokens += c
+			}
+		}
+	}
+	return sum, last, ok
+}
+
+// rewindTurnMeta renders an entry's second line: the timestamp, then the
+// turn's token flow and cost, then the context's size at turn end —
+// "when · turn 1.3M in (1.1M cached) / 4.7k out · $x · context 67.8k".
+// The turn figure sums every round (a tool-looping turn is several API
+// calls); the context figure is the final round's prompt, i.e. how big the
+// conversation had grown, with the growth since the previous entry in green
+// ("context 75.6k (+7.5k)"). Cost is summed per message at that message's own
+// model rates; hidden when nothing contributing is priced. row is the entry's
+// index in the picker (growth diffs against the row above).
+func (m *model) rewindTurnMeta(row int) string {
+	e := m.rew.entries[row]
+	meta := dimStyle.Render(rewindWhen(e.when))
+	sum, last, ok := m.turnUsage(e.cut)
+	if !ok {
+		return meta
+	}
+	meta += dimStyle.Render(" · turn " + fmtTurn(sum))
+	if cost, ok := m.turnCost(e.cut); ok {
+		meta += dimStyle.Render(" · " + fmtCost(cost))
+	}
+	ctxSeg := " · context " + fmtTok(last.PromptTokens)
+	if prev, ok := m.prevContextTokens(row); ok {
+		if delta := last.PromptTokens - prev; delta > 0 {
+			ctxSeg += growStyle.Render(fmt.Sprintf(" (+%s)", fmtTok(delta)))
+		}
+	}
+	return meta + dimStyle.Render(ctxSeg)
+}
+
+// prevContextTokens finds the context size recorded by the picker row above
+// this one (its last round's prompt), skipping rows whose turn recorded no
+// usage. ok is false for the first usable row — there is nothing to diff.
+func (m *model) prevContextTokens(row int) (int, bool) {
+	for i := row - 1; i >= 0; i-- {
+		if _, last, ok := m.turnUsage(m.rew.entries[i].cut); ok {
+			return last.PromptTokens, true
+		}
+	}
+	return 0, false
+}
+
+// fmtTurn renders a turn's token flow in words — "1.3M in (1.1M cached) /
+// 4.7k out". The status line's bare in(cached)/out shape is fine where space
+// is tight and the format is always visible; on a picker row the words earn
+// their width.
+func fmtTurn(u llm.Usage) string {
+	in := fmtTok(u.PromptTokens) + " in"
+	if c := u.Cached(); c > 0 {
+		in += fmt.Sprintf(" (%s cached)", fmtTok(c))
+	}
+	return fmt.Sprintf("%s / %s out", in, fmtTok(u.CompletionTokens))
+}
+
+// turnCost prices the turn starting at cut by summing each assistant
+// message's usage at its own recorded model's advertised rates.
+func (m *model) turnCost(cut int) (float64, bool) {
+	total := 0.0
+	for i := cut + 1; i < len(m.agent.Messages)+len(m.future); i++ {
+		msg := m.messageAt(i)
+		if msg.Role == "user" {
+			break
+		}
+		if msg.Role != "assistant" || msg.Usage == nil {
+			continue
+		}
+		// msg.Model is "id @ provider"; pre-field messages (and providers
+		// without a pricing catalog) contribute nothing.
+		modelID, prov, _ := strings.Cut(msg.Model, " @ ")
+		cat, ok := m.catalogs[prov]
+		if !ok {
+			continue
+		}
+		in, out, cacheRead, ok := cat.Pricing(modelID)
+		if !ok {
+			continue
+		}
+		total += llm.SessionCost(*msg.Usage, in, out, cacheRead)
+	}
+	return total, total > 0
 }
 
 // rewindWhen renders an entry's submission time for the picker. Pre-SentAt
