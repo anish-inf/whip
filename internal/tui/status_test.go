@@ -205,6 +205,25 @@ func TestStatusLineHidesCostWithoutPricing(t *testing.T) {
 	}
 }
 
+// The last response's own token counts appear after the session spend, so the
+// size of the most recent response is readable at a glance.
+func TestStatusLineShowsLastResponse(t *testing.T) {
+	m := statusModel()
+	m.modelName = "m"
+	m.provName = "p"
+	m.agent.AddUsage(llm.Usage{PromptTokens: 20000, CompletionTokens: 900})
+	m.Update(usageMsg(llm.Usage{PromptTokens: 10000, CompletionTokens: 300}))
+
+	got := m.statusView()
+	if !strings.Contains(got, "last 10.0k/300 tok") {
+		t.Errorf("last response tokens should show in the status: %q", got)
+	}
+	// the session totals keep their own segment
+	if !strings.Contains(got, "20.0k/900 tok") {
+		t.Errorf("session spend segment should be unchanged: %q", got)
+	}
+}
+
 func TestFmtCost(t *testing.T) {
 	if got := fmtCost(0.0134); got != "$0.0134" {
 		t.Errorf("sub-dollar: %q", got)
