@@ -69,7 +69,7 @@ func TestModelPickerViewMarksCatalogAndStale(t *testing.T) {
 		t.Fatal(err)
 	}
 	m := &model{cfg: cfg, modelName: "kimi-k3-fast", provName: "inference"}
-	m.openModelPicker()
+	m.openModelPicker(false)
 	if m.mpicker == nil {
 		t.Fatal("picker should open")
 	}
@@ -99,7 +99,7 @@ func TestModelPickerSelectsCatalogRoute(t *testing.T) {
 		t.Fatal(err)
 	}
 	m := compactCmdModel() // cfg providers carry an API key; switchModel needs it
-	m.openModelPicker()
+	m.openModelPicker(false)
 	p := m.mpicker
 	// walk to the catalog route
 	for p.idx < len(p.items)-1 && !p.items[p.idx].fromCatalog {

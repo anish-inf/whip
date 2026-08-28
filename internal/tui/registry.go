@@ -39,6 +39,7 @@ var registry = []registryEntry{
 	{Name: "/me", Hint: "— edit your standing instructions (~/.whip/me.md) in $EDITOR", Category: "Agent"},
 	{Name: "/memory", Hint: "[n] [session] — saved memories: list what's injected each turn, mark entry n done", Category: "Session"},
 	{Name: "/model", Hint: "<name> [provider] — switch model (any provider-catalog model works; refresh pulls new announcements)", Category: "Agent"},
+	{Name: "/model-for-session", Hint: "<name> [provider] — switch model for this session only (doesn't change the saved default)", Category: "Agent"},
 	{Name: "/mouse", Hint: "— toggle mouse capture (on = wheel scroll + clicks, drag to copy)", Category: "Display"},
 	{Name: "/pwd", Hint: "— print working directory", Category: "Session"},
 	{Name: "/quit", Hint: "— exit", Keybind: "ctrl+c ctrl+c", Category: "App"},

@@ -32,6 +32,9 @@ flowchart LR
   (`-p` / `/model <name> <provider>`) to disambiguate.
 - Newly announced models appear in the `/model` picker dimmed, marked
   `(new)`, after `/model refresh` or the next TTL cycle.
+- `/model` persists the switch as the saved default. `/model-for-session`
+  switches the active model identically but leaves the saved default
+  untouched, so the next launch still opens on the configured model.
 
 ## Key resolution
 

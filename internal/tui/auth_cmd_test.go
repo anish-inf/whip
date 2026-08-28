@@ -276,7 +276,7 @@ func TestAuthMakesCatalogModelsPickable(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	m.openModelPicker()
+	m.openModelPicker(false)
 	if m.mpicker == nil {
 		t.Fatal("picker should open on a non-empty catalog")
 	}
