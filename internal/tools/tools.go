@@ -109,11 +109,32 @@ func Truncate(s string) string {
 	return truncate(s)
 }
 
+// truncate keeps head and tail with a middle elision: the first lines usually
+// orient (headers, imports, the command's first output) and the last lines
+// carry the error; the middle is what repeats. The full output spills to a
+// file so nothing is unrecoverable — the decay layer reuses the same marker
+// to point its placeholders at the spill.
 func truncate(s string) string {
 	if len(s) <= maxOutput {
 		return s
 	}
-	return s[:maxOutput] + fmt.Sprintf("\n... [truncated %d bytes]", len(s)-maxOutput)
+	return middleElide(s)
+}
+
+// middleElide keeps the first and last quarters of maxOutput and replaces the
+// middle with a marker naming the dropped byte count (and the spill path when
+// writing it succeeded). Exported pieces of the result format are parsed by
+// the agent's decay pass (spillPathOf) — keep the marker shape stable.
+func middleElide(s string) string {
+	keep := maxOutput / 2
+	head, tail := s[:keep], s[len(s)-keep:]
+	elided := len(s) - 2*keep
+	marker := fmt.Sprintf("\n... [%d bytes elided from the middle", elided)
+	if path := bashrun.Spill(s); path != "" {
+		marker += fmt.Sprintf(" — full output (%d bytes): %s", len(s), path)
+	}
+	marker += "] ...\n"
+	return head + marker + tail
 }
 
 // lspDiagnostics appends the LSP diagnostics block for a just-written file.
