@@ -87,9 +87,9 @@ func TestStartBackgroundSlugID(t *testing.T) {
 }
 
 // A background subagent registers in the task registry (dock row + badge via
-// OnChange) BEFORE worktree provisioning runs — the synchronous git call must
-// not delay the visible spawn signal. With isolation on, the provisioned path
-// is steered into the already-live task.
+// OnChange) BEFORE the synchronous worktree provision runs, and the provisioned
+// path is baked into the subagent's initial prompt — delivered deterministically
+// with the turn, never as a post-spawn steer a fast-settling task would lose.
 func TestBackgroundWorktreeRegistersBeforeProvisioning(t *testing.T) {
 	if os.Getenv("WHIP_SKIP_WORKTREE_TEST") == "1" {
 		t.Skip("skipped via WHIP_SKIP_WORKTREE_TEST")
@@ -119,9 +119,9 @@ func TestBackgroundWorktreeRegistersBeforeProvisioning(t *testing.T) {
 	ag := New(llm.New(srv.URL, "k"), "m", 100, "sys")
 	ag.WorktreeSubagents = true
 
-	// The registry must see the task before the tool call returns — and the
-	// worktree path is delivered by steering the live subagent, not by baking
-	// it into the initial prompt.
+	// The registry must see the task before the tool call returns, the result
+	// names the worktree, and the subagent's initial prompt carries the
+	// worktree instruction (deterministic delivery, not a steer).
 	out, err := findTool(t, ag, "subagent").Run(ctx, json.RawMessage(`{"prompt":"go","background":true}`))
 	if err != nil {
 		t.Fatalf("run: %v", err)
@@ -133,25 +133,17 @@ func TestBackgroundWorktreeRegistersBeforeProvisioning(t *testing.T) {
 	if !strings.Contains(out, "worktree") {
 		t.Fatalf("with isolation on, the result should name the worktree: %q", out)
 	}
-	// The worktree instruction reaches the subagent: queued on its pending
-	// list (drained at its first loop boundary) rather than a mid-run steer
-	// that a fast-settling task would lose. Depending on timing it's either
-	// still pending or already delivered to Messages — both prove delivery.
-	sub := tasks[0].sub
-	<-tasks[0].Done // settle so pending drains deterministically
 	found := false
-	for _, msg := range sub.Messages {
+	// The background goroutine appends the baked prompt inside Turn; wait for
+	// the task to settle so Messages holds the full conversation.
+	<-tasks[0].Done
+	for _, msg := range tasks[0].sub.Messages {
 		if msg.Role == "user" && strings.Contains(msg.Content, "git worktree at") {
 			found = true
 		}
 	}
-	for _, p := range sub.PendingSteers() {
-		if strings.Contains(p, "git worktree at") {
-			found = true
-		}
-	}
 	if !found {
-		t.Fatal("worktree path should reach the subagent (queued or delivered)")
+		t.Fatal("worktree path should be baked into the subagent's initial prompt")
 	}
 	ag.Tasks().Cancel(tasks[0].ID)
 }

@@ -181,18 +181,6 @@ func (a *Agent) drainPending() []pendingSteer {
 	return p
 }
 
-// PendingSteers returns the queued steered messages' texts (tests assert a
-// queued-but-undrained steer reached the subagent).
-func (a *Agent) PendingSteers() []string {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	out := make([]string, len(a.pending))
-	for i, p := range a.pending {
-		out[i] = p.text
-	}
-	return out
-}
-
 // AddUsage folds one request's usage into the session totals.
 func (a *Agent) AddUsage(u llm.Usage) {
 	a.usageMu.Lock()

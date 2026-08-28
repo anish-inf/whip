@@ -108,24 +108,25 @@ func taskTool(parent *Agent) tools.Tool {
 			prompt := a.Prompt
 
 			if a.Background {
-				// Register the task FIRST: StartBackground fires OnChange,
-				// which puts the row in the dock and bumps the ⚙ badge —
-				// before worktree provisioning (a synchronous git call that
-				// would otherwise delay the visible signal). The worktree path,
-				// when used, is steered into the already-live subagent below.
-				t := parent.StartBackground(desc, prompt, o)
+				// Register the task's dock row + badge before the synchronous
+				// worktree provision delays it. The goroutine that runs the
+				// subagent's turn spawns only after provisioning, so the
+				// worktree path is baked into the initial prompt — steering a
+				// post-spawn steer into a subagent whose turn can settle first
+				// would silently lose it.
+				wtPath := ""
 				if useWorktree {
-					if p, err := provisionSubagentWorktree(ctx, t.ID); err == nil {
-						// Queue the worktree instruction on the subagent's pending
-						// list (drained at its first loop boundary), not a mid-run
-						// SteerTask — the task's turn may complete before this Run
-						// returns, and a steer to a settled task is silently lost.
-						t.sub.Steer("Work entirely inside the git worktree at " + p + " (run `cd " + p + "` first; it is your own branch, isolated from other agents). Commit your changes there.")
-						return fmt.Sprintf("Started background subagent %s in worktree %s: %s. Its edits are isolated from your working tree. Do not poll for it.", t.ID, p, desc), nil
+					if p, err := provisionSubagentWorktree(ctx, "sub"); err == nil {
+						wtPath = p
+						prompt = "Work entirely inside the git worktree at " + wtPath + " (run `cd " + wtPath + "` first; it is your own branch, isolated from other agents). Commit your changes there.\n\n" + prompt
 					}
 					// ponytail: on any failure (not a repo, git missing, branch
 					// clash) fall back to the shared cwd rather than failing the
 					// dispatch — isolation is best-effort.
+				}
+				t := parent.StartBackground(desc, prompt, o)
+				if wtPath != "" {
+					return fmt.Sprintf("Started background subagent %s in worktree %s: %s. Its edits are isolated from your working tree. Do not poll for it.", t.ID, wtPath, desc), nil
 				}
 				return fmt.Sprintf("Started background subagent %s: %s. Keep working on something else; the report will arrive as a message when it finishes. Do not poll for it.", t.ID, desc), nil
 			}

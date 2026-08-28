@@ -210,8 +210,9 @@ persistence: `session.TestTaskRoundTrip`, `TestRestoreTaskSettledAndVisible`,
 `TestResumeRestoresTasks`, `TestTaskPersistsOnStartAndSettle`;
 spawn feedback: `TestBackgroundWorktreeRegistersBeforeProvisioning` (the task
 registers — dock row + ⚙ badge — before the synchronous worktree provision
-runs, and the worktree path reaches the subagent as a queued first steer, not
-a mid-run steer a fast-settling task would lose);
+runs, and the worktree path is baked into the subagent's initial prompt so
+it's delivered deterministically with the turn, never as a post-spawn steer a
+fast-settling task would lose);
 dock click hit-testing: `TestDockClickOpensClickedRow`,
 `TestDockClickIgnoredWhilePaletteOpen`; routing: `submodel_test.go` —
 `TestTaskModelOverride`, `TestTaskDefaultRoutesSubagents`,
