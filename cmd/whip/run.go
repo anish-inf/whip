@@ -114,10 +114,11 @@ func runCLI(args []string) error {
 	// stays disabled (no interactive approver is ever installed).
 	ag.ComputerDisabled = true
 	ag.ContextLimit = mdl.ContextWindow()
-	ag.Effort = cfg.DefaultEffort
-	if ag.Effort == "" {
-		ag.Effort = "medium"
-	}
+	// Reasoning effort: explicit cfg.DefaultEffort wins; "" resolves
+	// model-aware — "low" when the model advertises it, else the lowest
+	// supported level, else off — so a non-reasoning model never sends an
+	// effort parameter the provider would reject.
+	ag.Effort = tui.DefaultEffortFor(config.LoadCatalogs(), provName, ag.Model, cfg.DefaultEffort)
 	ag.MaxTurns = *maxTurnsFlag
 
 	// Session: resume an existing one, or create a fresh one — unless

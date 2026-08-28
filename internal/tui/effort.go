@@ -22,25 +22,51 @@ var effortCands = []cand{
 // model: the provider-advertised levels if known (each prefixed by off), else
 // the defaults.
 func (m *model) effortsFor() []string {
-	if c, ok := m.catalogs[m.provName]; ok {
-		apiID := m.agent.Model
-		for _, mi := range c.Models {
-			if mi.ID != apiID {
-				continue
-			}
-			if len(mi.ReasoningEfforts) == 0 {
-				break // model doesn't reason: use defaults
-			}
-			out := []string{""}
-			for _, e := range mi.ReasoningEfforts {
-				if e != "none" { // "none" is our off ("")
-					out = append(out, e)
-				}
-			}
-			return out
+	return effortsIn(m.catalogs, m.provName, m.agent.Model)
+}
+
+// effortsIn returns the effort cycle for a model id on a provider, using the
+// given catalogs. Advertised levels win (prefixed by off ""); otherwise the
+// provider-agnostic defaults apply.
+func effortsIn(catalogs map[string]config.Catalog, provName, modelID string) []string {
+	if c, ok := catalogs[provName]; ok {
+		if levels := c.Efforts(modelID); len(levels) > 1 {
+			return levels // advertised: ["", "low", "medium", …]
 		}
 	}
 	return defaultEfforts
+}
+
+// DefaultEffortFor resolves the effort a new session should open on when the
+// user hasn't pinned one (cfg.DefaultEffort == ""): "low" when the model
+// advertises it (the intended default), else the lowest advertised level, else
+// "" (off) when the catalog confirms the model doesn't reason, else "low" as a
+// best guess when the model is entirely unknown (no catalog entry). pinned,
+// when non-empty, is returned verbatim — an explicit config choice is honored
+// as-is, even if the model later turns out not to support it (updateCatalogs
+// resets the live session).
+func DefaultEffortFor(catalogs map[string]config.Catalog, provName, modelID, pinned string) string {
+	if pinned != "" {
+		return pinned
+	}
+	// When the catalog has the entry, trust its advertised levels: prefer "low",
+	// else the lowest level, else off (the model doesn't reason). When the entry
+	// is missing entirely (unknown model/provider), fall back to "low".
+	if c, ok := catalogs[provName]; ok {
+		if mi := c.Find(modelID); mi != nil {
+			levels := c.Efforts(modelID) // [""] for a non-reasoning model
+			if slices.Contains(levels, "low") {
+				return "low"
+			}
+			for _, e := range levels {
+				if e != "" {
+					return e
+				}
+			}
+			return "" // catalog confirms: no reasoning
+		}
+	}
+	return "low" // unknown model — best-guess default for a reasoning ecosystem
 }
 
 // nextEffort cycles cur to the following level in levels, wrapping; an
