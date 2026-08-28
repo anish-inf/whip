@@ -32,6 +32,9 @@ type modelPicker struct {
 	query      string      // type-to-filter text
 	idx        int
 	staleHints []string // providers whose cached catalog is past its TTL
+	// sessionOnly marks a picker opened by /model-for-session: the selection
+	// switches the model without persisting it as the new default.
+	sessionOnly bool
 }
 
 // view returns the items the picker is currently showing.
@@ -193,13 +196,13 @@ func staleCatalogs(cfg *config.Config, cats map[string]config.Catalog) []string 
 	return out
 }
 
-func (m *model) openModelPicker() {
+func (m *model) openModelPicker(sessionOnly bool) {
 	items := buildModelItems(m.cfg)
 	if len(items) == 0 {
 		m.append(errStyle.Render("no models configured in ~/.whip/config.json"))
 		return
 	}
-	mp := &modelPicker{items: items, staleHints: staleCatalogs(m.cfg, config.LoadCatalogs())}
+	mp := &modelPicker{items: items, staleHints: staleCatalogs(m.cfg, config.LoadCatalogs()), sessionOnly: sessionOnly}
 	for i, it := range items { // start on the active route
 		if it.model == m.modelName && it.provider == m.provName {
 			mp.idx = i
@@ -234,8 +237,9 @@ func (m *model) modelPickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		it := v[p.idx]
+		sessionOnly := p.sessionOnly
 		m.mpicker = nil
-		m.switchModel(it.model, it.provider)
+		m.switchModel(it.model, it.provider, !sessionOnly)
 	case tea.KeyRunes, tea.KeySpace:
 		p.query += string(msg.Runes)
 		p.applyQuery()

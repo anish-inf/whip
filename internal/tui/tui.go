@@ -2809,7 +2809,9 @@ func (m *model) tasksView() string {
 }
 
 // switchModel rebuilds the agent on a new model/provider, carrying history.
-func (m *model) switchModel(name, prov string) {
+// persist=false (/model-for-session) leaves the saved default untouched, so the
+// next whip launch still opens on the configured model.
+func (m *model) switchModel(name, prov string, persist bool) {
 	ag, mn, pn, err := buildAgent(m.cfg, name, prov, m.sysPrompt)
 	if err != nil {
 		m.append(errStyle.Render(err.Error()))
@@ -2825,11 +2827,15 @@ func (m *model) switchModel(name, prov string) {
 	if !slices.Contains(m.effortsFor(), ag.Effort) {
 		m.resetEffort("") // the new model doesn't support the current level
 	}
-	m.cfg.DefaultModel, m.cfg.DefaultProvider = mn, pn // store the switch as the new default
-	if err := m.cfg.Save(); err != nil {
-		m.append(errStyle.Render("config save failed: " + err.Error()))
+	if persist {
+		m.cfg.DefaultModel, m.cfg.DefaultProvider = mn, pn // store the switch as the new default
+		if err := m.cfg.Save(); err != nil {
+			m.append(errStyle.Render("config save failed: " + err.Error()))
+		}
+		m.append(dimStyle.Render("→ " + mn + " @ " + pn))
+	} else {
+		m.append(dimStyle.Render("→ " + mn + " @ " + pn + " (this session only)"))
 	}
-	m.append(dimStyle.Render("→ " + mn + " @ " + pn))
 }
 
 // pickerKey handles keys while the /resume browser is open.
@@ -3624,9 +3630,10 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 		m.append(dimStyle.Render(helpText()))
 	case "/auth":
 		m.authCommand(fields[1:])
-	case "/model":
+	case "/model", "/model-for-session":
+		persist := fields[0] == "/model"
 		if len(fields) < 2 {
-			m.openModelPicker()
+			m.openModelPicker(!persist)
 			break
 		}
 		if fields[1] == "refresh" {
@@ -3653,7 +3660,7 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 			m.append(errStyle.Render("unknown model " + name))
 			return m, nil
 		}
-		m.switchModel(resolved, prov)
+		m.switchModel(resolved, prov, persist)
 	default:
 		m.append(errStyle.Render("unknown command " + fields[0]))
 	}

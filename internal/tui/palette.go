@@ -608,7 +608,7 @@ func (m *model) panelKey(msg tea.KeyMsg, pp *ppanel) (tea.Model, tea.Cmd) {
 			m.previewModel(pp.items[pp.idx])
 		case tea.KeyEnter:
 			it := pp.items[pp.idx]
-			m.switchModel(it.model, it.provider)
+			m.switchModel(it.model, it.provider, true)
 			pop()
 		}
 

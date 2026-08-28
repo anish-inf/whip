@@ -38,14 +38,14 @@ func TestTabCompletesSkillName(t *testing.T) {
 }
 
 // Tab cycles through candidates with preview: each press inserts the next
-// candidate, wrapping at both ends. ("/e" matches /effort only, so use /m:
-// /mcp, /model, /mouse.)
+// candidate, wrapping at both ends. ("/e" matches /effort only, so use /mode:
+// /model, /model-for-session.)
 func TestTabCyclesWithPreview(t *testing.T) {
 	m := modelCmdModel()
-	m = typeStr(t, m, "/mo") // /model, /mouse — two candidates, deterministic order
+	m = typeStr(t, m, "/mode") // /model, /model-for-session — two candidates, deterministic order
 	m = pressKey(m, tea.KeyTab)
 	first := m.input.Value()
-	if first != "/model" && first != "/mouse" {
+	if first != "/model" && first != "/model-for-session" {
 		t.Fatalf("tab should preview a candidate, got %q", first)
 	}
 	m = pressKey(m, tea.KeyTab)
