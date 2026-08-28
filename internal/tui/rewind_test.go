@@ -7,8 +7,10 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/context-labs/whip/internal/agent"
+	"github.com/context-labs/whip/internal/config"
 	"github.com/context-labs/whip/internal/llm"
 	"github.com/context-labs/whip/internal/session"
 )
@@ -280,6 +282,104 @@ func TestRewindPickerShowsTimestamps(t *testing.T) {
 		}
 		if strings.Contains(ln, "q3-old") && !strings.Contains(lines[i+1], "—") {
 			t.Errorf("q3-old (no SentAt) should show a dash below it\n%s", view)
+		}
+	}
+}
+
+// The picker's second line per entry carries the chat's size at the end of
+// the turn (the final round's full prompt — how big the conversation has
+// grown) plus the turn's own usage and cost, summed across every assistant
+// reply of that turn and priced at each message's own recorded model. Turns
+// without recorded usage — and costs without pricing — leave those segments
+// out entirely.
+func TestRewindPickerShowsTurnUsageAndCost(t *testing.T) {
+	cached8k := &struct {
+		CachedTokens int `json:"cached_tokens"`
+	}{CachedTokens: 8000}
+	cached21k := &struct {
+		CachedTokens int `json:"cached_tokens"`
+	}{CachedTokens: 21000}
+	m := rewindModel(t,
+		// turn 1: two assistant rounds (tool loop) priced on m1. The second
+		// round's prompt is the whole grown chat.
+		llm.Message{Role: "user", Content: "q1", Authored: true},
+		llm.Message{
+			Role: "assistant", Content: "a1a", Model: "m1 @ p1",
+			Usage: &llm.Usage{PromptTokens: 10000, CompletionTokens: 500, PromptTokensDetails: cached8k},
+		},
+		llm.Message{
+			Role: "assistant", Content: "a1b", Model: "m1 @ p1",
+			Usage: &llm.Usage{PromptTokens: 23000, CompletionTokens: 300, PromptTokensDetails: cached21k},
+		},
+		// turn 2: usage recorded but the model is unpriced
+		llm.Message{Role: "user", Content: "q2", Authored: true},
+		llm.Message{
+			Role: "assistant", Content: "a2", Model: "m2 @ p2",
+			Usage: &llm.Usage{PromptTokens: 1000, CompletionTokens: 100},
+		},
+		// turn 3: legacy row, no usage at all
+		llm.Message{Role: "user", Content: "q3-old", Authored: true},
+		// turn 4: usage again; its growth must diff against q2 (skipping q3)
+		llm.Message{Role: "user", Content: "q4", Authored: true},
+		llm.Message{
+			Role: "assistant", Content: "a4", Model: "m2 @ p2",
+			Usage: &llm.Usage{PromptTokens: 2500, CompletionTokens: 120},
+		},
+	)
+	m.catalogs = map[string]config.Catalog{
+		"p1": {Models: []config.ModelInfoLite{{ID: "m1", InPrice: 1e-6, OutPrice: 5e-6, CacheReadPrice: 1e-7}}},
+		"p2": {Models: []config.ModelInfoLite{{ID: "m2"}}}, // no prices
+	}
+	press(t, m, esc(m))
+	press(t, m, esc(m))
+
+	// turn 1 sum: (10k-8k)*1e-6 + 8k*1e-7 + 500*5e-6 = 0.0053 for round one,
+	// + (23k-21k)*1e-6 + 21k*1e-7 + 300*5e-6 = 0.0056 → 0.0109
+	sum1, last1, ok := m.turnUsage(1)
+	if !ok {
+		t.Fatal("turn 1 should have usage")
+	}
+	if sum1.PromptTokens != 33000 || sum1.CompletionTokens != 800 || sum1.Cached() != 29000 {
+		t.Errorf("turn 1 sum: %+v", sum1)
+	}
+	if last1.PromptTokens != 23000 || last1.Cached() != 21000 {
+		t.Errorf("turn 1 chat size should come from the last round: %+v", last1)
+	}
+	if got, ok := m.turnCost(1); !ok || got != 0.0109 {
+		t.Errorf("turn 1 cost = %v (ok=%v), want 0.0109", got, ok)
+	}
+
+	view := m.rewindView()
+	if !strings.Contains(view, "turn 33.0k in (29.0k cached) / 800 out · $0.0109 · context 23.0k") {
+		t.Errorf("q1's line should show the turn's flow and cost, then the context size\n%s", view)
+	}
+	if !strings.Contains(view, "turn 1.0k in / 100 out") {
+		t.Errorf("q2's line should show usage without cost\n%s", view)
+	}
+	// growth: q1 is the first usable row (no previous → no delta); q2 shrank
+	// (1.0k < 23.0k → no delta shown); q4 grew 1.5k over q2, skipping q3's
+	// usage-less turn. The marker runs through the green growStyle, so strip
+	// styling before asserting on the digits.
+	plain := ansi.Strip(view)
+	lines := strings.Split(plain, "\n")
+	for i, ln := range lines {
+		switch {
+		case strings.Contains(ln, "q1"):
+			if strings.Contains(lines[i+1], "(+") {
+				t.Errorf("q1 has no previous row — no growth marker\n%s", plain)
+			}
+		case strings.Contains(ln, "q2"):
+			if strings.Contains(lines[i+1], "(+") {
+				t.Errorf("q2 shrank the context — no growth marker\n%s", plain)
+			}
+		case strings.Contains(ln, "q3-old"):
+			if strings.Contains(lines[i+1], "turn") {
+				t.Errorf("q3-old (no usage) should show no turn segment\n%s", plain)
+			}
+		case strings.Contains(ln, "q4"):
+			if !strings.Contains(lines[i+1], "context 2.5k (+1.5k)") {
+				t.Errorf("q4 should show growth over q2 (skipping usage-less q3)\n%s", plain)
+			}
 		}
 	}
 }
