@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/context-labs/whip/internal/llm"
+	"github.com/context-labs/whip/internal/tools/bashrun"
 )
 
 // Context decay keeps old tool output from polluting the prompt while
@@ -60,12 +61,12 @@ func (a *Agent) decay() int {
 	boundary := hotBoundary(a.Messages)
 	rewritten := 0
 
-	// Pass 1: superseded reads — applied anywhere in history, not just past
-	// the window: the replacement is idempotent (rewritten content is skipped
-	// on later passes), so after the one-time rewrite the prefix stays
-	// byte-stable and cache-friendly anyway. Walk backward (newest→oldest)
-	// tracking, per path, the newest read/write position; an older read of
-	// the same path collapses to a pointer at the newer evidence.
+	// Pass 1: superseded reads. Walk backward (newest→oldest) tracking, per
+	// path, the newest read/write position; an older read of the same path
+	// collapses to a pointer at the newer evidence. The newest sighting may
+	// sit inside the hot window (recent evidence is exactly what supersedes),
+	// but the rewrite itself respects the window: reads inside it stay
+	// byte-stable.
 	latest := map[string]sighting{}
 	type readRef struct {
 		idx  int
@@ -104,8 +105,8 @@ func (a *Agent) decay() int {
 	// p; a read whose own index is not the newest sighting is superseded.
 	for _, r := range reads {
 		s := latest[r.path]
-		if s.idx == r.idx {
-			continue // this read IS the newest evidence
+		if s.idx == r.idx || r.idx >= boundary {
+			continue // this read IS the newest evidence, or is inside the hot window
 		}
 		a.Messages[r.idx].Content = supersededNotice(r.path, s)
 		rewritten++
@@ -113,13 +114,21 @@ func (a *Agent) decay() int {
 
 	// Pass 2: age decay of big tool outputs past the hot window. Pass-1
 	// placeholders are already short, but skip them explicitly so a read that
-	// was just superseded isn't counted twice.
-	for i := range boundary {
+	// was just superseded isn't counted twice. turns counts authored user
+	// messages between the result and the tail.
+	turns := 0
+	for i := len(a.Messages) - 1; i >= 0; i-- {
 		m := &a.Messages[i]
+		if m.Role == "user" && m.Authored {
+			turns++
+		}
+		if i >= boundary {
+			continue
+		}
 		if m.Role != "tool" || len(m.Content) <= decayMinBytes || strings.HasPrefix(m.Content, decayedMarker) {
 			continue
 		}
-		m.Content = decayNotice(*m)
+		m.Content = decayNotice(a.Messages, i, turns)
 		rewritten++
 	}
 	return rewritten
@@ -223,35 +232,48 @@ func supersededNotice(path string, s sighting) string {
 	return fmt.Sprintf("%sread of %s superseded by newer read (%d lines)⟩", decayedMarker, filepath.Base(path), s.lines)
 }
 
-// decayNotice is the Layer-2 placeholder: what ran, how big it was, and where
-// the full output lives when a spill file exists. Turns-ago is derived from
-// authored user messages between the result and the tail.
-func decayNotice(m llm.Message) string {
+// decayNotice is the Layer-2 placeholder: what ran (the command for bash, the
+// path for file tools), how big the output was, how many authored turns ago
+// it landed, and where the full text lives. When the result was never
+// truncated at ingestion (no spill marker to inherit), the full content is
+// spilled now so the placeholder still points at a recoverable copy.
+func decayNotice(msgs []llm.Message, i int, turnsAgo int) string {
+	m := msgs[i]
 	what := m.Name
-	if m.Name == "bash" {
-		if cmd := bashCommandPreview(m.Content); cmd != "" {
-			what = fmt.Sprintf("bash %q", cmd)
+	switch m.Name {
+	case "bash":
+		if cmd := toolArgFromCall(msgs, i, "command"); cmd != "" {
+			what = fmt.Sprintf("bash %q", firstWords(cmd, 60))
+		}
+	case "read", "write", "edit":
+		if p := toolArgFromCall(msgs, i, "path"); p != "" {
+			what = fmt.Sprintf("%s %s", m.Name, filepath.Base(p))
 		}
 	}
 	spill := spillPathOf(m.Content)
+	if spill == "" {
+		spill = bashrun.Spill(m.Content) // untruncated at ingestion: spill now
+	}
+	age := ""
+	if turnsAgo > 0 {
+		age = fmt.Sprintf(" — ran here %d turn(s) ago", turnsAgo)
+	}
 	size := fmt.Sprintf("%dk bytes", len(m.Content)/1024)
 	if spill != "" {
-		return fmt.Sprintf("%s%s output, %s — full output: %s⟩", decayedMarker, what, size, spill)
+		return fmt.Sprintf("%s%s output, %s%s; full output: %s⟩", decayedMarker, what, size, age, spill)
 	}
-	return fmt.Sprintf("%s%s output, %s⟩", decayedMarker, what, size)
+	return fmt.Sprintf("%s%s output, %s%s⟩", decayedMarker, what, size, age)
 }
 
-// bashCommandPreview recovers the command's first words from a bash result.
-// whip doesn't store the command on the tool message, so this is best-effort:
-// the first line of output is usually the command echo when bashrun markers
-// are on; otherwise the tool name alone carries the placeholder.
-func bashCommandPreview(content string) string {
-	first, _, _ := strings.Cut(content, "\n")
-	first = strings.TrimSpace(first)
-	if len(first) > 60 || first == "" {
-		return ""
+// firstWords collapses s to one line and truncates at n runes with an
+// ellipsis — a compact command preview for placeholders.
+func firstWords(s string, n int) string {
+	s = strings.Join(strings.Fields(s), " ")
+	r := []rune(s)
+	if len(r) <= n {
+		return s
 	}
-	return first
+	return string(r[:n-1]) + "…"
 }
 
 // spillPathOf extracts the "full output (N bytes): /path" pointer the

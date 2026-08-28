@@ -69,10 +69,10 @@ func TestDecaySupersededByNewerRead(t *testing.T) {
 	}
 }
 
-func TestDecayNewestReadInsideWindowStillSupersedesOlder(t *testing.T) {
-	// Even when the NEWER read sits inside the hot window (recent), the older
-	// read of the same path is obsolete the moment the newer one lands — and
-	// the rewrite is idempotent, so the prefix re-stabilizes next turn.
+func TestDecayNeverRewritesInsideHotWindow(t *testing.T) {
+	// The cache-stability invariant is strict: even an obviously superseded
+	// read inside the hot window stays byte-stable. The rewrite happens on a
+	// later turn, once the window has slid past it.
 	a := &Agent{}
 	a.Messages = []llm.Message{
 		{Role: "system", Content: "sys"},
@@ -81,6 +81,11 @@ func TestDecayNewestReadInsideWindowStillSupersedesOlder(t *testing.T) {
 		asstWithCall("c2", "read", `{"path":"foo.go"}`),
 		toolMsg("c2", "read", readResult(80)),
 	}
+	if n := a.decay(); n != 0 {
+		t.Fatalf("hot-window content must not decay, rewrote %d", n)
+	}
+	// once the window slides past (content appended), the old read decays
+	a.Messages = padHotWindow(a.Messages)
 	if n := a.decay(); n != 1 {
 		t.Fatalf("rewrites = %d, want 1", n)
 	}
