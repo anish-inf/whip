@@ -73,7 +73,6 @@ func (w *waitTask) setStatus(s WaitStatus) { w.status.Store(s) }
 type waitRegistry struct {
 	mu     sync.Mutex
 	waits  map[string]*waitTask
-	seq    int
 	OnWake func(text string)
 	agent  *Agent
 	ctx    context.Context
@@ -142,7 +141,6 @@ func (a *Agent) StartWait(spec WaitTaskSpec) (*waitTask, error) {
 	}
 	r := a.waits()
 	r.mu.Lock()
-	r.seq++
 	id := taskSlug(spec.Command, waitIDCounter.Add(1))
 	id = "wait-" + id
 	ctx, cancel := context.WithCancel(r.ctx)
@@ -242,7 +240,9 @@ func (r *waitRegistry) Close() {
 	}
 }
 
-// CancelWait stops a running wait. Returns false if unknown or settled.
+// CancelWait stops a running wait. Returns false if unknown or already
+// settled. The CAS is the once-guard against a poller mid-deliver: whoever
+// wins it owns the close, so Done can never close twice.
 func (r *waitRegistry) CancelWait(id string) bool {
 	r.mu.Lock()
 	w, ok := r.waits[id]
@@ -251,22 +251,13 @@ func (r *waitRegistry) CancelWait(id string) bool {
 	if !running {
 		return false
 	}
-	w.delivered.Store(true) // suppress delivery from the in-flight poll
+	if !w.delivered.CompareAndSwap(false, true) {
+		return false // a deliver is already settling it
+	}
 	w.setStatus(WaitKilled)
 	close(w.Done)
 	w.cancel()
 	return true
-}
-
-// ListWaits snapshots all waits, running first.
-func (r *waitRegistry) ListWaits() []*waitTask {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	out := make([]*waitTask, 0, len(r.waits))
-	for _, w := range r.waits {
-		out = append(out, w)
-	}
-	return out
 }
 
 // tailLines keeps the last n lines of s (delivery messages quote output; the

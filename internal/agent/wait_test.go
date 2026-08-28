@@ -2,6 +2,7 @@ package agent
 
 import (
 	"encoding/json"
+	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -168,22 +169,89 @@ func TestWaitToolRegisters(t *testing.T) {
 	if !strings.Contains(out, "do NOT sleep-poll") {
 		t.Fatalf("tool output should state the no-poll contract: %q", out)
 	}
-	// The registered wait should settle quickly (exit 0).
-	deadline := time.After(2 * time.Second)
-	for {
-		done := true
-		for _, w := range ag.Waits().ListWaits() {
-			if w.Status() == WaitRunning {
-				done = false
-			}
-		}
-		if done {
-			return
-		}
+	// The registered wait (exit 0) settles on the immediate first check.
+	for _, w := range ag.Waits().waits {
 		select {
-		case <-deadline:
+		case <-w.Done:
+		case <-time.After(2 * time.Second):
 			t.Fatal("registered wait never settled")
-		case <-time.After(20 * time.Millisecond):
 		}
+	}
+}
+
+// The ticker path (a condition false on the immediate first check but true on
+// a later poll) is distinct from the immediate-check path — the 2s minimum
+// interval clamps make sub-2s tests never exercise it, so this one sits at
+// the real minimum and confirms a later poll settles the wait.
+func TestWaitTickerPath(t *testing.T) {
+	ag := New(llm.New("http://unused", "k"), "m", 100, "sys")
+	defer ag.Waits().Close()
+	ag.Waits().OnWake = func(string) {}
+
+	// A file that appears after the first check: the until regex matches only
+	// once the file exists, so the first (immediate) poll fails and a ticker
+	// poll must settle it.
+	flag := t.TempDir() + "/ready"
+	w, err := ag.StartWait(WaitTaskSpec{
+		Command:  "cat " + flag + " 2>/dev/null || true",
+		Until:    "READY",
+		Interval: waitMinInterval, // the real floor — the ticker fires at 2s
+		Timeout:  30 * time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Write the flag shortly after the first check would have run.
+	time.AfterFunc(500*time.Millisecond, func() {
+		os.WriteFile(flag, []byte("READY"), 0o600)
+	})
+	select {
+	case <-w.Done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("ticker-path wait never settled")
+	}
+	if w.Status() != WaitMet {
+		t.Fatalf("status = %q, want %q", w.Status(), WaitMet)
+	}
+}
+
+// The lost-wakeup race: a Steer landing after a turn's final drainPending but
+// before running flips false must not be dropped — the turn's teardown
+// re-drain routes it to OnWake. Tested via the drain mechanism directly: the
+// exact interleaving window isn't deterministically forceable in a live turn.
+func TestTurnTeardownDrainsOrphanedSteers(t *testing.T) {
+	ag := New(llm.New("http://unused", "k"), "m", 100, "sys")
+	var woke []string
+	ag.Waits().OnWake = func(s string) { woke = append(woke, s) }
+
+	ag.running.Store(true)
+	ag.Steer("orphaned message")
+	// Simulate teardown: running flips false, then the re-drain runs.
+	ag.running.Store(false)
+	ag.drainOrphanedSteers()
+
+	if len(woke) != 1 || woke[0] != "orphaned message" {
+		t.Fatalf("orphaned steer should wake, got %v", woke)
+	}
+	if len(ag.drainPending()) != 0 {
+		t.Fatal("pending should be empty after teardown drain")
+	}
+}
+
+// CancelWait racing a deliver must not panic (double close). The CAS makes
+// exactly one of them own the close. Run under -race.
+func TestWaitCancelRacesDeliver(t *testing.T) {
+	for range 200 {
+		ag := New(llm.New("http://unused", "k"), "m", 100, "sys")
+		ag.Waits().OnWake = func(string) {}
+		w, err := ag.StartWait(WaitTaskSpec{Command: "exit 0", Interval: waitMinInterval, Timeout: time.Minute})
+		if err != nil {
+			t.Fatal(err)
+		}
+		// The immediate first check delivers on this goroutine's schedule;
+		// cancel concurrently. Whichever wins, no double-close panic.
+		go ag.Waits().CancelWait(w.ID)
+		<-w.Done
+		ag.Waits().Close()
 	}
 }

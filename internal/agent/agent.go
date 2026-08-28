@@ -344,7 +344,10 @@ func (a *Agent) turn(ctx context.Context, input string, parts []llm.ContentPart,
 		ev.OnDecay(n)
 	}
 	a.running.Store(true)
-	defer a.running.Store(false)
+	defer func() {
+		a.running.Store(false)
+		a.drainOrphanedSteers() // catch steers that lost the race to teardown
+	}()
 	msg := llm.Message{Role: "user", Content: input, Parts: parts, Authored: authored}
 	if authored {
 		now := time.Now()
@@ -445,6 +448,20 @@ func (a *Agent) turn(ctx context.Context, input string, parts []llm.ContentPart,
 		if len(msg.ToolCalls) == 0 && len(steered) == 0 {
 			a.compacted = false // reset for the next Turn
 			return msg.Content, nil
+		}
+	}
+}
+
+// drainOrphanedSteers re-drains any steered messages that lost the race
+// against a turn's final loop boundary: a Steer landing after the last
+// drainPending but before running flips false would otherwise sit in pending
+// forever (the wait registry's busy delivery, a user's mid-turn message). The
+// deferred teardown routes each survivor to the wait registry's OnWake, which
+// submits a machine turn — the same wake path as an idle wait firing.
+func (a *Agent) drainOrphanedSteers() {
+	for _, s := range a.drainPending() {
+		if a.waitReg != nil && a.waitReg.OnWake != nil {
+			a.waitReg.OnWake(s.text)
 		}
 	}
 }
