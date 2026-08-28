@@ -3,6 +3,9 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -81,4 +84,74 @@ func TestStartBackgroundSlugID(t *testing.T) {
 	if !strings.HasPrefix(task.ID, "survey-context-growth-in-codex-") {
 		t.Fatalf("task id should be a description slug, got %q", task.ID)
 	}
+}
+
+// A background subagent registers in the task registry (dock row + badge via
+// OnChange) BEFORE worktree provisioning runs — the synchronous git call must
+// not delay the visible spawn signal. With isolation on, the provisioned path
+// is steered into the already-live task.
+func TestBackgroundWorktreeRegistersBeforeProvisioning(t *testing.T) {
+	if os.Getenv("WHIP_SKIP_WORKTREE_TEST") == "1" {
+		t.Skip("skipped via WHIP_SKIP_WORKTREE_TEST")
+	}
+	ctx := context.Background()
+	repo := t.TempDir()
+	git := func(args ...string) {
+		t.Helper()
+		cmd := exec.CommandContext(ctx, "git", args...)
+		cmd.Dir = repo
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	git("init")
+	git("config", "user.email", "t@t")
+	git("config", "user.name", "t")
+	if err := os.WriteFile(filepath.Join(repo, "f.txt"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	git("add", ".")
+	git("commit", "-m", "init")
+	t.Chdir(repo)
+
+	srv, _ := modelRecorder(t, "done")
+	defer srv.Close()
+	ag := New(llm.New(srv.URL, "k"), "m", 100, "sys")
+	ag.WorktreeSubagents = true
+
+	// The registry must see the task before the tool call returns — and the
+	// worktree path is delivered by steering the live subagent, not by baking
+	// it into the initial prompt.
+	out, err := findTool(t, ag, "subagent").Run(ctx, json.RawMessage(`{"prompt":"go","background":true}`))
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	tasks := ag.Tasks().List()
+	if len(tasks) != 1 {
+		t.Fatalf("expected the task registered before the call returned, got %d", len(tasks))
+	}
+	if !strings.Contains(out, "worktree") {
+		t.Fatalf("with isolation on, the result should name the worktree: %q", out)
+	}
+	// The worktree instruction reaches the subagent: queued on its pending
+	// list (drained at its first loop boundary) rather than a mid-run steer
+	// that a fast-settling task would lose. Depending on timing it's either
+	// still pending or already delivered to Messages — both prove delivery.
+	sub := tasks[0].sub
+	<-tasks[0].Done // settle so pending drains deterministically
+	found := false
+	for _, msg := range sub.Messages {
+		if msg.Role == "user" && strings.Contains(msg.Content, "git worktree at") {
+			found = true
+		}
+	}
+	for _, p := range sub.PendingSteers() {
+		if strings.Contains(p, "git worktree at") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("worktree path should reach the subagent (queued or delivered)")
+	}
+	ag.Tasks().Cancel(tasks[0].ID)
 }

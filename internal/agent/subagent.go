@@ -105,24 +105,27 @@ func taskTool(parent *Agent) tools.Tool {
 			if a.Worktree != nil {
 				useWorktree = *a.Worktree
 			}
-			wtPath := ""
-			if a.Background && useWorktree {
-				if p, err := provisionSubagentWorktree(ctx, "sub"); err == nil {
-					wtPath = p
-				}
-				// ponytail: on any failure (not a repo, git missing, branch
-				// clash) fall back to the shared cwd rather than failing the
-				// dispatch — isolation is best-effort.
-			}
 			prompt := a.Prompt
-			if wtPath != "" {
-				prompt = "Work entirely inside the git worktree at " + wtPath + " (run `cd " + wtPath + "` first; it is your own branch, isolated from other agents). Commit your changes there.\n\n" + prompt
-			}
 
 			if a.Background {
+				// Register the task FIRST: StartBackground fires OnChange,
+				// which puts the row in the dock and bumps the ⚙ badge —
+				// before worktree provisioning (a synchronous git call that
+				// would otherwise delay the visible signal). The worktree path,
+				// when used, is steered into the already-live subagent below.
 				t := parent.StartBackground(desc, prompt, o)
-				if wtPath != "" {
-					return fmt.Sprintf("Started background subagent %s in worktree %s: %s. Its edits are isolated from your working tree. Do not poll for it.", t.ID, wtPath, desc), nil
+				if useWorktree {
+					if p, err := provisionSubagentWorktree(ctx, t.ID); err == nil {
+						// Queue the worktree instruction on the subagent's pending
+						// list (drained at its first loop boundary), not a mid-run
+						// SteerTask — the task's turn may complete before this Run
+						// returns, and a steer to a settled task is silently lost.
+						t.sub.Steer("Work entirely inside the git worktree at " + p + " (run `cd " + p + "` first; it is your own branch, isolated from other agents). Commit your changes there.")
+						return fmt.Sprintf("Started background subagent %s in worktree %s: %s. Its edits are isolated from your working tree. Do not poll for it.", t.ID, p, desc), nil
+					}
+					// ponytail: on any failure (not a repo, git missing, branch
+					// clash) fall back to the shared cwd rather than failing the
+					// dispatch — isolation is best-effort.
 				}
 				return fmt.Sprintf("Started background subagent %s: %s. Keep working on something else; the report will arrive as a message when it finishes. Do not poll for it.", t.ID, desc), nil
 			}
