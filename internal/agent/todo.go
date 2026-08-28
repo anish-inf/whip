@@ -66,6 +66,12 @@ func (a *Agent) setTodos(items []Todo) (int, error) {
 		return 0, fmt.Errorf("keep exactly one item in_progress (%d given)", inProgress)
 	}
 	a.Todos = items
+	a.todosMu.Lock()
+	fn := a.onTodos
+	a.todosMu.Unlock()
+	if fn != nil {
+		fn(append([]Todo(nil), items...))
+	}
 	return open, nil
 }
 

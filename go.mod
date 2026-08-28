@@ -11,6 +11,7 @@ require (
 	github.com/charmbracelet/x/ansi v0.11.8
 	github.com/chromedp/cdproto v0.0.0-20260714215040-dc233986426f
 	github.com/chromedp/chromedp v0.16.0
+	github.com/coder/acp-go-sdk v0.13.5
 	github.com/creack/pty v1.1.24
 	github.com/go-rod/rod v0.116.2
 	github.com/gobwas/ws v1.4.0

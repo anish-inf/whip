@@ -96,7 +96,7 @@ func runCLI(args []string) error {
 
 	// System prompt: -system-file wins over -system (a file is the deliberate
 	// choice; a stray -system alongside it is almost certainly stale).
-	sys := systemPrompt()
+	sys := systemPrompt(cwd())
 	if *systemFlag != "" {
 		sys = *systemFlag
 	}

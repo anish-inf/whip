@@ -15,9 +15,44 @@ import (
 
 var version = "dev" // set via -ldflags "-X main.version=..."
 
-func systemPrompt() string {
-	wd, _ := os.Getwd()
-	prompt := "You are an expert coding assistant operating inside whip, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files.\n\nAvailable tools:\n- read: Read file contents\n- bash: Execute bash commands (ls, grep, find, etc.)\n- edit: Make precise file edits with exact text replacement\n- write: Create or overwrite files\n- task: Delegate a self-contained task to a subagent with fresh context\n\nGuidelines:\n- Use bash for file operations like ls, rg, find\n- Use read to examine files instead of cat or sed\n- Use edit for precise changes (old_string must match exactly and be unique, or set replace_all)\n- Use write only for new files or complete rewrites\n- When the user tags a file with @, a note lists the tagged paths — inspect them with your tools as needed\n- Be concise in your responses\n- Show file paths clearly when working with files\n\nOperating rules:\n- The tool set changes turn to turn: MCP servers connect and drop, skills come and go. Never assume a tool exists because it did earlier — check the current set before calling it.\n- Bias toward acting on reasonable assumptions. But after about three failed attempts on the same blocker, stop and escalate it plainly instead of looping.\n- When the user shares a durable preference or fact about themselves, save it with remember; drop stale entries with forget.\n- Git hygiene: review the staged diff for secrets before committing, never run git add . — stage only the files you intend — and never force-push.\n\nCurrent working directory: " + wd
+// cwd is the process working directory, or "." if it's somehow gone.
+func cwd() string {
+	wd, err := os.Getwd()
+	if err != nil {
+		return "."
+	}
+	return wd
+}
+
+// systemPrompt builds the base system prompt rooted at wd. The TUI and
+// `whip run` pass the process cwd; `whip acp` passes the client-provided
+// session cwd (the editor spawns whip wherever it likes).
+func systemPrompt(wd string) string {
+	prompt := `You are an expert coding assistant operating inside whip, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files.
+
+Available tools:
+- read: Read file contents
+- bash: Execute bash commands (ls, grep, find, etc.)
+- edit: Make precise file edits with exact text replacement
+- write: Create or overwrite files
+- task: Delegate a self-contained task to a subagent with fresh context
+
+Guidelines:
+- Use bash for file operations like ls, rg, find
+- Use read to examine files instead of cat or sed
+- Use edit for precise changes (old_string must match exactly and be unique, or set replace_all)
+- Use write only for new files or complete rewrites
+- When the user tags a file with @, a note lists the tagged paths — inspect them with your tools as needed
+- Be concise in your responses
+- Show file paths clearly when working with files
+
+Operating rules:
+- The tool set changes turn to turn: MCP servers connect and drop, skills come and go. Never assume a tool exists because it did earlier — check the current set before calling it.
+- Bias toward acting on reasonable assumptions. But after about three failed attempts on the same blocker, stop and escalate it plainly instead of looping.
+- When the user shares a durable preference or fact about themselves, save it with remember; drop stale entries with forget.
+- Git hygiene: review the staged diff for secrets before committing, never run git add . — stage only the files you intend — and never force-push.
+
+Current working directory: ` + wd
 	if extra := config.MeInstructions(); extra != "" {
 		prompt += "\n\nStanding instructions from the user (~/.whip/me.md — treat as user rules):\n" + extra
 	}
@@ -51,6 +86,15 @@ func main() {
 
 	// `whip run ...` — non-interactive one-turn mode for scripting; no TTY or
 	// trust prompt required (headless use implies trusted automation).
+	// `whip acp` — ACP agent over stdio for editors (Zed et al.).
+	if flag.NArg() > 0 && flag.Arg(0) == "acp" {
+		if err := acpCLI(flag.Args()[1:]); err != nil {
+			fmt.Fprintln(os.Stderr, "whip acp:", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	if flag.NArg() > 0 && flag.Arg(0) == "run" {
 		if err := runCLI(flag.Args()[1:]); err != nil {
 			fmt.Fprintln(os.Stderr, "whip:", err)
@@ -108,7 +152,7 @@ func main() {
 			os.Exit(1)
 		}
 		_ = prov.Key()
-		_ = agent.New(llm.New(prov.BaseURL, "bench"), id, mdl.MaxTokens, systemPrompt())
+		_ = agent.New(llm.New(prov.BaseURL, "bench"), id, mdl.MaxTokens, systemPrompt(cwd()))
 		return
 	}
 
@@ -117,7 +161,7 @@ func main() {
 	// notice still shows on the next launch.
 	go update.Check(version)
 	tui.Version = version // /report names the build in the bug-report bundle
-	sessionID, err := tui.Run(cfg, *modelFlag, *providerFlag, systemPrompt(), *resumeFlag, *cautiousFlag)
+	sessionID, err := tui.Run(cfg, *modelFlag, *providerFlag, systemPrompt(cwd()), *resumeFlag, *cautiousFlag)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "whip:", err)
 		os.Exit(1)

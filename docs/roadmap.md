@@ -133,6 +133,7 @@ Improvement plan with per-item checkboxes: [`.ai-docs/plans/mcp-polish/`](../.ai
 ## CLI surface
 
 - [x] Non-interactive one-shot mode: `whip run "prompt"` — reads piped stdin too, `--format json` emits the raw event stream for scripting (opencode `cli/cmd/run.ts`)
+- [x] ACP agent mode: `whip acp` serves the Agent Client Protocol over stdio (v1, via `github.com/coder/acp-go-sdk`) so editors like Zed drive whip as a subprocess agent — initialize/session new+load+list/prompt (busy-error mid-turn)/cancel/set_mode, streaming chunks + tool cards (with diffs) + plan/usage/title updates, permission prompts bridged from `tools.Gate` in `ask` mode, sessions persisted to the same SQLite store the TUI resumes. Plan: [`.ai-docs/plans/acp/`](../.ai-docs/plans/acp/README.md)
 - [x] `whip sessions` list subcommand
 - [x] Env markers in child processes (`WHIP=1`, `WHIP_SESSION_ID`) so scripts can detect they run under the agent (opencode sets `AGENT=1`, `OPENCODE_PID`)
 
