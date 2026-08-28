@@ -117,8 +117,8 @@ func TestBuildAgentWithRefreshStillErrorsForUnknownModel(t *testing.T) {
 	}
 
 	_, _, _, err := buildAgentWithRefresh(cfg, "", "", "")
-	var unknown *config.UnknownModelError
-	if !errors.As(err, &unknown) {
+	_, ok := errors.AsType[*config.UnknownModelError](err)
+	if !ok {
 		t.Fatalf("persistent miss should surface the original typed error, got %T (%v)", err, err)
 	}
 	if !strings.Contains(err.Error(), `unknown model "nope"`) {
