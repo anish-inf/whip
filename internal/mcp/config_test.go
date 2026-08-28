@@ -160,13 +160,20 @@ func TestMergePrecedence(t *testing.T) {
 	disabled := false
 	whip := map[string]ServerConfig{"a": {Command: []string{"whip-a"}}, "b": {Enabled: &disabled, Command: []string{"whip-b"}}}
 	codex := map[string]ServerConfig{"a": {Command: []string{"codex-a"}}, "c": {Command: []string{"codex-c"}}}
-	claude := map[string]ServerConfig{"a": {Command: []string{"claude-a"}}, "c": {Command: []string{"claude-c"}}}
-	m := Merge(whip, codex, claude)
+	claude := map[string]ServerConfig{"a": {Command: []string{"claude-a"}}, "c": {Command: []string{"claude-c"}}, "d": {Command: []string{"claude-d"}}}
+	global := map[string]ServerConfig{"a": {Command: []string{"global-a"}}, "d": {Command: []string{"global-d"}}, "e": {Command: []string{"global-e"}}}
+	m := Merge(whip, codex, claude, global)
 	if m["a"].Command[0] != "whip-a" {
 		t.Error("whip config must win over codex and claude")
 	}
 	if m["c"].Command[0] != "codex-c" {
 		t.Error("codex must win over claude")
+	}
+	if m["d"].Command[0] != "claude-d" {
+		t.Error("project .mcp.json must win over global ~/.claude.json")
+	}
+	if m["e"].Command[0] != "global-e" {
+		t.Error("global-only entry should survive")
 	}
 	if !m["b"].Disabled() {
 		t.Error("whip-only entry should survive with enabled=false")
@@ -185,6 +192,9 @@ func TestLoadMergedDiscovery(t *testing.T) {
 	orig := CodexPath
 	CodexPath = func() string { return codexFile }
 	defer func() { CodexPath = orig }()
+	origG := ClaudeGlobalPath
+	ClaudeGlobalPath = func() string { return filepath.Join(dir, "absent-claude.json") }
+	defer func() { ClaudeGlobalPath = origG }()
 
 	merged, errs := LoadMerged(dir, map[string]ServerConfig{"mine": {Command: []string{"my-srv"}}})
 	if len(errs) != 0 {
@@ -201,11 +211,59 @@ func TestLoadMergedDiscovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	merged, errs = LoadMerged(dir, nil)
-	if _, ok := errs[".mcp.json"]; !ok {
-		t.Error("expected a parse error for .mcp.json")
+	if _, ok := errs[filepath.Join(dir, ".mcp.json")]; !ok {
+		t.Errorf("expected a parse error for .mcp.json, got %v", errs)
 	}
 	if _, ok := merged["cdx"]; !ok {
 		t.Error("codex servers should still merge when .mcp.json is broken")
+	}
+}
+
+// TestLoadMergedGlobalClaude covers the user's scenario: a server defined only
+// in the global ~/.claude.json mcpServers (e.g. a remote with env-expanded
+// headers) is discovered and merged, with the project .mcp.json winning on a
+// name conflict.
+func TestLoadMergedGlobalClaude(t *testing.T) {
+	t.Setenv("OFFICE_SESSION_NAME", "sess-123")
+	dir := t.TempDir()
+	globalFile := filepath.Join(dir, "claude.json")
+	if err := os.WriteFile(globalFile, []byte(`{
+		"mcpServers": {
+			"inf-memory": {"type": "http", "url": "http://inf-development-office/api/mcp",
+				"headers": {"X-Office-Session": "${OFFICE_SESSION_NAME:-}"}},
+			"shared": {"command": "global-srv"}
+		}
+	}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte(
+		`{"mcpServers": {"shared": {"command": "proj-srv"}}}`,
+	), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	origG := ClaudeGlobalPath
+	ClaudeGlobalPath = func() string { return globalFile }
+	defer func() { ClaudeGlobalPath = origG }()
+	orig := CodexPath
+	CodexPath = func() string { return filepath.Join(dir, "absent-codex.toml") }
+	defer func() { CodexPath = orig }()
+
+	merged, errs := LoadMerged(dir, nil)
+	if len(errs) != 0 {
+		t.Fatalf("unexpected discovery errors: %v", errs)
+	}
+	mem, ok := merged["inf-memory"]
+	if !ok {
+		t.Fatal("global ~/.claude.json server should be discovered")
+	}
+	if !mem.Remote() || mem.Headers["X-Office-Session"] != "sess-123" {
+		t.Errorf("inf-memory should be remote with env-expanded header, got %+v", mem)
+	}
+	if got := merged["shared"].Command[0]; got != "proj-srv" {
+		t.Errorf("project .mcp.json must win over global on conflict, got %q", got)
+	}
+	if got := merged["inf-memory"].Source; got != globalFile {
+		t.Errorf("inf-memory.Source = %q, want %q", got, globalFile)
 	}
 }
 
@@ -229,6 +287,9 @@ func TestLoadMergedFilteredPolicy(t *testing.T) {
 	orig := CodexPath
 	CodexPath = func() string { return codexFile }
 	defer func() { CodexPath = orig }()
+	origG := ClaudeGlobalPath
+	ClaudeGlobalPath = func() string { return filepath.Join(dir, "absent-claude.json") }
+	defer func() { ClaudeGlobalPath = origG }()
 
 	// The node_repl scenario: codex source on, node_repl excluded.
 	policy := ImportPolicy{Codex: ImportSourcePolicy{
@@ -325,6 +386,9 @@ func TestManagerFromBlockedDiscovery(t *testing.T) {
 	orig := CodexPath
 	CodexPath = func() string { return codexFile }
 	defer func() { CodexPath = orig }()
+	origG := ClaudeGlobalPath
+	ClaudeGlobalPath = func() string { return filepath.Join(dir, "absent-claude.json") }
+	defer func() { ClaudeGlobalPath = origG }()
 
 	f := LoadMergedFiltered(dir, nil, ImportPolicyFrom(&config.MCPImport{
 		Codex: &config.MCPImportSource{Exclude: []string{"node_repl"}},
@@ -360,6 +424,9 @@ func TestManagerStatusSource(t *testing.T) {
 	orig := CodexPath
 	CodexPath = func() string { return codexFile }
 	defer func() { CodexPath = orig }()
+	origG := ClaudeGlobalPath
+	ClaudeGlobalPath = func() string { return filepath.Join(dir, "absent-claude.json") }
+	defer func() { ClaudeGlobalPath = origG }()
 	f := LoadMergedFiltered(dir, nil, ImportPolicyFrom(nil))
 	mgr := NewManager(f.Merged)
 	sts := mgr.Statuses()

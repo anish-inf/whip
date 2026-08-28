@@ -37,6 +37,10 @@ func importFixture(t *testing.T, mcpImport string) (wd string) {
 	orig := mcp.CodexPath
 	mcp.CodexPath = func() string { return codexFile }
 	t.Cleanup(func() { mcp.CodexPath = orig })
+	// Isolate discovery from the developer's real global ~/.claude.json.
+	origG := mcp.ClaudeGlobalPath
+	mcp.ClaudeGlobalPath = func() string { return filepath.Join(wd, "absent-claude.json") }
+	t.Cleanup(func() { mcp.ClaudeGlobalPath = origG })
 	return wd
 }
 
