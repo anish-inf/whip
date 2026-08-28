@@ -393,3 +393,18 @@ func TestQueueRendersOneLineEach(t *testing.T) {
 		}
 	}
 }
+
+// The input placeholder reflects the busy routing: while busy with ordinary
+// tools the hint says "queue"; a turn blocked only on subagents says "steer".
+func TestBusyPlaceholderReflectsRouting(t *testing.T) {
+	m := busyQueueModel()
+	m.syncInputPlaceholder()
+	if !strings.Contains(m.input.Placeholder, "queue") {
+		t.Fatalf("busy (not waiting on subagents) placeholder = %q", m.input.Placeholder)
+	}
+	m.busy = false
+	m.syncInputPlaceholder()
+	if !strings.HasPrefix(m.input.Placeholder, "Ask whip") {
+		t.Fatalf("idle placeholder should restore the default, got %q", m.input.Placeholder)
+	}
+}

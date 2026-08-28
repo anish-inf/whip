@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/context-labs/whip/internal/llm"
@@ -97,6 +99,7 @@ type Agent struct {
 	mu        sync.Mutex
 	pending   []pendingSteer // steered user messages awaiting injection
 	compacted bool           // a compaction already happened this turn — don't retry-loop
+	running   atomic.Bool    // a turn is in flight (wait delivery routes on it)
 
 	// msgsMu guards Messages for concurrent READERS: the turn goroutine
 	// mutates Messages freely, but a test/UI reader taking msgsMu sees a
@@ -105,6 +108,13 @@ type Agent struct {
 
 	files *fileLocks // per-path mutation locks for parallel tool calls
 	bg    *taskRegistry
+
+	// inflightTools counts currently-executing tool calls by name (incremented
+	// in runTools after the mutation lock is acquired, decremented at tool
+	// end). Read by WaitingOnSubagents to let the TUI steer the user's typed
+	// input into a turn that is only blocked on subagents, rather than
+	// queueing it behind the whole turn.
+	inflightTools sync.Map // map[string]*atomic.Int64
 
 	// Todos is the todowrite plan, rewritten in full by the model and
 	// injected per round. Like Messages, it is only mutated by the turn
@@ -135,6 +145,11 @@ type Agent struct {
 	usageMu sync.Mutex
 	usage   llm.Usage // session totals across every API call (PromptTokens = input)
 }
+
+// TurnRunning reports whether a turn is currently in flight. The wait
+// registry routes delivery on it: busy → Steer (drained at the next loop
+// boundary), idle → the OnWake hook (a parked steer would never be seen).
+func (a *Agent) TurnRunning() bool { return a.running.Load() }
 
 // Steer queues a user message for injection at the next loop boundary of the
 // running turn — after the in-flight response and its tool calls complete,
@@ -334,6 +349,8 @@ func (a *Agent) turn(ctx context.Context, input string, parts []llm.ContentPart,
 	if n := a.decay(); n > 0 && ev.OnDecay != nil {
 		ev.OnDecay(n)
 	}
+	a.running.Store(true)
+	defer a.running.Store(false)
 	msg := llm.Message{Role: "user", Content: input, Parts: parts, Authored: authored}
 	if authored {
 		now := time.Now()
@@ -438,6 +455,45 @@ func (a *Agent) turn(ctx context.Context, input string, parts []llm.ContentPart,
 	}
 }
 
+// trackTool adjusts the in-flight count for a tool name.
+func (a *Agent) trackTool(name string, delta int64) {
+	v, _ := a.inflightTools.LoadOrStore(name, &atomic.Int64{})
+	v.(*atomic.Int64).Add(delta)
+}
+
+// InFlightTools returns the sorted names of tools currently executing.
+func (a *Agent) InFlightTools() []string {
+	var out []string
+	a.inflightTools.Range(func(k, v any) bool {
+		if v.(*atomic.Int64).Load() > 0 {
+			out = append(out, k.(string))
+		}
+		return true
+	})
+	slices.Sort(out)
+	return out
+}
+
+// WaitingOnSubagents reports whether a turn is running and its only in-flight
+// work is subagent calls — the model is blocked waiting on them, so a user
+// message can be steered in as a mid-turn correction instead of queued behind
+// the whole turn (it isn't an interruption if the agent is just waiting).
+func (a *Agent) WaitingOnSubagents() bool {
+	if !a.TurnRunning() {
+		return false
+	}
+	names := a.InFlightTools()
+	if len(names) == 0 {
+		return false // mid-generation, no tools yet — not "waiting on subagents"
+	}
+	for _, n := range names {
+		if n != "subagent" {
+			return false
+		}
+	}
+	return true
+}
+
 // runTools executes a batch of tool calls concurrently, returning one result
 // per call in the original order (the API matches tool results to call IDs, so
 // order must be preserved even though execution is parallel). This is the
@@ -484,6 +540,8 @@ func (a *Agent) runTools(ctx context.Context, calls []llm.ToolCall, ev Events) [
 			if ev.OnToolStart != nil {
 				ev.OnToolStart(tc.ID, name, args)
 			}
+			a.trackTool(name, 1)
+			defer a.trackTool(name, -1)
 			start := time.Now()
 			callCtx := ctx
 			if ev.OnToolOutput != nil && name == "bash" {
