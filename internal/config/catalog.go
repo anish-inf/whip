@@ -92,6 +92,25 @@ func (c Catalog) Find(id string) *ModelInfoLite {
 	return nil
 }
 
+// Efforts returns the reasoning-effort levels available for a model id, in
+// provider order and prefixed by "" (off): ["", "low", "medium", "high", …].
+// "" is the only entry (i.e. the model doesn't reason) when the catalog has no
+// entry for the model or the entry advertises no efforts. A "none" effort is
+// collapsed into the leading off ("").
+func (c Catalog) Efforts(id string) []string {
+	mi := c.Find(id)
+	if mi == nil || len(mi.ReasoningEfforts) == 0 {
+		return []string{""}
+	}
+	out := []string{""}
+	for _, e := range mi.ReasoningEfforts {
+		if e != "none" { // "none" is our off ("")
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
 func catalogPath() (string, error) {
 	dir, err := Dir()
 	if err != nil {

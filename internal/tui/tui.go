@@ -294,12 +294,11 @@ func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string, ca
 
 	ti := newInput()
 
-	// default on: "" (config never set / pre-feature file) means medium, not
-	// off; an explicit "off" in the file is honored
-	ag.Effort = cfg.DefaultEffort
-	if ag.Effort == "" {
-		ag.Effort = "medium"
-	}
+	// Reasoning effort: an explicit cfg.DefaultEffort is honored as-is; "" (no
+	// config / pre-feature file) resolves model-aware — "low" when the model
+	// advertises it, else the lowest supported level, else off (no parameter) —
+	// so a non-reasoning model never opens on an effort it can't accept.
+	ag.Effort = DefaultEffortFor(config.LoadCatalogs(), pn, ag.Model, cfg.DefaultEffort)
 	// Mouse capture ON by default so the wheel scrolls the transcript viewport
 	// and ⚡/tool clicks work — with button-motion reporting (?1002) so a left
 	// drag becomes whip's own selection (select.go): enabling click reporting

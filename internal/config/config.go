@@ -165,7 +165,7 @@ const DefaultCompactPct = 50
 type Config struct {
 	DefaultModel    string `json:"defaultModel"`
 	DefaultProvider string `json:"defaultProvider,omitempty"` // override the model's first provider
-	DefaultEffort   string `json:"defaultEffort,omitempty"`   // reasoning effort for new sessions: "", "low", "medium", "high"
+	DefaultEffort   string `json:"defaultEffort,omitempty"`   // reasoning effort for new sessions: "" defaults to "low"; "off", "low", "medium", "high"
 	CompactModel    string `json:"compactModel,omitempty"`    // model for compaction summaries; "" = the built-in default
 	CompactProvider string `json:"compactProvider,omitempty"` // provider for the compaction model; "" = the model's default routing
 	CompactPct      int    `json:"compactPct,omitempty"`      // compact at this % of the context window; 0 = DefaultCompactPct
