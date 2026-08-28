@@ -27,8 +27,10 @@ func TestJournalRecordsEmittedEvents(t *testing.T) {
 		kinds = append(kinds, e.Kind)
 	}
 	// fire emits: text "t", think (not journaled), start, call (not
-	// journaled — args deltas), end, steer, compact.
-	want := []int{0, 1, 2, 3, 4}
+	// journaled — args deltas), end, steer, compact (not journaled — kind 4
+	// is follow-up-settled in the TUI, and replaying a compact would render
+	// it as an error).
+	want := []int{0, 1, 2, 3}
 	if fmt.Sprint(kinds) != fmt.Sprint(want) {
 		t.Fatalf("journal kinds = %v, want %v", kinds, want)
 	}
@@ -156,8 +158,8 @@ func TestJournalSurvivesSettleUntilCleared(t *testing.T) {
 	if ok {
 		t.Fatal("a settled task must not report live")
 	}
-	if len(events) != 5 {
-		t.Fatalf("settled task journal = %d events, want 5", len(events))
+	if len(events) != 4 {
+		t.Fatalf("settled task journal = %d events, want 4 (text, tool start, tool end, steer)", len(events))
 	}
 
 	r.ClearSettled()

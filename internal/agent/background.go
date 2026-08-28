@@ -358,18 +358,39 @@ func (r *taskRegistry) SubscribeWithJournal(id string, ev Events) (events []Jour
 	return events, truncated, true
 }
 
-// record appends one event to the task's journal. Called from emitter
-// callbacks (the subagent worker goroutine) under the registry lock; the
-// journal map entry is created on first event.
-func (r *taskRegistry) record(id string, kind int, s, s2 string) {
+// emitter returns an Events that journals every callback and forwards it to
+// the task's current subscribers (the TUI's per-task view). Subscriber
+// callbacks run on the worker goroutine, so they must be cheap and
+// non-blocking. Tool calls stream in as args deltas (OnToolCall); only the
+// start (kind 1) and end (kind 2) are journaled — the deltas would fill the
+// emitLocked folds the journal append and the subscriber snapshot into a
+// single registry lock hold so an event can never be both replayed from the
+// journal AND delivered live to the same view: a SubscribeWithJournal that
+// runs before emitLocked sees the event in the journal (and the subscriber
+// isn't registered yet, so it's not in the snapshot); one that runs after
+// finds the event already journaled and the subscriber registered for the
+// NEXT event. The two-orderings-are-exhaustive property is what makes the
+// replay→live seam neither drop nor double an event.
+//
+// Callbacks run AFTER the lock is released (the snapshot is taken under it):
+// subscribers are allowed to block (the TUI's task view funnels events
+// through prog.Send, which parks when the UI event queue backs up), and a
+// blocked callback must never hold mu hostage — the UI goroutine itself takes
+// mu via List/Get when rendering the dock, so running a blocking callback
+// under the lock is an ABBA deadlock (worker holds mu → waits on the UI
+// queue; UI waits on mu).
+func (r *taskRegistry) emitLocked(id string, kind int, s, s2 string, journaled bool) []Events {
 	r.mu.Lock()
-	j := r.journals[id]
-	if j == nil {
-		j = &taskJournal{}
-		r.journals[id] = j
+	defer r.mu.Unlock()
+	if journaled {
+		j := r.journals[id]
+		if j == nil {
+			j = &taskJournal{}
+			r.journals[id] = j
+		}
+		j.append(kind, s, s2)
 	}
-	j.append(kind, s, s2)
-	r.mu.Unlock()
+	return append([]Events(nil), r.subs[id]...)
 }
 
 // emitter returns an Events that journals every callback and forwards it to
@@ -377,81 +398,66 @@ func (r *taskRegistry) record(id string, kind int, s, s2 string) {
 // callbacks run on the worker goroutine, so they must be cheap and
 // non-blocking. Tool calls stream in as args deltas (OnToolCall); only the
 // start (kind 1) and end (kind 2) are journaled — the deltas would fill the
-// budget with partial JSON.
+// budget with partial JSON. Compaction is NOT journaled: kind 4 is reserved
+// for the TUI's follow-up-settled message, and replaying a compact as if it
+// were a settle would render it as an error.
 func (r *taskRegistry) emitter(id string) Events {
 	return Events{
 		OnText: func(s string) {
-			r.record(id, 0, s, "")
-			r.broadcast(id, func(e Events) {
+			subs := r.emitLocked(id, 0, s, "", true)
+			for _, e := range subs {
 				if e.OnText != nil {
 					e.OnText(s)
 				}
-			})
+			}
 		},
 		OnThink: func(s string) {
-			r.broadcast(id, func(e Events) {
+			for _, e := range r.emitLocked(id, 0, "", "", false) {
 				if e.OnThink != nil {
 					e.OnThink(s)
 				}
-			})
+			}
 		},
 		OnToolStart: func(tcID, n, a string) {
-			r.record(id, 1, n, a)
-			r.broadcast(id, func(e Events) {
+			subs := r.emitLocked(id, 1, n, a, true)
+			for _, e := range subs {
 				if e.OnToolStart != nil {
 					e.OnToolStart(tcID, n, a)
 				}
-			})
+			}
 		},
 		OnToolCall: func(tcID, n, a string) {
-			r.broadcast(id, func(e Events) {
+			for _, e := range r.emitLocked(id, 0, "", "", false) {
 				if e.OnToolCall != nil {
 					e.OnToolCall(tcID, n, a)
 				}
-			})
+			}
 		},
 		OnToolEnd: func(tcID, n, res string) {
-			r.record(id, 2, n, res)
-			r.broadcast(id, func(e Events) {
+			subs := r.emitLocked(id, 2, n, res, true)
+			for _, e := range subs {
 				if e.OnToolEnd != nil {
 					e.OnToolEnd(tcID, n, res)
 				}
-			})
+			}
 		},
 		OnSteer: func(s string) {
-			r.record(id, 3, s, "")
-			r.broadcast(id, func(e Events) {
+			subs := r.emitLocked(id, 3, s, "", true)
+			for _, e := range subs {
 				if e.OnSteer != nil {
 					e.OnSteer(s)
 				}
-			})
+			}
 		},
 		OnCompact: func(took, kept int) {
-			r.record(id, 4, fmt.Sprintf("%d→%d", took, kept), "")
-			r.broadcast(id, func(e Events) {
+			// journaled=false: kind 4 is follow-up-settled in the TUI, so a
+			// journaled compact would replay as an error line.
+			for _, e := range r.emitLocked(id, 0, "", "", false) {
 				if e.OnCompact != nil {
 					e.OnCompact(took, kept)
 				}
-			})
+			}
 		},
-	}
-}
-
-// broadcast runs a subscriber callback for each of the task's subscribers.
-// The slice is snapshotted under the registry lock, then callbacks run AFTER
-// the lock is released: subscribers are allowed to block (the TUI's task view
-// funnels events through prog.Send, which parks when the UI event queue is
-// backed up), and a blocked callback must never hold mu hostage — the UI
-// goroutine itself takes mu via List/Get when rendering the dock, so running
-// a blocking callback under the lock is an ABBA deadlock (worker holds mu →
-// waits on the UI queue; UI waits on mu). settle deletes the entry, so
-// post-settle events (there should be none) go nowhere.
-func (r *taskRegistry) broadcast(id string, call func(Events)) {
-	r.mu.Lock()
-	subs := append([]Events(nil), r.subs[id]...)
-	r.mu.Unlock()
-	for _, e := range subs {
-		call(e)
 	}
 }
 
