@@ -147,6 +147,17 @@ as a **steered message**, so the model sees it on the next loop boundary.
   The dock itself shows running tasks plus ones settled within a one-minute
   grace window (`dockSettledGrace`) — long enough to notice the ✓, then the
   strip cleans itself.
+- **Full transcript on open.** The registry journals every emitted event per
+  task (`taskJournal`, byte-capped at 128KB, drop-oldest with a "[earlier
+  output dropped]" marker). `openTask` replays the journal and subscribes to
+  the live stream as ONE atomic call (`SubscribeWithJournal`), so a detail
+  view opened mid-run or after settle shows the complete transcript — tool
+  calls, steers, and all — instead of only what streams in after attach.
+  Replay and live rendering share `renderTaskEvent` (internal/tui/tasks.go)
+  so the two paths can't drift in format. Tests: `journal_test.go`
+  (recording, delta coalescing, overflow truncation, atomicity under
+  concurrent emit, survive-settle/clear lifecycle),
+  `TestTaskViewReplaysJournal`, `TestRunningTaskViewReplaysThenStreams`.
 
 Background tasks use a context **not** tied to the current turn — they outlive
 it by design. Cancelling a task cancels its subagent's turn. `settle()`
