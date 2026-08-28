@@ -188,9 +188,7 @@ func (m *model) paletteItems() []paletteItem {
 			dynHint: func(m *model) string { return "/fork" },
 			run: func(m *model) (tea.Model, tea.Cmd) {
 				m.palette = nil
-				if !m.busy {
-					m.forkCommand("")
-				}
+				m.forkCommand("") // works mid-turn: copies now, switches at turn end
 				return m, nil
 			},
 		},

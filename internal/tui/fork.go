@@ -2,13 +2,21 @@ package tui
 
 import (
 	"fmt"
+	"slices"
 	"strings"
+
+	"github.com/context-labs/whip/internal/agent"
+	"github.com/context-labs/whip/internal/llm"
+	"github.com/context-labs/whip/internal/tools/bashrun"
 )
 
 // /fork copies the conversation (whole, or up to a rewind-picker selection)
 // into a NEW session with a chosen title and switches to it — "copy
 // conversation with new name"; the original stays untouched and /resume-able
 // (opencode's Session.fork, packages/opencode/src/session/session.ts:691).
+// Mid-turn the copy lands immediately and the switch defers to turn end
+// (busyFork/pendingForkID): the point of forking while the model works is
+// that the copy is resume-able in another whip process right away.
 // /rename retitles the current session. Both share one inline prompt: the
 // input box is repurposed with a prefixed label, enter commits, esc cancels.
 
@@ -83,8 +91,14 @@ func (m *model) openForkPrompt(cut int, picker bool, suggest ...string) {
 }
 
 // fork copies the history through conversation index cut (inclusive) into a
-// new session and switches to it.
+// new session. Mid-turn it hands off to busyFork (the turn goroutine owns
+// Agent.Messages and the session id, so only the copy happens now); idle it
+// switches to the copy immediately.
 func (m *model) fork(cut int, title string) {
+	if m.busy {
+		m.busyFork(title)
+		return
+	}
 	title = strings.TrimSpace(title)
 	if title == "" {
 		m.append(errStyle.Render("fork needs a name"))
@@ -126,6 +140,95 @@ func (m *model) fork(cut int, title string) {
 	m.saved = cut + 1
 	m.rebuildTranscript()
 	m.append(dimStyle.Render(fmt.Sprintf("⑂ forked %q → %q (%s) — the original is under /resume", oldTitle, title, newID)))
+}
+
+// busyFork copies the stored conversation into a new session NOW (the reason
+// /fork runs mid-turn: the copy is immediately resumable in another whip
+// process — whip --resume <id>) and marks it for the switch, which turnDoneMsg
+// performs once the turn goroutine stops owning Agent.Messages, the session
+// id, and the workspace snapshots. It touches none of those.
+func (m *model) busyFork(title string) {
+	title = strings.TrimSpace(title)
+	if title == "" {
+		m.append(errStyle.Render("fork needs a name"))
+		return
+	}
+	if m.sessionID == "" { // nothing persisted yet — nothing to copy
+		m.append(dimStyle.Render("(nothing to fork yet — the first turn hasn't been saved; /fork again after this turn)"))
+		return
+	}
+	if m.pendingForkID != "" {
+		m.append(dimStyle.Render("(already forked — switching to the copy when this turn ends)"))
+		return
+	}
+	oldTitle := m.sessionID
+	if meta, _, err := m.store.Load(m.sessionID); err == nil && meta.Title != "" {
+		oldTitle = meta.Title
+	}
+	// Full copy: the stored rows run through the last completed exchange
+	// (mid-turn appends live only in the turn goroutine's Messages until the
+	// turn persists), so no cut applies.
+	newID, err := m.store.Fork(m.sessionID, 1<<30, title)
+	if err != nil {
+		m.append(errStyle.Render("fork failed: " + err.Error()))
+		return
+	}
+	m.pendingForkID = newID
+	m.append(dimStyle.Render(fmt.Sprintf("⑂ forked %q → %q (%s) — open it in another session now: whip --resume %s · whip switches to the copy when this turn ends", oldTitle, title, newID, newID)))
+}
+
+// switchToForked moves the live conversation onto the fork created mid-turn.
+// The turn has ended (final persist and snapshot bookkeeping are done), so
+// rebuilding the agent from the copy is safe; the original keeps the
+// finished turn and survives untouched under /resume. Modeled on resume(),
+// minus cross-session restores that don't cross a fork (task dock, todos,
+// snapshots stay; the fork's workspace IS the current one).
+func (m *model) switchToForked(id string) {
+	meta, msgs, err := m.store.Load(id)
+	if err != nil {
+		m.append(errStyle.Render("fork switch failed: " + err.Error()))
+		return
+	}
+	m.flushThink()
+	m.flushCurrent()
+	m.queue, m.queueSel = nil, -1 // queued lines name the old conversation
+	m.future = nil                // the copy's branch point is its tail; no redo across
+	oldID := m.sessionID
+	// Prefer the session's model/provider; fall back to the current agent.
+	if ag, mn, pn, err := buildAgent(m.cfg, meta.Model, meta.Provider, m.sysPrompt); err == nil {
+		m.agent, m.modelName, m.provName = ag, mn, pn
+	} else {
+		m.agent = agent.New(m.agent.Client, m.agent.Model, m.agent.MaxTokens, m.sysPrompt)
+		m.agent.ModelName, m.agent.Provider = m.modelName, m.provName
+		m.agent.ContextLimit = m.contextLimitFor(m.provName, m.agent.Model)
+	}
+	m.applyCompactModel()
+	m.applyTaskModel()
+	m.agent.CompactThreshold = compactThresholdFor(m.cfg)
+	m.wireTasks() // also publishes the new session id for task records
+	// The fork's effort column carried over from the source; "" means the row
+	// pre-dates per-session effort — keep the agent's current default then.
+	if meta.Effort != "" && slices.Contains(m.effortsFor(), meta.Effort) {
+		m.agent.Effort = meta.Effort
+	}
+	if meta.UsageIn > 0 || meta.UsageOut > 0 {
+		u := llm.Usage{PromptTokens: meta.UsageIn, CompletionTokens: meta.UsageOut}
+		if meta.UsageCached > 0 {
+			u.PromptTokensDetails = &struct {
+				CachedTokens int `json:"cached_tokens"`
+			}{CachedTokens: meta.UsageCached}
+		}
+		m.agent.SetUsage(u)
+	}
+	m.sessionID = meta.ID
+	bashrun.SetMarkers(meta.ID, m.agent.Model)
+	m.agent.Messages = append(m.agent.Messages, msgs...)
+	m.saved = len(m.agent.Messages)
+	m.goal = meta.Goal
+	m.goalRounds = 0
+	m.titled = true // the fork was named at creation; no auto-title attempt
+	m.rebuildTranscript()
+	m.append(dimStyle.Render(fmt.Sprintf("⑂ switched to the fork %q (%s) — the original %s kept the finished turn and is under /resume", meta.Title, meta.ID, oldID)))
 }
 
 // renameCommand implements /rename [title].

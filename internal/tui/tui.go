@@ -172,6 +172,8 @@ type model struct {
 	goalRounds int    // continuation turns spent on the current goal
 	titled     bool   // an auto-title has been attempted for this session
 
+	pendingForkID string // busy-forked copy awaiting the turn's end to switch into ("" = none)
+
 	mouseOn      bool       // runtime mouse-capture state (toggle with /mouse)
 	sel          *selection // in-flight/last drag selection over the transcript
 	selDragX     int        // last drag pointer position (edge auto-scroll re-checks it)
@@ -1948,6 +1950,15 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				_ = m.store.SetSnapshot(m.sessionID, msg.at, msg.snap)
 			}
 		}
+		// A mid-turn /fork: the copy landed when the command ran; now that the
+		// turn (and its persist) is done, move the live window onto the copy.
+		// This precedes the queue drain and goal loop so any follow-up turns
+		// continue inside the fork, not the abandoned original.
+		if m.pendingForkID != "" {
+			m.switchToForked(m.pendingForkID)
+			m.pendingForkID = ""
+			return m, nil
+		}
 		// codex-style follow-up: send queued messages one turn at a time;
 		// `!` shell escapes execute locally instead of starting a turn.
 		// A canceled turn also drains the queue: the empty-enter steer path
@@ -3335,14 +3346,16 @@ func (m *model) submitTurn(text string, authored bool) (tea.Model, tea.Cmd) {
 // flight. These adjust settings or views only — they never touch
 // Agent.Messages, busy, or the session — so they run immediately instead of
 // being queued as messages (queued text is submitted to the model verbatim
-// after the turn ends).
+// after the turn ends). /fork is the exception: it DOES touch the session,
+// but only through a fresh copy (busyFork) — it never mutates the in-flight
+// conversation, so it runs immediately too.
 func busyCmd(text string) bool {
 	fields := strings.Fields(text)
 	if len(fields) == 0 {
 		return false
 	}
 	switch fields[0] {
-	case "/help", "/theme", "/mouse", "/effort", "/subagents", "/tasks", "/subagent", "/cd", "/pwd", "/report", "/export":
+	case "/help", "/theme", "/mouse", "/effort", "/subagents", "/tasks", "/subagent", "/cd", "/pwd", "/report", "/export", "/fork":
 		return true
 	case "/auth": // must run now even while busy: an inline key queued as a chat message would be sent to the model
 		return true
@@ -3589,10 +3602,9 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 			return m.submit(goal)
 		}
 	case "/fork":
-		if m.busy {
-			m.append(dimStyle.Render("(busy — /fork after this turn)"))
-			return m, nil
-		}
+		// No busy guard: mid-turn /fork creates the copy right away (busyFork)
+		// and defers only the switch to turn end — the whole point is cloning
+		// the conversation while the model is still working.
 		m.forkCommand(strings.TrimSpace(strings.TrimPrefix(text, "/fork")))
 		return m, nil
 	case "/rename":

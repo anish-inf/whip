@@ -400,10 +400,17 @@ inline name prompt prefilled with `<title> (fork #N)` (`Store.ForkTitle`
 increments past existing forks and unwraps nested suffixes, opencode's
 `getForkedTitle`). **`f` in the rewind picker** forks from the selected
 message instead — one picker, two destinations. Forking while rewound pulls
-the redo stack up to the picked point into the copy. **`/rename [title]`**
-retitles the current session (`Store.SetTitle`); bare opens the same inline
-prompt prefilled with the current title. Both prompts stash and restore any
-in-progress draft. All three refuse to run mid-turn. Palette entries:
+the redo stack up to the picked point into the copy. **Mid-turn** (`busyFork`)
+the copy of the stored rows lands immediately — the confirmation prints the
+`whip --resume <id>` line so the clone can be opened in another whip process
+right away — and the switch defers to `turnDoneMsg` (`pendingForkID` →
+`switchToForked`), since the turn goroutine owns `Agent.Messages` and the
+session id until then; the original keeps the finished turn, queued messages
+are dropped (they named the old conversation), and the goal carries over via
+the copy's stamped row. **`/rename [title]`** retitles the current session
+(`Store.SetTitle`); bare opens the same inline prompt prefilled with the
+current title. Both prompts stash and restore any in-progress draft. /rename
+refuses to run mid-turn; /fork never queues. Palette entries:
 "Rewind conversation", "Fork session", "Rename session" under Session.
 
 Tests: `rewind_test.go` — double-esc opens/cancels, busy esc still
@@ -412,7 +419,8 @@ partial-rewind DB prefix, tool-call-pair safety, stale esc-arm across modal
 dismiss, draft preservation, resume-after-rewind. `fork_test.go` (session) —
 prefix/full copy, fork-title numbering, rename, DeleteFrom. `fork_test.go`
 (tui) — fork with arg, bare prompt suggestion + cancel, fork from the picker,
-fork while rewound into the redo stack, rename both paths.
+fork while rewound into the redo stack, busy fork (immediate copy + deferred
+switch + double-fork refusal + nothing-persisted case), rename both paths.
 
 ## MCP
 
