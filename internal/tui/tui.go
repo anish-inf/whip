@@ -2816,6 +2816,14 @@ func (m *model) wireTasks() {
 		}); err != nil {
 			config.LogEvent("session.task", "save failed: "+err.Error())
 		}
+		// Persist the subagent's full transcript as its own attributed session
+		// (id <parent>/task/<id>) once it settles — start rows carry no
+		// transcript yet, so only settled tasks with a live sub have one.
+		if t.Status != agent.TaskRunning && t.SubMessages != nil {
+			if _, err := st.SaveSubagentTranscript(sessionID, t.ID, t.SubMessages, m.modelName, m.provName); err != nil {
+				config.LogEvent("session.task", "transcript save failed: "+err.Error())
+			}
+		}
 	}
 	m.agent.Tasks().SetSessionID(m.sessionID)
 	m.agent.SetSessionID(m.sessionID)

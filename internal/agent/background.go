@@ -10,6 +10,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/context-labs/whip/internal/llm"
 )
 
 // TaskStatus is the lifecycle of a background subagent.
@@ -47,6 +49,13 @@ type BackgroundTask struct {
 	// context. nil on restored tasks (their process died). Set before the
 	// task is published, never reassigned — snapshots copy the pointer safely.
 	sub *Agent
+
+	// SubMessages is the subagent's full conversation, snapshotted at settle
+	// for persistence (the TUI's OnRecord saves it as an attributed session).
+	// A copy, not a live alias — FollowupTask keeps appending to sub.Messages
+	// after settle, and a shared slice would let a follow-up mutate an
+	// already-saved snapshot. nil while running and on restored tasks.
+	SubMessages []llm.Message
 }
 
 // taskRegistry tracks background subagents for one parent agent. It is the
@@ -271,6 +280,9 @@ func (a *Agent) StartBackground(description, prompt string, o SubModel) *Backgro
 		case err != nil:
 			status, text = TaskError, err.Error()
 		}
+		// Snapshot the transcript BEFORE settle: settle fires OnRecord (which
+		// persists SubMessages), so it must be populated first.
+		t.SubMessages = t.sub.MessagesSnapshot()
 		a.bg.settle(id, status, text)
 		// subscribers stop here; late events after settle go nowhere (Subscribe
 		// rejects non-running tasks, and settled state is visible via List/Get)
@@ -283,6 +295,23 @@ func (a *Agent) StartBackground(description, prompt string, o SubModel) *Backgro
 		a.Steer(fmt.Sprintf("[subagent %s %s] %s\n\n%s", id, status, description, text))
 	}()
 	return t
+}
+
+// refreshTranscript re-snapshots a settled task's SubMessages after a
+// follow-up turn grew the sub's conversation, then re-fires OnRecord so the
+// persisted transcript stays current. A follow-up turn is the only thing that
+// mutates a settled task's messages, so this is the only refresh path.
+func (r *taskRegistry) refreshTranscript(id string, sub *Agent) {
+	r.mu.Lock()
+	t, ok := r.tasks[id]
+	if ok {
+		t.SubMessages = sub.MessagesSnapshot()
+	}
+	r.mu.Unlock()
+	if !ok || r.OnRecord == nil {
+		return
+	}
+	r.OnRecord(r.recordSession(), t)
 }
 
 // Subscribe registers a live event subscriber for a running task. Returns

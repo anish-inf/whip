@@ -647,3 +647,56 @@ func TestScheduleRoundTrip(t *testing.T) {
 		t.Fatalf("after delete: %+v", scs)
 	}
 }
+
+// A subagent transcript round-trips as an attributed session row: id
+// <parent>/task/<task>, forked_from the parent, task_id set, messages intact.
+// Re-saving after a follow-up turn replaces the same row (no duplicate).
+func TestSubagentTranscriptRoundTrip(t *testing.T) {
+	st, err := Open(filepath.Join(t.TempDir(), "s.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+
+	parent, err := st.Create("/tmp", "m", "p")
+	if err != nil {
+		t.Fatal(err)
+	}
+	msgs := []llm.Message{
+		{Role: "system", Content: "sub sys"},
+		{Role: "user", Content: "explore the codebase"},
+		{Role: "assistant", Content: "found 3 things"},
+	}
+	id, err := st.SaveSubagentTranscript(parent, "probe-1", msgs, "sub-m", "sub-p")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id != "task-"+parent+"-probe-1" {
+		t.Fatalf("id = %q", id)
+	}
+	meta, got, err := st.Load(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.TaskID != "probe-1" || meta.ForkedFrom != parent {
+		t.Fatalf("attribution: taskID=%q forkedFrom=%q", meta.TaskID, meta.ForkedFrom)
+	}
+	if len(got) != 3 || got[1].Content != "explore the codebase" || got[2].Content != "found 3 things" {
+		t.Fatalf("transcript round-trip: %+v", got)
+	}
+
+	// Follow-up turn appends; re-save replaces the row, no duplicate session.
+	msgs = append(msgs, llm.Message{Role: "user", Content: "follow up"}, llm.Message{Role: "assistant", Content: "answered"})
+	if _, err := st.SaveSubagentTranscript(parent, "probe-1", msgs, "sub-m", "sub-p"); err != nil {
+		t.Fatal(err)
+	}
+	_, got, err = st.Load(id)
+	if err != nil || len(got) != 5 {
+		t.Fatalf("after follow-up: %d msgs, err %v", len(got), err)
+	}
+
+	// No parent / no task id → no-op ("" id, no error).
+	if id, err := st.SaveSubagentTranscript("", "t", msgs, "m", "p"); id != "" || err != nil {
+		t.Fatalf("empty parent should no-op: id=%q err=%v", id, err)
+	}
+}
