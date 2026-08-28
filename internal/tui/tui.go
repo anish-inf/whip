@@ -138,6 +138,10 @@ type model struct {
 	busy    bool
 	current string // in-flight partial assistant line
 	inMsg   bool   // "● " prefix already printed for this assistant segment
+	// lastResp is the token usage of the most recent API response (updated
+	// per streamed request via usageMsg); the status line shows it after the
+	// session spend as "last in(cached)/out tok".
+	lastResp llm.Usage
 
 	showThinking bool   // ctrl+o: render reasoning tokens
 	curThink     string // in-flight partial reasoning line
@@ -1277,6 +1281,15 @@ func fmtTok(n int) string {
 	}
 }
 
+// fmtUsage renders cumulative or per-request usage as the status line's
+// "in(cached)/out tok" shape; the cached parens appear only when reported.
+func fmtUsage(u llm.Usage) string {
+	if c := u.Cached(); c > 0 {
+		return fmt.Sprintf("%s(%s)/%s tok", fmtTok(u.PromptTokens), fmtTok(c), fmtTok(u.CompletionTokens))
+	}
+	return fmt.Sprintf("%s/%s tok", fmtTok(u.PromptTokens), fmtTok(u.CompletionTokens))
+}
+
 // fmtCost renders a USD spend compactly: 4 decimals under a dollar (where the
 // cents would hide the signal), 2 at or above.
 func fmtCost(d float64) string {
@@ -2012,7 +2025,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case usageMsg:
 		// Turn already folds usage into the agent's session totals (header
-		// reads those); this message just forces a redraw mid-stream.
+		// reads those); keep the per-request figure — the status line shows
+		// it as "last …" — and force a redraw mid-stream.
+		m.lastResp = llm.Usage(msg)
 		return m, nil
 
 	case quitArmMsg:
@@ -3364,6 +3379,7 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 		}
 		m.agent.Messages = m.agent.Messages[:1] // keep system prompt
 		m.agent.ResetUsage()                    // zero the status line's spend counters
+		m.lastResp = llm.Usage{}                // the cleared history has no last response
 		m.blocks = nil
 		m.msgBlock = nil
 		m.future = nil   // no redo across a cleared conversation
@@ -3893,12 +3909,15 @@ func (m *model) statusView() string {
 		model += " (" + e + ")"
 	}
 	u := m.agent.Usage()
-	spend := fmt.Sprintf("%s/%s tok", fmtTok(u.PromptTokens), fmtTok(u.CompletionTokens))
-	if c := u.Cached(); c > 0 {
-		spend = fmt.Sprintf("%s(%s)/%s tok", fmtTok(u.PromptTokens), fmtTok(c), fmtTok(u.CompletionTokens))
-	}
+	spend := fmtUsage(u)
 	if cost, ok := m.sessionCost(); ok {
 		spend += " · " + fmtCost(cost)
+	}
+	// The last response's own counts, so the size of the most recent API call
+	// (its output especially) is readable without doing mental subtraction
+	// from the session totals. Hidden until the first response arrives.
+	if last := m.lastResp; last.PromptTokens > 0 || last.CompletionTokens > 0 {
+		spend += " · last " + fmtUsage(last)
 	}
 	// The fixed segments (model/provider/spend) are the data that matters; the
 	// cwd is what yields. Old code truncated the whole assembled line from the
