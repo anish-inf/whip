@@ -186,6 +186,58 @@ func TestDecayKeepsSpillPath(t *testing.T) {
 	}
 }
 
+func TestDecayDuplicateReadsSameRegion(t *testing.T) {
+	// Identical args returning identical bytes: the LATER copy collapses to a
+	// duplicate-pointer (Pass 1b, before supersede), the first stays inline —
+	// the history keeps one vintage per (path, offset, limit).
+	args := `{"path":"foo.go","offset":10,"limit":50}`
+	a := &Agent{}
+	a.Messages = padHotWindow([]llm.Message{
+		{Role: "system", Content: "sys"},
+		asstWithCall("c1", "read", args),
+		toolMsg("c1", "read", readResult(50)),
+		asstWithCall("c2", "read", args),
+		toolMsg("c2", "read", readResult(50)),
+	})
+	if n := a.decay(); n != 1 {
+		t.Fatalf("rewrites = %d, want 1", n)
+	}
+	if !strings.Contains(a.Messages[4].Content, "duplicate read of foo.go") {
+		t.Errorf("the later copy should collapse to a duplicate pointer, got %q", a.Messages[4].Content)
+	}
+	if a.Messages[2].Content != readResult(50) {
+		t.Error("the first copy stays inline")
+	}
+	// idempotent
+	if n := a.decay(); n != 0 {
+		t.Errorf("second pass should be a no-op, rewrote %d", n)
+	}
+}
+
+func TestDecaySameRegionDifferentContentKeepsNewest(t *testing.T) {
+	// Same args but the file changed between reads: NOT a duplicate — the
+	// newer read is the live vintage (and Layer 1 supersedes the older one
+	// via the newer sighting).
+	args := `{"path":"foo.go","offset":10,"limit":50}`
+	a := &Agent{}
+	a.Messages = padHotWindow([]llm.Message{
+		{Role: "system", Content: "sys"},
+		asstWithCall("c1", "read", args),
+		toolMsg("c1", "read", readResult(50)),
+		asstWithCall("c2", "read", args),
+		toolMsg("c2", "read", readResult(45)), // different content: file changed
+	})
+	if n := a.decay(); n != 1 {
+		t.Fatalf("rewrites = %d, want 1 (Layer-1 supersede only)", n)
+	}
+	if !strings.Contains(a.Messages[2].Content, "superseded") {
+		t.Errorf("older read should be superseded by the newer vintage: %q", a.Messages[2].Content)
+	}
+	if a.Messages[4].Content != readResult(45) {
+		t.Error("the newer, different read must stay inline")
+	}
+}
+
 func TestSpillPathOfParsesBothMarkerShapes(t *testing.T) {
 	legacy := "tail output\n[full output (60000 bytes): /tmp/whip-bash-1/x.log]"
 	middle := "head\n... [100 bytes elided from the middle — full output (60000 bytes): /tmp/whip-bash-1/y.log] ...\ntail"

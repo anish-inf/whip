@@ -108,21 +108,28 @@ touches content older than the window, so the pruned prefix stays
 byte-identical across turns and the provider's prompt cache keeps hitting;
 the only cold recompute per turn is the window itself.
 
-Two mechanisms, both keyed off the tool-call graph:
+Two mechanisms, both keyed off the tool-call graph, plus a dedupe pre-pass:
 
-1. **Superseded reads.** When a file is re-read or written, the older `read`
+1. **Duplicate reads.** A re-read of the same region (identical path, offset,
+   limit) returning identical bytes carries no new information: the later
+   copy collapses to `⟨duplicate read of foo.go — same content as the first
+   read above⟩`. Runs first so it compares pristine contents.
+2. **Superseded reads.** When a file is re-read or written, the older `read`
    result collapses in place to
    `⟨read of foo.go superseded by newer read (4120 lines)⟩` (or "file changed
    by a later write/edit"). The model follows the newest vintage; it never
    needs two copies of the same file. The rewrite is idempotent, so after the
    one-time replacement the prefix re-stabilizes for the cache.
-2. **Age decay.** A tool result that was big at ingestion (>8KB, ~2k tokens,
+3. **Age decay.** A tool result that was big at ingestion (>8KB, ~2k tokens,
    `decayMinBytes`) and has since aged out of the hot window collapses to
-   `⟨bash "go test ./..." output, 41k bytes — full output: /tmp/…⟩` — what
-   ran, how big it was, and where the full text lives when a spill file
-   exists. Small results (errors, short greps — the semantic glue) stay
-   inline forever. Assistant messages are never rewritten: reasoning chains
-   matter.
+   `⟨bash "go test ./..." output, 41k bytes — ran here 3 turn(s) ago; full
+   output: /tmp/…⟩` — what ran (the actual command from the tool call's args,
+   or the path for file tools), how big it was, how many authored turns ago
+   it landed, and where the full text lives. When the result was never
+   truncated at ingestion, the full content is spilled at decay time so the
+   placeholder always points at a recoverable copy. Small results (errors,
+   short greps — the semantic glue) stay inline forever. Assistant messages
+   are never rewritten: reasoning chains matter.
 
 Rewritten messages fire `Events.OnDecay`; the TUI responds by re-persisting
 the prefix (the session store `INSERT OR REPLACE`s rows), so a resumed

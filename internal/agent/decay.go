@@ -61,6 +61,41 @@ func (a *Agent) decay() int {
 	boundary := hotBoundary(a.Messages)
 	rewritten := 0
 
+	// Pass 1b: duplicate reads of the same unchanged file region. A re-read
+	// with identical args returning identical bytes carries no new
+	// information; collapse the LATER copy to a pointer at the first, so the
+	// history keeps one inline vintage per (path, offset, limit). Runs BEFORE
+	// Pass 1: it must compare pristine contents, and its "duplicate"
+	// placeholder is more informative than Pass 1's "superseded" for the
+	// exact-copy case (Pass 1 then skips the collapsed copy via its
+	// decayedMarker check). Window-gated like everything else.
+	type readKey struct {
+		path, args string
+	}
+	seen := map[readKey]int{} // key → message index of the surviving copy
+	for i := range boundary {
+		m := &a.Messages[i]
+		if m.Role != "tool" || m.Name != "read" || strings.HasPrefix(m.Content, decayedMarker) {
+			continue
+		}
+		k := readKey{readPathFromCall(a.Messages, i), callArgs(a.Messages, i)}
+		if k.path == "" {
+			continue
+		}
+		first, dup := seen[k]
+		if !dup {
+			seen[k] = i
+			continue
+		}
+		if a.Messages[first].Content == m.Content {
+			m.Content = fmt.Sprintf("%sduplicate read of %s — same content as the first read above⟩",
+				decayedMarker, filepath.Base(k.path))
+			rewritten++
+		} else {
+			seen[k] = i // content changed between identical reads: newest wins
+		}
+	}
+
 	// Pass 1: superseded reads. Walk backward (newest→oldest) tracking, per
 	// path, the newest read/write position; an older read of the same path
 	// collapses to a pointer at the newer evidence. The newest sighting may
@@ -134,16 +169,18 @@ func (a *Agent) decay() int {
 	return rewritten
 }
 
-// hotBoundary returns the index in msgs where the hot window begins: the
-// newest position whose suffix (msgs[pos:]) sums to at most decayHotWindow
-// approx tokens. Index 0 (system prompt) is never inside the window but is
-// also never decayed (it is not a tool message).
+// hotBoundary returns the index in msgs where the hot window begins. Walking
+// from the back, the window covers the newest messages whose approx tokens
+// (len/4) fit in decayHotWindow; the first message that overflows the budget
+// is OUTSIDE the window, so the boundary is that index — the window is
+// msgs[boundary+1:] when the overflow happens at msgs[boundary]. Index 0 (the
+// system prompt) is never decayed regardless (it is not a tool message).
 func hotBoundary(msgs []llm.Message) int {
 	budget := decayHotWindow
 	for i := len(msgs) - 1; i > 0; i-- {
 		t := msgTokens(msgs[i])
 		if t > budget {
-			return i + 1
+			return i // msgs[i] itself no longer fits — it and everything older may decay
 		}
 		budget -= t
 	}
@@ -197,6 +234,28 @@ func toolArgFromCall(msgs []llm.Message, i int, key string) string {
 			return ""
 		}
 		return "" // the first assistant message back owns the call; id not in it
+	}
+	return ""
+}
+
+// callArgs returns the raw arguments JSON of the tool call that produced the
+// tool message at i ("" when the call can't be found). Used to key duplicate
+// reads by their full region (path+offset+limit), not just the path.
+func callArgs(msgs []llm.Message, i int) string {
+	id := msgs[i].ToolCallID
+	if id == "" {
+		return ""
+	}
+	for j := i - 1; j >= 0; j-- {
+		if msgs[j].Role != "assistant" {
+			continue
+		}
+		for _, tc := range msgs[j].ToolCalls {
+			if tc.ID == id {
+				return tc.Function.Arguments
+			}
+		}
+		return ""
 	}
 	return ""
 }
