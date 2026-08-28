@@ -1707,9 +1707,18 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case toolCallMsg:
 		// a tool call still streaming from the model: show a dim queued row so
-		// the user sees it before execution starts. toolStartMsg swaps it for
-		// the live running row (matched by tool-call id).
+		// the user sees it before execution starts. onToolCall fires per args
+		// delta with the cumulative snapshot, so update the row for this id in
+		// place — appending per delta would stack one row per fragment.
+		// toolStartMsg swaps it for the live running row (matched by id).
 		row := dimStyle.Render("⋯ " + msg.name + " " + firstLine(msg.args))
+		for i := len(m.blocks) - 1; i >= 0; i-- {
+			if m.blocks[i].kind == blockToolQueued && m.blocks[i].toolID == msg.id {
+				m.blocks[i].text, m.blocks[i].stale = row, true
+				m.refreshVP()
+				return m, nil
+			}
+		}
 		m.blocks = append(m.blocks, block{kind: blockToolQueued, text: row, toolID: msg.id})
 		m.refreshVP()
 		return m, nil
