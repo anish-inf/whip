@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -326,11 +327,26 @@ type Client struct {
 	// OnRetry, when set, is invoked before each retry of a transient request
 	// failure. Optional — nil means silent retries.
 	OnRetry func(RetryEvent)
-	// CacheKey is stamped as prompt_cache_key on every request (see
-	// Request.PromptCacheKey). Set once per session by the caller; subagents
-	// get their own key so their shorter contexts don't churn the parent's
-	// cached prefix. Empty disables the field.
-	CacheKey string
+	// cacheKey is stamped as prompt_cache_key on every request. The TUI sets
+	// it (SetCacheKey) on the UI goroutine while an old agent's turn goroutine
+	// may be mid-Stream reading it on the shared client, so it's an
+	// atomic.Pointer, not a plain string. Subagents get their own key so their
+	// shorter contexts don't churn the parent's cached prefix. Unset disables
+	// the field.
+	cacheKey atomic.Pointer[string]
+}
+
+// SetCacheKey sets the prompt-cache key stamped on every request (the session
+// id). Safe for concurrent use with in-flight requests.
+func (c *Client) SetCacheKey(key string) { c.cacheKey.Store(&key) }
+
+// CacheKeyValue returns the current prompt-cache key ("" when unset). Used
+// when cloning a client for a subagent.
+func (c *Client) CacheKeyValue() string {
+	if p := c.cacheKey.Load(); p != nil {
+		return *p
+	}
+	return ""
 }
 
 // attempts returns the total try count (initial + retries) for this client.
@@ -638,9 +654,7 @@ func (c *Client) Stream(ctx context.Context, req Request, onText, onThink func(s
 		IncludeUsage bool `json:"include_usage"`
 	}{IncludeUsage: true}
 	req.Messages = repairToolHistory(stripAuthored(req.Messages))
-	if req.PromptCacheKey == "" {
-		req.PromptCacheKey = c.CacheKey
-	}
+	req.PromptCacheKey = c.CacheKeyValue() // from the atomic client key; never set by hand
 	body, err := json.Marshal(req)
 	if err != nil {
 		return Message{}, Usage{}, err
@@ -781,6 +795,7 @@ func (c *Client) streamOnce(ctx context.Context, body []byte, onText, onThink fu
 func (c *Client) Complete(ctx context.Context, req Request) (string, Usage, error) {
 	req.Stream = false
 	req.Messages = stripAuthored(req.Messages)
+	req.PromptCacheKey = c.CacheKeyValue() // from the atomic client key; never set by hand
 	body, err := json.Marshal(req)
 	if err != nil {
 		return "", Usage{}, err

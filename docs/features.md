@@ -100,17 +100,22 @@ totals via `AddUsage`. Compaction and subagent calls count too.
 ### Provider prompt-prefix caching
 
 To cut time-to-first-token on the many sequential turns of an agent loop,
-whip stamps `prompt_cache_key` on every request (OpenAI `prompt_cache_key`;
-openrouter/xai/azure/mistral honor the same field; providers that don't
-recognize it ignore the unknown top-level field). The key is the **session
-id**: `Agent.SetSessionID` sets `Client.CacheKey`, so a stable session lets
-the provider reuse the cached conversation prefix across turns. Subagents get
-a scoped key (`<sessionID>/<taskID>` in `StartBackground`) so their shorter,
-churning contexts never disturb the parent's cached prefix and two concurrent
-subagents don't collide on the session key. An explicit
-`Request.PromptCacheKey` overrides the client's (that's how the subagent
-scoping is applied); empty omits the field entirely so providers that would
-reject it never see it. The prefix-stability preconditions are already
+whip stamps `prompt_cache_key` on every request — streaming (`Stream`) and
+non-streaming (`Complete`, used by compaction) alike (OpenAI
+`prompt_cache_key`; openrouter/xai/azure/mistral honor the same field;
+providers that don't recognize it ignore the unknown top-level field). The
+key is the **session id**: `Agent.SetSessionID` calls `Client.SetCacheKey`,
+so a stable session lets the provider reuse the cached conversation prefix
+across turns. The key lives on the client as an `atomic.Pointer` — the TUI
+sets it on the UI goroutine during an agent swap while an old agent's turn
+goroutine may be mid-request on the shared client. Subagents get a scoped key
+(`<sessionID>/<taskID>` in `StartBackground`) so their shorter, churning
+contexts never disturb the parent's cached prefix and two concurrent
+subagents don't collide on the session key; a subagent inherits the parent's
+key on a fresh client copy (`newSub` copies field-by-field — the atomic makes
+a struct copy illegal under govet copylocks). Empty omits the field entirely
+so providers that would reject it never see it. The prefix-stability
+preconditions are already
 maintained elsewhere: the system prompt's per-turn memory block sits at the
 END of the system message (`prepareTurn`), MCP tools are name-sorted
 (`mcp.Manager.Tools`), and the context-decay pass keeps the recent hot window
@@ -119,9 +124,9 @@ scope — whip speaks OpenAI chat-completions uniformly and has no
 Anthropic-native consumer for them.
 
 Tests: `internal/llm/cache_test.go` — `TestPromptCacheKeyStampedFromClient`,
-`TestPromptCacheKeyRequestOverridesClient`, `TestConsecutiveRequestsSharePrefix`
-(the prefix-cache contract: turn N's messages are a byte-identical prefix of
-turn N+1's, same key on both).
+`TestConsecutiveRequestsSharePrefix` (turn N's messages are a byte-identical
+prefix of turn N+1's, same key on both), `TestCacheKeyConcurrentSetAndStream`
+(the atomic key is safe under a concurrent set + in-flight request, `-race`).
 
 Commands: `/compact` (compact now), `/compact <model> [provider]` (pick the
 summarizer), `/compact off` (restore the built-in default). The palette's

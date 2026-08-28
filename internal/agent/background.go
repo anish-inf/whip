@@ -250,7 +250,7 @@ func (a *Agent) StartBackground(description, prompt string, o SubModel) *Backgro
 	// churning context never disturbs the parent's cached prefix (and two
 	// concurrent subagents don't collide on the session key).
 	if sid := a.SessionIDValue(); sid != "" {
-		sub.Client.CacheKey = sid + "/" + id
+		sub.Client.SetCacheKey(sid + "/" + id)
 	}
 	t := &BackgroundTask{
 		ID: id, Description: description, Prompt: prompt,

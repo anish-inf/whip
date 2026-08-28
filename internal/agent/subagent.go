@@ -40,9 +40,19 @@ func (a *Agent) newSub(o SubModel) *Agent {
 	}
 	// Own client copy, never a shared pointer (parent's or TaskDefault's):
 	// Turn writes Client.OnRetry per call, so a shared struct races when two
-	// agents stream concurrently. Shallow copy is safe — the embedded
-	// *http.Client is concurrency-safe and stays shared.
-	c := *o.Client
+	// agents stream concurrently. Copy field-by-field — Client now holds an
+	// atomic.Pointer (noCopy) for the cache key, so a struct copy tripes
+	// govet copylocks. The embedded *http.Client is concurrency-safe and
+	// stays shared.
+	c := llm.Client{
+		BaseURL:    o.Client.BaseURL,
+		APIKey:     o.Client.APIKey,
+		HTTP:       o.Client.HTTP,
+		MaxRetries: o.Client.MaxRetries,
+	}
+	if k := o.Client.CacheKeyValue(); k != "" {
+		c.SetCacheKey(k)
+	}
 	o.Client = &c
 	sub := New(o.Client, o.Model, o.MaxTokens, subagentPrompt())
 	sub.Effort = a.Effort

@@ -20,7 +20,7 @@ import (
 func (a *Agent) SetSessionID(id string) {
 	a.sessionID.Store(&id)
 	if a.Client != nil {
-		a.Client.CacheKey = id
+		a.Client.SetCacheKey(id)
 	}
 }
 
