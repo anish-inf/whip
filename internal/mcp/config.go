@@ -131,11 +131,14 @@ func ParseToolName(name string) (srvKey, tool string, ok bool) {
 	return srvKey, tool, true
 }
 
-// Merge combines server configs by name: whip's own config wins whole-entry
-// over codex, which wins over a project's .mcp.json. No field-level merging —
-// predictable, and matches how claude/codex treat their own scopes.
-func Merge(whip, codex, claude map[string]ServerConfig) map[string]ServerConfig {
-	out := make(map[string]ServerConfig, len(whip)+len(codex)+len(claude))
+// Merge combines server configs by name, lowest precedence first: the global
+// claude config (~/.claude.json), then the project .mcp.json, then codex, and
+// whip's own config always wins whole-entry. No field-level merging —
+// predictable, and matches how claude/codex treat their own scopes (more
+// specific scope beats more general, user-scoped whip beats every import).
+func Merge(whip, codex, claude, claudeGlobal map[string]ServerConfig) map[string]ServerConfig {
+	out := make(map[string]ServerConfig, len(whip)+len(codex)+len(claude)+len(claudeGlobal))
+	maps.Copy(out, claudeGlobal)
 	maps.Copy(out, claude)
 	maps.Copy(out, codex)
 	maps.Copy(out, whip)
@@ -233,16 +236,22 @@ func setSource(src map[string]ServerConfig, path string) {
 // disabled+noted copies. whipCfg entries always pass through.
 func LoadMergedFiltered(cwd string, whipCfg map[string]ServerConfig, policy ImportPolicy) Filtered {
 	errs := map[string]error{}
+	claudeGlobalPath := ClaudeGlobalPath()
+	claudeGlobal, err := LoadClaude(claudeGlobalPath)
+	if err != nil && !os.IsNotExist(err) {
+		errs[claudeGlobalPath] = err
+	}
 	claudePath := filepath.Join(cwd, ".mcp.json")
 	claude, err := LoadClaude(claudePath)
 	if err != nil && !os.IsNotExist(err) {
-		errs[".mcp.json"] = err
+		errs[claudePath] = err
 	}
 	codexPath := CodexPath()
 	codex, err := LoadCodex(codexPath)
 	if err != nil && !os.IsNotExist(err) {
 		errs[codexPath] = err
 	}
+	setSource(claudeGlobal, claudeGlobalPath)
 	setSource(claude, claudePath)
 	setSource(codex, codexPath)
 	setSource(whipCfg, whipConfigPath())
@@ -267,11 +276,15 @@ func LoadMergedFiltered(cwd string, whipCfg map[string]ServerConfig, policy Impo
 		}
 		return kept
 	}
+	claudeGlobalKept := split(claudeGlobal, policy.Claude)
 	claudeKept := split(claude, policy.Claude)
 	codexKept := split(codex, policy.Codex)
-	sources := make(map[string]string, len(whipCfg)+len(codex)+len(claude))
+	sources := make(map[string]string, len(whipCfg)+len(codex)+len(claude)+len(claudeGlobal))
 	for name := range whipCfg {
 		sources[name] = "whip"
+	}
+	for name := range claudeGlobal { // lowest precedence: project, codex, whip all overwrite
+		sources[name] = "~/.claude.json"
 	}
 	for name := range claude {
 		sources[name] = ".mcp.json"
@@ -280,7 +293,7 @@ func LoadMergedFiltered(cwd string, whipCfg map[string]ServerConfig, policy Impo
 		sources[name] = "codex"
 	}
 	return Filtered{
-		Merged:  Merge(whipCfg, codexKept, claudeKept),
+		Merged:  Merge(whipCfg, codexKept, claudeKept, claudeGlobalKept),
 		Blocked: blocked,
 		Sources: sources,
 		Errs:    errs,
@@ -301,6 +314,11 @@ func LoadMerged(cwd string, whipCfg map[string]ServerConfig) (map[string]ServerC
 // CodexPath is the codex CLI's config file location (~/.codex/config.toml).
 // A variable so tests can point it at fixtures.
 var CodexPath = defaultCodexPath
+
+// ClaudeGlobalPath is the claude CLI's global config location
+// (~/.claude.json), which carries user-scoped mcpServers alongside the
+// project .mcp.json. A variable so tests can point it at fixtures.
+var ClaudeGlobalPath = defaultClaudeGlobalPath
 
 // whipConfigPath is whip's own config file location (~/.whip/config.json) —
 // the source of any server from the config's "mcp" block. Best-effort: ""
@@ -345,14 +363,48 @@ func defaultCodexPath() string {
 	return filepath.Join(home, ".codex", "config.toml")
 }
 
+func defaultClaudeGlobalPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".claude.json")
+}
+
 // expandEnv resolves "$VAR" and "${VAR}" references in config values (claude
-// does this in .mcp.json env blocks; codex expands env vars in its TOML too).
-// Missing variables expand to "".
+// does this in .mcp.json env blocks; codex expands env vars in its TOML too),
+// plus the shell-style default forms "${VAR:-default}" and "${VAR-default}".
+// Missing variables expand to "" (or the default, when the ":-" / "-" form is
+// used). os.Expand alone would treat "${VAR:-default}" as a lookup of a var
+// literally named "VAR:-default", which never resolves — so we pre-extract the
+// default ourselves.
 func expandEnv(v string) string {
 	if !strings.Contains(v, "$") {
 		return v
 	}
-	return os.Expand(v, os.Getenv)
+	return os.Expand(v, expandVar)
+}
+
+// expandVar is os.Expand's mapping func. name is the token inside "${...}" or
+// after "$". For "${VAR:-default}"/"${VAR-default}", os.Expand hands us the
+// whole "VAR:-default"/"VAR-default" string (its brace form allows any bytes
+// but '}'), so we split off the default and resolve VAR ourselves. With ":-"
+// the default also applies when VAR is set-but-empty (shell semantics); with
+// "-" only when VAR is unset.
+func expandVar(name string) string {
+	if key, def, found := strings.Cut(name, ":-"); found {
+		if val := os.Getenv(key); val != "" {
+			return val
+		}
+		return os.Expand(def, os.Getenv) // default may itself reference vars
+	}
+	if key, def, found := strings.Cut(name, "-"); found {
+		if _, ok := os.LookupEnv(key); ok {
+			return os.Getenv(key)
+		}
+		return os.Expand(def, os.Getenv)
+	}
+	return os.Getenv(name)
 }
 
 func expandEnvMap(m map[string]string) map[string]string {

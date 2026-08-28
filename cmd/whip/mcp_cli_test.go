@@ -141,6 +141,9 @@ func mcpHome(t *testing.T, mcpBlock string) string {
 	orig := mcp.CodexPath
 	mcp.CodexPath = func() string { return filepath.Join(home, "no-codex.toml") }
 	t.Cleanup(func() { mcp.CodexPath = orig })
+	origG := mcp.ClaudeGlobalPath
+	mcp.ClaudeGlobalPath = func() string { return filepath.Join(home, "no-claude.json") }
+	t.Cleanup(func() { mcp.ClaudeGlobalPath = origG })
 
 	cfg := `{
   "defaultModel": "m1",
