@@ -3377,6 +3377,13 @@ func (m *model) submitTurn(text string, authored bool) (tea.Model, tea.Cmd) {
 			},
 			OnCompacted: func(sum string, cutoff int) { send(compactMsg{summary: sum, cutoff: cutoff}) },
 			OnUsage:     func(u llm.Usage) { send(usageMsg(u)) },
+			// The decay pass rewrote n prefix messages in agent.Messages; drop
+			// the saved watermark so the next persist re-saves everything
+			// (from 1 — seq 0 is the system prompt, never a stored row; the
+			// store INSERT OR REPLACEs rows). Direct field write: we're in the
+			// turn goroutine but m.saved is only touched by the UI goroutine's
+			// persist at turn end, and this lands before it.
+			OnDecay: func(n int) { m.saved = 1 },
 			OnRetry: func(ev llm.RetryEvent) {
 				flush()
 				send(noticeMsg(fmt.Sprintf("⚠ request failed (%s) — retrying in %s (attempt %d/%d)",
