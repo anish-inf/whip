@@ -29,6 +29,7 @@ import (
 	"github.com/context-labs/whip/internal/skills"
 	"github.com/context-labs/whip/internal/tools"
 	"github.com/context-labs/whip/internal/tools/bashrun"
+	"github.com/context-labs/whip/internal/tui"
 )
 
 func acpCLI(args []string) error {
@@ -48,7 +49,7 @@ func acpCLI(args []string) error {
 	if err != nil {
 		return err
 	}
-	prov, mdl, apiID, err := cfg.Resolve(*modelFlag, *providerFlag)
+	prov, mdl, apiID, err := tui.ResolveWithRefresh(cfg, *modelFlag, *providerFlag)
 	if err != nil {
 		return err
 	}

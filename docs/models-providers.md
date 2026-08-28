@@ -32,6 +32,15 @@ flowchart LR
   (`-p` / `/model <name> <provider>`) to disambiguate.
 - Newly announced models appear in the `/model` picker dimmed, marked
   `(new)`, after `/model refresh` or the next TTL cycle.
+- **Retry-on-miss at startup.** If launch-time resolution reports an unknown
+  model — the default model has no config entry and the cached catalog is
+  missing or stale (deleted `~/.whip/models.json`, or a model announced after
+  the last fetch) — whip synchronously force-refreshes the configured
+  providers' catalogs and retries resolution once before failing. The happy
+  path never pays for this: a successful first resolve performs no fetch, so
+  normal and offline starts are unaffected. Applies to every entrypoint
+  (`whip`, `whip run`, `whip acp`); a genuinely unknown model still errors,
+  after exactly one refresh attempt.
 - `/model` persists the switch as the saved default. `/model-for-session`
   switches the active model identically but leaves the saved default
   untouched, so the next launch still opens on the configured model.
