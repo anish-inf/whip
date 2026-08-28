@@ -73,7 +73,7 @@ func (a *Agent) resolveSub(model, provider string) (SubModel, error) {
 func taskTool(parent *Agent) tools.Tool {
 	return tools.Tool{
 		Def: llm.NewTool("subagent",
-			"Launch a subagent to handle a self-contained task with its own fresh context. It has the same tools as you (bash, read, write, edit) and returns only its final report. Use it for context-heavy exploration or work that can be described completely up front. Set background=true to run it concurrently while you keep working — you'll be notified with the report automatically when it finishes; do NOT poll or sleep waiting for it (subagent_steer can send it mid-course corrections). Subagents run on a cheap fast model by default; set model only when the task needs a specific/stronger one.",
+			"Launch a subagent to handle a self-contained task with its own fresh context. It has the same tools as you (bash, read, write, edit) and returns only its final report. Use it for context-heavy exploration or work that can be described completely up front. To investigate several things in parallel, emit MULTIPLE subagent calls in one message — they run concurrently and all reports come back together in one turn. background=true is for fire-and-forget tasks you check on later: it runs concurrently while you keep working and the report arrives automatically as a message when it finishes (do NOT poll; subagent_steer can send mid-course corrections). Subagents run on a cheap fast model by default; set model only when the task needs a specific/stronger one.",
 			`{"type":"object","properties":{"description":{"type":"string","description":"Short 3-8 word summary of the task"},"prompt":{"type":"string","description":"Complete instructions for the subagent; it cannot ask follow-up questions"},"background":{"type":"boolean","description":"Run concurrently and get notified on completion (default false = block until done)"},"model":{"type":"string","description":"Optional model to run the subagent on (a configured model name or catalog id); omit for the default"},"provider":{"type":"string","description":"Optional provider for the model override; omit for its default routing"},"worktree":{"type":"boolean","description":"Run the subagent in its own git worktree so its file edits stay isolated from yours and from other subagents (default: the session's worktreeSubagents setting). Use true for parallel EDITING subagents; leave false for read-only/exploration tasks (worktree is wasted) or when the subagent needs the parent's uncommitted changes."}},"required":["prompt"]}`),
 		Run: func(ctx context.Context, args json.RawMessage) (string, error) {
 			var a struct {
@@ -129,9 +129,25 @@ func taskTool(parent *Agent) tools.Tool {
 			sub := parent.newSub(o)
 			// roll the subagent's spend into the parent's session totals
 			report, err := sub.Turn(ctx, prompt, Events{OnUsage: parent.AddUsage})
-			return report, err
+			if err != nil {
+				return report, err
+			}
+			return capReport(report), nil
 		},
 	}
+}
+
+// subagentReportCap bounds a foreground subagent's report fed back into the
+// parent's context. Exploration reports run long; the cap keeps one delegated
+// investigation from swamping the parent (the subagent's own context is
+// uncapped — only what the parent ingests is). Same budget as any tool output.
+const subagentReportCap = 50_000
+
+func capReport(s string) string {
+	if len(s) <= subagentReportCap {
+		return s
+	}
+	return s[:subagentReportCap] + fmt.Sprintf("\n\n... [report truncated — %d bytes total; the investigation covered more than fits here]", len(s))
 }
 
 // taskSteerTool lets the model send mid-course guidance into a RUNNING

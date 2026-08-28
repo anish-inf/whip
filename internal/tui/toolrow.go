@@ -84,6 +84,16 @@ func toolSubject(name, args string) string {
 	return s
 }
 
+// queuedSubject is the text a still-streaming tool row leads with: the
+// subagent's task description when there is one (raw JSON for a subagent call
+// is an unreadable blob), else the call's first line.
+func queuedSubject(name, args string) string {
+	if name == "subagent" {
+		return toolSubject("subagent", args)
+	}
+	return firstLine(args)
+}
+
 // toolHeaderRow renders the completed call's header: "● Update(path)".
 func toolHeaderRow(name, args string, failed bool) string {
 	head := toolHeaderName(name) + "(" + toolSubject(name, args) + ")"

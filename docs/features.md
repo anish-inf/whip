@@ -168,6 +168,27 @@ worker goroutines while `/auth` mutates live config on the UI goroutine).
 background task by hand — it runs mid-turn too (listed with the
 works-while-busy commands), so the LLM isn't the only driver.
 
+**Foreground fan-out and naming.** A `subagent` call without `background`
+blocks the turn on the report; emitting several in one assistant message runs
+them concurrently and returns every report together (`runTools` already
+parallelizes a tool batch). The tool description tells the model this is how to
+explore in parallel, reserving `background:true` for fire-and-forget. Two
+guardrails keep delegation legible and cheap:
+
+- A foreground report is capped at `subagentReportCap` bytes before it lands in
+  the parent's context (`subagent.go` `capReport`), so one long investigation
+  can't swamp the parent window. The subagent's own context is uncapped — only
+  what the parent ingests is bounded.
+- Transcript rows surface the task's `description` (queued + running rows via
+  `queuedSubject`/`toolSubject`, not the raw JSON args), number a parallel
+  batch `1/N` (`batchSuffix`), and background task ids are description slugs —
+  `survey-context-in-pi-3`, not `sub-1` (`taskSlug`) — so `/subagents`, the ⚙
+  badge, and steer messages name the work.
+
+Tests: `TestForegroundReportCapped`, `TestForegroundReportUnderCapPassesThrough`,
+`TestTaskSlug`, `TestStartBackgroundSlugID` (agent); `TestSubagentBatchNumbered`,
+`TestSubagentSingletonNotNumbered`, `TestBatchSuffixPerToolName` (tui).
+
 **Chat with a subagent** — a task IS a session. The retained subagent lives on
 its `BackgroundTask`; the detail view (enter from the dock) has a chat input:
 

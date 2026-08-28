@@ -2,6 +2,8 @@ package tui
 
 import (
 	"fmt"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -112,6 +114,28 @@ func toolVerb(name string) string {
 	default:
 		return name
 	}
+}
+
+// batchSuffix returns " 2/3"-style text when id is one of several same-name
+// tool calls in the current batch (the model emitted N parallel subagent calls
+// in one message); "" for a singleton. Self is 1-indexed among same-name rows
+// in id order — the order the model listed them. Counts both queued and
+// running rows since a batch transitions through toolCallMsg then toolStartMsg.
+func (m *model) batchSuffix(name, self string) string {
+	var ids []string
+	for _, b := range m.blocks {
+		if (b.kind == blockToolQueued || b.kind == blockToolRun) && b.toolID != "" && b.toolName == name {
+			ids = append(ids, b.toolID)
+		}
+	}
+	if !slices.Contains(ids, self) {
+		ids = append(ids, self) // this row isn't on screen yet
+	}
+	if len(ids) < 2 {
+		return ""
+	}
+	slices.Sort(ids)
+	return " " + strconv.Itoa(slices.Index(ids, self)+1) + "/" + strconv.Itoa(len(ids))
 }
 
 // scrollToMsg live-scrolls the viewport so the block rendering
