@@ -48,7 +48,7 @@ tasks:
       - go test ./...
 
   check:
-    desc: "Format + vet + test (what the pre-commit hook runs)"
+    desc: "Format + vet + test (what the pre-commit hook runs, plus golangci-lint when installed)"
     cmds:
       - |
         unformatted=$(gofmt -s -l .)
@@ -82,7 +82,7 @@ tasks:
     cmds:
       - git config core.hooksPath scripts/git-hooks
       - chmod +x scripts/git-hooks/*
-      - echo "git hooks enabled (pre-commit runs task check)"
+      - echo "git hooks enabled (pre-commit runs gofmt/vet/test + golangci-lint when installed)"
 
   coverage:
     desc: Run tests with per-package coverage report
