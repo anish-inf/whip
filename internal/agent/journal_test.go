@@ -2,6 +2,7 @@ package agent
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -96,25 +97,23 @@ func TestSubscribeWithJournalIsAtomic(t *testing.T) {
 	const pre = 50
 	em := r.emitter(task.ID)
 	for i := range pre {
-		em.OnToolStart("", fmt.Sprint(i), "")
+		em.OnToolStart("", strconv.Itoa(i), "")
 	}
 
 	var mu sync.Mutex
 	var live []string
 	stop := make(chan struct{})
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		for i := pre; ; i++ {
 			select {
 			case <-stop:
 				return
 			default:
-				em.OnToolStart("", fmt.Sprint(i), "")
+				em.OnToolStart("", strconv.Itoa(i), "")
 			}
 		}
-	}()
+	})
 
 	events, _, ok := r.SubscribeWithJournal(task.ID, Events{
 		OnToolStart: func(_, n, _ string) { mu.Lock(); live = append(live, n); mu.Unlock() },
