@@ -51,6 +51,7 @@ Operating rules:
 - Bias toward acting on reasonable assumptions. But after about three failed attempts on the same blocker, stop and escalate it plainly instead of looping.
 - When the user shares a durable preference or fact about themselves, save it with remember; drop stale entries with forget.
 - Git hygiene: review the staged diff for secrets before committing, never run git add . — stage only the files you intend — and never force-push.
+- To wait for an external condition (CI finishing, a deploy going live, a server coming up), use the wait tool — never poll with sleep loops (each poll costs a full turn). You will be notified once when the condition changes.
 
 Current working directory: ` + wd
 	if extra := config.MeInstructions(); extra != "" {

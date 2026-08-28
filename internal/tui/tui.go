@@ -92,6 +92,7 @@ type (
 	usageMsg      llm.Usage                 // one request's token usage
 	quitArmMsg    struct{}                  // the idle ctrl+c arm window expired
 	taskUpdateMsg struct{}                  // a background subagent started/settled — redraw
+	waitWakeMsg   string                    // an idle wait fired — wake as a machine turn
 	mcpStatusMsg  struct{}                  // an MCP server changed state — redraw
 	thinkMsg      string                    // streamed reasoning tokens
 	imageMsg      struct {                  // ctrl+v clipboard image result
@@ -2109,6 +2110,18 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case waitWakeMsg:
+		// An idle wait fired: wake as a machine-authored turn (the opencode/
+		// exo wake pattern). If a turn started between the wait's TurnRunning
+		// check and this message, steer into the live turn instead of
+		// double-submitting — a steer parks until the next loop boundary.
+		m.append(dimStyle.Render("⏲ " + firstLine(string(msg))))
+		if m.busy {
+			m.agent.Steer(string(msg))
+			return m, nil
+		}
+		return m.submitTurn(string(msg), false)
+
 	case mcpStatusMsg:
 		// An MCP server changed state. Announce each server's FIRST settle in
 		// the transcript (one line, once per session per server) so arrivals
@@ -2819,6 +2832,7 @@ func (m *model) wireTasks() {
 	}
 	m.agent.Tasks().SetSessionID(m.sessionID)
 	m.agent.SetSessionID(m.sessionID)
+	m.wireWaits()
 	if m.prog == nil {
 		return // headless (tests)
 	}
@@ -2832,6 +2846,20 @@ func (m *model) wireTasks() {
 	// specific agent, precisely so this handoff works.
 	if m.mcpMgr != nil {
 		m.agent.SetMCPTools(m.mcpMgr.Tools())
+	}
+}
+
+// wireWaits points the active agent's wait registry at this UI's wake hook:
+// an idle wait firing submits a machine-authored turn (the opencode/exo
+// pattern — whip's Steer only reaches a RUNNING turn, so idle delivery needs
+// the wake). Called from wireTasks so every agent swap re-installs it. The
+// hook runs on the wait's poller goroutine, so it only sends a message.
+func (m *model) wireWaits() {
+	if m.prog == nil {
+		return // headless (tests)
+	}
+	m.agent.Waits().OnWake = func(text string) {
+		go m.prog.Send(waitWakeMsg(text)) // detached, same rule as OnChange
 	}
 }
 

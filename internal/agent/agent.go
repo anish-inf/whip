@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/context-labs/whip/internal/llm"
@@ -97,6 +98,8 @@ type Agent struct {
 	mu        sync.Mutex
 	pending   []pendingSteer // steered user messages awaiting injection
 	compacted bool           // a compaction already happened this turn — don't retry-loop
+	running   atomic.Bool    // a turn is in flight (wait delivery routes on it)
+	waitReg   *waitRegistry  // lazily created by waits()
 
 	// msgsMu guards Messages for concurrent READERS: the turn goroutine
 	// mutates Messages freely, but a test/UI reader taking msgsMu sees a
@@ -135,6 +138,11 @@ type Agent struct {
 	usageMu sync.Mutex
 	usage   llm.Usage // session totals across every API call (PromptTokens = input)
 }
+
+// TurnRunning reports whether a turn is currently in flight. The wait
+// registry routes delivery on it: busy → Steer (drained at the next loop
+// boundary), idle → the OnWake hook (a parked steer would never be seen).
+func (a *Agent) TurnRunning() bool { return a.running.Load() }
 
 // Steer queues a user message for injection at the next loop boundary of the
 // running turn — after the in-flight response and its tool calls complete,
@@ -243,6 +251,7 @@ func New(client *llm.Client, model string, maxTokens int, systemPrompt string) *
 	}
 	a.Tools = append(a.Tools, taskTool(a), taskSteerTool(a))
 	a.Tools = append(a.Tools, todoTool(a))
+	a.Tools = append(a.Tools, waitTool(a))
 	a.Tools = append(a.Tools, memoryTools(a)...)
 	a.files = newFileLocks()
 	a.bg = newTaskRegistry()
@@ -334,6 +343,8 @@ func (a *Agent) turn(ctx context.Context, input string, parts []llm.ContentPart,
 	if n := a.decay(); n > 0 && ev.OnDecay != nil {
 		ev.OnDecay(n)
 	}
+	a.running.Store(true)
+	defer a.running.Store(false)
 	msg := llm.Message{Role: "user", Content: input, Parts: parts, Authored: authored}
 	if authored {
 		now := time.Now()
