@@ -495,16 +495,22 @@ concurrently while driving 1/4 directly, if desired.
 
 ## Global checklist
 
-- [ ] 1. wait tool
-- [ ] 2. prompt caching
-- [x] 3. task event journal — DONE on branch feat/task-journal (registry
+All six items shipped, each on its own branch/PR, CI green (11/11) at PR-open
+time; PLAN.md's per-item checkboxes and Definition-of-done apply. #59 merged.
+
+- [x] 1. wait tool — PR #58 (feat/wait-tool)
+- [x] 2. prompt caching — PR #59 MERGED (feat/prompt-caching)
+- [x] 3. task event journal — PR #57 (feat/task-journal; registry
       journal + atomic SubscribeWithJournal + shared renderTaskEvent; journal
       tests, replay tests, task check + -race green)
-- [ ] 4. busy-state steering
-- [ ] 5. subagent session persistence
-- [ ] 6. spawn-lag polish
-- [ ] memory cap change (DONE — 300→2000 in internal/memory/memory.go,
-      uncommitted; fold into whichever PR lands first or commit standalone)
+- [x] 4. busy-state steering — PR #60 (feat/busy-steer)
+- [x] 5. subagent session persistence — PR #61
+      (feat/subagent-session-persistence; transcripts as attributed sessions
+      `task-<parent>-<taskID>`, forked_from=parent, restored-task replay)
+- [x] 6. spawn-lag polish — PR #62 (feat/subagent-spawn-feedback; register
+      before worktree provision, worktree path queued as first steer)
+- [x] memory cap change (DONE — 300→2000 in internal/memory/memory.go,
+      folded into PR #57)
 - [ ] cleanup: delete `internal/tui/whip-transcript-.md` (stray untracked
       export file noticed at session start — confirm with user before
       deleting)
