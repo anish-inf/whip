@@ -68,11 +68,13 @@ func TestEmitterBroadcastsToSubscribers(t *testing.T) {
 
 	var mu sync.Mutex
 	var a, b []string
-	if !r.Subscribe(task.ID, recorder(&mu, &a)) || !r.Subscribe(task.ID, recorder(&mu, &b)) {
-		t.Fatal("Subscribe on a running task must succeed")
+	_, _, okA := r.SubscribeWithJournal(task.ID, recorder(&mu, &a))
+	_, _, okB := r.SubscribeWithJournal(task.ID, recorder(&mu, &b))
+	if !okA || !okB {
+		t.Fatal("SubscribeWithJournal on a running task must report live")
 	}
-	if r.Subscribe("task-nope", Events{}) {
-		t.Error("Subscribe on an unknown task must fail")
+	if _, _, ok := r.SubscribeWithJournal("task-nope", Events{}); ok {
+		t.Error("SubscribeWithJournal on an unknown task must fail")
 	}
 
 	fire(r.emitter(task.ID)) // emitter has no OnUsage — fire skips it
@@ -86,8 +88,8 @@ func TestEmitterBroadcastsToSubscribers(t *testing.T) {
 	fire(r.emitter("task-nope"))
 
 	r.settle(task.ID, TaskDone, "report")
-	if r.Subscribe(task.ID, Events{}) {
-		t.Error("Subscribe on a settled task must fail")
+	if _, _, ok := r.SubscribeWithJournal(task.ID, Events{}); ok {
+		t.Error("SubscribeWithJournal on a settled task must not report live")
 	}
 }
 

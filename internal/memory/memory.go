@@ -29,8 +29,11 @@ import (
 )
 
 const (
-	maxEntries     = 50
-	maxEntryLength = 300
+	maxEntries = 50
+	// Entries must stay one physical line (the file format is line-based), but
+	// 300 chars forced research takeaways to be split across several entries.
+	// The injection budget stays bounded by maxEntries, not by line length.
+	maxEntryLength = 2000
 )
 
 // Entry is one numbered memory line. Entries are numbered across the whole

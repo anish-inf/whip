@@ -2159,27 +2159,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if tv == nil || msg.id != tv.id {
 			return m, nil
 		}
-		switch msg.kind {
-		case 0: // text delta
-			tv.buf.WriteString(msg.s)
-		case 1: // tool start
-			fmt.Fprintf(&tv.buf, "\n%s %s %s\n", toolStyle.Render("⚒"), msg.s, dimStyle.Render(msg.s2))
-		case 2: // tool end
-			preview := strings.Split(strings.TrimRight(msg.s2, "\n"), "\n")
-			if len(preview) > 4 {
-				preview = append(preview[:4], fmt.Sprintf("… +%d lines", len(msg.s2)-4))
-			}
-			fmt.Fprintf(&tv.buf, "%s\n", dimStyle.Render("  "+strings.Join(preview, "\n  ")))
-		case 3: // a steered message reached the running subagent (task_steer / chat)
-			fmt.Fprintf(&tv.buf, "\n%s %s\n", youStyle.Render("↪ steered:"), msg.s)
-		case 4: // follow-up turn settled; unlock the chat input
+		if msg.kind == 4 { // follow-up turn settled; unlock the chat input
 			tv.busy, tv.followCancel = false, nil
-			if msg.s != "" {
-				fmt.Fprintf(&tv.buf, "\n%s\n", errStyle.Render(msg.s))
-			} else {
-				tv.buf.WriteString("\n")
-			}
 		}
+		renderTaskEvent(&tv.buf, msg.kind, msg.s, msg.s2)
 		m.refreshTaskVP()
 		return m, nil
 
