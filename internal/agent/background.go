@@ -56,6 +56,13 @@ type BackgroundTask struct {
 	// after settle, and a shared slice would let a follow-up mutate an
 	// already-saved snapshot. nil while running and on restored tasks.
 	SubMessages []llm.Message
+
+	// SubModel names the route the subagent actually ran on, for transcript
+	// attribution — the sub often runs a DIFFERENT model than the parent
+	// (TaskDefault or a per-task override), so persisting the parent's model
+	// would mislabel the transcript. Captured at StartBackground from the
+	// resolved sub, before any turn runs.
+	SubModel string
 }
 
 // taskRegistry tracks background subagents for one parent agent. It is the
@@ -254,11 +261,19 @@ func (a *Agent) StartBackground(description, prompt string, o SubModel) *Backgro
 	}
 	id := taskSlug(description, taskIDCounter.Add(1))
 	taskCtx, cancel := context.WithCancel(context.Background())
+	sub := a.newSub(o)
 	t := &BackgroundTask{
 		ID: id, Description: description, Prompt: prompt,
 		Status: TaskRunning, StartedAt: time.Now(),
 		Done: make(chan struct{}), cancel: cancel,
-		sub: a.newSub(o),
+		sub: sub,
+		// Attribute the transcript to the route the sub actually runs on.
+		// sub.Model is the resolved API id (TaskDefault → per-task override →
+		// parent's, per newSub's precedence) — often NOT the parent's model,
+		// so persisting the parent's model/provider would mislabel it. The
+		// provider isn't recoverable here (SubModel carries only client+API
+		// id), so it's left for the caller to keep blank.
+		SubModel: sub.Model,
 	}
 	a.bg.mu.Lock()
 	a.bg.tasks[id] = t

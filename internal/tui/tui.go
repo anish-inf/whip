@@ -2819,8 +2819,10 @@ func (m *model) wireTasks() {
 		// Persist the subagent's full transcript as its own attributed session
 		// (id <parent>/task/<id>) once it settles — start rows carry no
 		// transcript yet, so only settled tasks with a live sub have one.
+		// Attribute it to the sub's own route (t.SubModel): a model-overridden
+		// subagent must not be recorded under the parent's model/provider.
 		if t.Status != agent.TaskRunning && t.SubMessages != nil {
-			if _, err := st.SaveSubagentTranscript(sessionID, t.ID, t.SubMessages, m.modelName, m.provName); err != nil {
+			if _, err := st.SaveSubagentTranscript(sessionID, t.ID, t.SubMessages, t.SubModel, ""); err != nil {
 				config.LogEvent("session.task", "transcript save failed: "+err.Error())
 			}
 		}

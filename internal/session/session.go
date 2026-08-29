@@ -272,17 +272,25 @@ func (s *Store) SaveSubagentTranscript(parentID, taskID string, msgs []llm.Messa
 	if err := s.Save(id, 0, msgs, model, provider); err != nil {
 		return "", err
 	}
+	// Re-save rewrites rows [0, len(msgs)); a follow-up turn that compacted
+	// the transcript writes FEWER rows than last time, and Save's per-seq
+	// INSERT OR REPLACE never touches the tail — without this sweep the stale
+	// rows at seq >= len(msgs) linger and reload as phantom trailing messages.
+	if _, err := s.db.ExecContext(context.Background(), `DELETE FROM messages WHERE session_id=? AND seq>=?`, id, len(msgs)); err != nil {
+		return "", err
+	}
 	return id, nil
 }
 
 // SubagentTranscript loads a subagent's persisted conversation by parent +
-// task id ("" when never persisted).
+// task id ("" when never persisted). Loads by exact id (loadMessages), not
+// Load's prefix scan: sibling task ids can share a stem, which would make the
+// prefix form ambiguous.
 func (s *Store) SubagentTranscript(parentID, taskID string) ([]llm.Message, error) {
-	_, msgs, err := s.Load(subagentSessionID(parentID, taskID))
-	if err != nil {
-		return nil, err
+	if parentID == "" || taskID == "" {
+		return nil, nil
 	}
-	return msgs, nil
+	return s.loadMessages(subagentSessionID(parentID, taskID))
 }
 
 // subagentSessionID builds the attributed session id for a subagent's
@@ -359,30 +367,43 @@ func (s *Store) Load(idOrPrefix string) (Meta, []llm.Message, error) {
 		return Meta{}, nil, fmt.Errorf("session id %q is ambiguous", idOrPrefix)
 	}
 	meta := metas[0]
+	msgs, err := s.loadMessages(meta.ID)
+	if err != nil {
+		return Meta{}, nil, err
+	}
+	return meta, msgs, nil
+}
 
+// loadMessages reads one session's full message log by EXACT id — the read
+// half of Load once the meta row is known. Split out so subagent transcripts
+// (whose ids are built deterministic by subagentSessionID, never typed by the
+// user) load by exact match instead of Load's prefix scan: a prefix query
+// over transcript ids goes "ambiguous" the moment two sibling task ids share
+// a stem (task-<parent>-foo-1 vs task-<parent>-foo-12).
+func (s *Store) loadMessages(id string) ([]llm.Message, error) {
 	// pre-size the slice: a long session is hundreds of rows; the COUNT is
 	// one index scan and avoids O(log n) reallocs while scanning
 	var count int
-	_ = s.db.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM messages WHERE session_id=?`, meta.ID).Scan(&count)
+	_ = s.db.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM messages WHERE session_id=?`, id).Scan(&count)
 
-	mrows, err := s.db.QueryContext(context.Background(), `SELECT content FROM messages WHERE session_id=? ORDER BY seq`, meta.ID)
+	mrows, err := s.db.QueryContext(context.Background(), `SELECT content FROM messages WHERE session_id=? ORDER BY seq`, id)
 	if err != nil {
-		return Meta{}, nil, err
+		return nil, err
 	}
 	defer func() { _ = mrows.Close() }()
 	msgs := make([]llm.Message, 0, count)
 	for mrows.Next() {
 		var data string
 		if err := mrows.Scan(&data); err != nil {
-			return Meta{}, nil, err
+			return nil, err
 		}
 		var m llm.Message
 		if err := json.Unmarshal([]byte(data), &m); err != nil {
-			return Meta{}, nil, err
+			return nil, err
 		}
 		msgs = append(msgs, m)
 	}
-	return meta, answerDanglingToolCalls(applyCompaction(s.db, meta.ID, msgs)), mrows.Err()
+	return answerDanglingToolCalls(applyCompaction(s.db, id, msgs)), mrows.Err()
 }
 
 // applyCompaction derives the compacted view from the raw log: the latest
