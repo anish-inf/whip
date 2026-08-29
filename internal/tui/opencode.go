@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -211,6 +212,29 @@ func opencodeUserCard(text string, width int) string {
 		b.WriteString(bar + "  " + ln) // opencode uses two spaces after the bar
 	}
 	return b.String()
+}
+
+// opencodeThought renders opencode's collapsed reasoning line, "+ Thought:
+// {duration}", indented 3 to sit under the assistant column.
+func (m *model) opencodeThought(d time.Duration) string {
+	return "   " + toolStyle.Render("+ Thought: "+fmtShortDur(d)) // 3-space indent to sit under the assistant column
+}
+
+// opencodeAttribution renders opencode's per-response attribution line:
+// "▣  {mode} · {model} · {duration}", indented 3 to sit under the assistant body.
+func (m *model) opencodeAttribution(d time.Duration) string {
+	return "   " + botStyle.Render("▣") + "  " + m.ocModeLabel() + // 3-space indent under the assistant column
+		dimStyle.Render(" · ") + m.modelName +
+		dimStyle.Render(" · "+fmtShortDur(d))
+}
+
+// fmtShortDur formats a duration the way opencode does: "173ms" under a second,
+// otherwise "2.4s".
+func fmtShortDur(d time.Duration) string {
+	if d < time.Second {
+		return fmt.Sprintf("%dms", d.Milliseconds())
+	}
+	return fmt.Sprintf("%.1fs", d.Seconds())
 }
 
 // ocModeLabel is the left segment of the prompt meta row. whip has no named

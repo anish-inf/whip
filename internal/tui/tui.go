@@ -175,7 +175,8 @@ type model struct {
 	lastUp   time.Time        // last ↑ keypress; repeat detection for history rollover
 	now      func() time.Time // test seam; defaults to time.Now
 
-	turnStart time.Time // when the in-flight turn began; zero when idle (busy line shows elapsed)
+	turnStart  time.Time // when the in-flight turn began; zero when idle (busy line shows elapsed)
+	thinkStart time.Time // opencode mode: when the current reasoning segment began (collapsed to "+ Thought: {dur}")
 
 	queue      []string // messages typed while busy, sent after the turn ends
 	queueSel   int      // selected queued message, -1 = none (not navigating)
@@ -1087,6 +1088,7 @@ const (
 	blockToolRun                     // a running tool call: verb line, collapses on completion
 	blockToolQueued                  // a tool call still streaming from the model; replaced by blockToolRun on start
 	blockUser                        // a user turn: opencode mode renders a bordered card, else the "❯ " prefix
+	blockOCMeta                      // opencode meta line (+ Thought / ▣ attribution): pre-indented, rendered verbatim (no wrap, which would trim the indent)
 )
 
 // toolPreviewLines is how many lines of a tool result show when collapsed.
@@ -1151,6 +1153,8 @@ func (b block) render(width int) string {
 			return opencodeUserCard(b.text, width)
 		}
 		return wrap(youStyle.Render(glyphUser)+b.text, width)
+	case blockOCMeta:
+		return b.text // pre-indented; verbatim so wrap() can't trim the indent
 	case blockAssistant:
 		if ocActive {
 			// opencode assistant messages carry no bullet: the body is indented 3.
@@ -1798,6 +1802,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case thinkMsg:
 		if m.showThinking {
+			if m.uiMode == opencodeMode {
+				if m.thinkStart.IsZero() { // collapse reasoning to "+ Thought: {dur}" at flush
+					m.thinkStart = m.nowFn()
+				}
+				return m, nil // suppress the live reasoning text
+			}
 			m.flushCurrent() // thinking renders above the answer
 			m.curThink += string(msg)
 			if i := strings.LastIndexByte(m.curThink, '\n'); i >= 0 {
@@ -2046,6 +2056,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.busy = false
 		m.cancel = nil
 		m.interrupt1 = false
+		if m.uiMode == opencodeMode && msg.err == nil && !m.turnStart.IsZero() {
+			m.appendRaw(blockOCMeta, m.opencodeAttribution(m.nowFn().Sub(m.turnStart))) // ▣ mode · model · duration
+		}
 		m.turnStart = time.Time{}
 		m.maybeTitle()
 		// Cancellation arrives wrapped from the in-flight http request
@@ -3286,6 +3299,15 @@ func (m *model) setThinking(on bool) {
 }
 
 func (m *model) flushThink() {
+	if m.uiMode == opencodeMode {
+		if !m.thinkStart.IsZero() { // collapse the reasoning segment to one line
+			m.appendRaw(blockOCMeta, m.opencodeThought(m.nowFn().Sub(m.thinkStart)))
+			m.thinkStart = time.Time{}
+		}
+		m.curThink = ""
+		m.inThink = false
+		return
+	}
 	cur := strings.TrimRight(m.curThink, " \n")
 	m.curThink = ""
 	if cur != "" {

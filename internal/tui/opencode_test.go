@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/context-labs/whip/internal/agent"
@@ -92,6 +93,34 @@ func TestOpencodePrompt(t *testing.T) {
 		if !strings.Contains(got, "Off") {
 			t.Fatalf("prompt meta row missing mode label: %q", got)
 		}
+	}
+}
+
+func TestFmtShortDur(t *testing.T) {
+	if got := fmtShortDur(150 * time.Millisecond); got != "150ms" {
+		t.Fatalf("sub-second = %q, want 150ms", got)
+	}
+	if got := fmtShortDur(2400 * time.Millisecond); got != "2.4s" {
+		t.Fatalf("seconds = %q, want 2.4s", got)
+	}
+}
+
+func TestOpencodeThoughtAndAttribution(t *testing.T) {
+	m := &model{agent: &agent.Agent{}, modelName: "kimi-k3"}
+	th := m.opencodeThought(159 * time.Millisecond)
+	if !strings.HasPrefix(th, "   ") || !strings.Contains(th, "+ Thought: 159ms") {
+		t.Fatalf("thought = %q", th)
+	}
+	at := m.opencodeAttribution(1600 * time.Millisecond)
+	if !strings.HasPrefix(at, "   ") || !strings.Contains(at, "▣") || !strings.Contains(at, "kimi-k3") || !strings.Contains(at, "1.6s") {
+		t.Fatalf("attribution = %q", at)
+	}
+}
+
+func TestBlockOCMetaRendersVerbatim(t *testing.T) {
+	b := block{kind: blockOCMeta, text: "   + Thought: 1s"}
+	if got := b.render(80); got != "   + Thought: 1s" {
+		t.Fatalf("blockOCMeta = %q, want verbatim (indent preserved)", got)
 	}
 }
 
