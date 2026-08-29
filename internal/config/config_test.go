@@ -366,6 +366,35 @@ func TestLogEventNeverFails(t *testing.T) {
 	LogEvent("config.load", "should not panic or error")
 }
 
+// The first-run signal the wizard triggers on: no config file AND no
+// setup-done marker. A subcommand's Load on a fresh install creates the
+// config but never the marker — so the wizard still offers on the first
+// interactive launch.
+func TestSetupDoneMarker(t *testing.T) {
+	t.Setenv("WHIP_HOME", t.TempDir())
+	if SetupDone() {
+		t.Fatal("a fresh WHIP_HOME should report setup-not-done")
+	}
+	if _, err := Load(); err != nil { // what a subcommand does
+		t.Fatal(err)
+	}
+	if !Exists() {
+		t.Fatal("Load should have written the config")
+	}
+	if SetupDone() {
+		t.Fatal("a subcommand's Load must not mark setup done — the wizard would never run")
+	}
+	MarkSetupDone()
+	if !SetupDone() {
+		t.Fatal("the marker should report done")
+	}
+	// And the wizard completing is what writes it: prove the file shape.
+	dir, _ := Dir()
+	if _, err := os.Stat(filepath.Join(dir, "setup.done")); err != nil {
+		t.Fatalf("setup.done should exist: %v", err)
+	}
+}
+
 // ContextWindow prefers the new `context` field but falls back to the legacy
 // `maxTokens` for configs written before the rename.
 func TestContextWindowBackCompat(t *testing.T) {

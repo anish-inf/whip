@@ -161,6 +161,11 @@ func main() {
 		return
 	}
 
+	// The setup wizard triggers on "no config file AND no setup-done marker":
+	// Load creates the config on first run, so only a pre-Load stat can tell
+	// this install has never launched — and the marker keeps a subcommand's
+	// Load (whip auth/run/mcp/…) from permanently consuming the first run.
+	firstRun := !config.Exists() && !config.SetupDone()
 	cfg, err := config.Load()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "whip:", err)
@@ -183,7 +188,7 @@ func main() {
 	// notice still shows on the next launch.
 	go update.Check(version)
 	tui.Version = version // /report names the build in the bug-report bundle
-	sessionID, err := tui.Run(cfg, *modelFlag, *providerFlag, systemPrompt(cwd(), time.Now()), *resumeFlag, *cautiousFlag)
+	sessionID, err := tui.Run(cfg, *modelFlag, *providerFlag, systemPrompt(cwd(), time.Now()), *resumeFlag, *cautiousFlag, firstRun)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "whip:", err)
 		os.Exit(1)

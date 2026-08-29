@@ -349,6 +349,41 @@ compaction path must see immediately) are never retried. Each retry posts a
 `⚠ request failed (…) — retrying in Ns (attempt N/M)` line via the
 `Client.OnRetry` hook. Tests: `llm/retry_test.go`.
 
+`internal/tui/setup.go` — the first-run setup wizard. When `whip` starts with
+no `~/.whip/config.json` AND no `~/.whip/setup.done` marker
+(`cmd/whip/main.go` checks `config.Exists()`/`config.SetupDone()` before
+`config.Load()` creates the config, and threads the flag into `tui.Run`), a
+short plain-terminal wizard runs after the trust gate and before bubbletea
+takes the terminal — the `checkTrust` pattern, one question per line. The
+marker matters: a subcommand's `config.Load` (`whip auth`/`run`/`mcp`) writes
+the default config without running the wizard, and without the marker that
+would permanently consume the first run. `tui.Run` shares one `bufio.Reader`
+between the trust gate and the wizard — a fresh reader per prompt would lose
+the other's buffered read-ahead when a paste answers several prompts at once.
+
+1. **Provider** — `[1] Inference.net (browser sign-in) · [2] OpenRouter
+   (paste key) · [3] skip`, Enter = skip. `1` runs the device login through
+   `inferencenet.CompleteLogin` with a numbered-list `ChooseFunc` standing in
+   for the TUI picker, then mints the machine key and upserts the provider.
+   `2` validates the pasted key against OpenRouter's `/models` (the
+   `openRouterValidate` seam — an httptest stub in tests) before
+   `UpsertOpenRouter` writes anything. A failed sign-in or bad paste never
+   wedges install: the wizard prints the error and continues.
+2. **Thinking tokens** — `[Y/n]`, Enter = show (today's default; "n" writes
+   `"thinking": false`).
+3. **MCP imports** — claude (`~/.claude.json`, `.mcp.json`) and codex
+   (`~/.codex/config.toml`), both `[y/N]` — Enter = **no**: a first run that
+   only presses Enter imports nothing. The answers always land in the
+   `mcpImport` block as explicit `enabled: bool`s so the install has a
+   record, and ctrl+p → MCPs flips them later.
+
+Non-terminal stdin (piped runs, `whip run`, ACP, tests) skips the wizard
+silently and keeps the shipped defaults — headless launches never see a
+prompt. All writes go through the guarded `Config.Save`. Tests:
+`tui/setup_test.go` (`askYN` parsing incl. EOF/garbage fallback,
+Enter-through opt-out, opt-in, thinking-off persistence, OpenRouter good/bad
+key via the injected validator).
+
 `cmd/whip/auth.go`, `internal/config/openrouter.go`,
 `internal/tui/auth_cmd.go` — one-command provider onboarding, first (and
 currently only) for OpenRouter. `whip auth openrouter [--env] [<key>]` takes
@@ -585,6 +620,31 @@ expand from whip's environment.
 - **TUI** — `/mcp` shows the status table (`● N tools` / `✗ err` /
   `○ disabled` / `◌ connecting…`); `/mcp <name> reconnect|enable|disable`
   reconnects live or persists a toggle through the guarded `Config.Save`.
+- **Palette panel** — ctrl+p → "MCPs" drills into a sub-panel (the `panelMCP`
+  kind) with two source-toggle rows (`Import Claude MCPs`, `Import Codex
+  MCPs`) then one row per live or policy-blocked server. enter/←/→ toggles:
+  source rows go through `mcpSetImport`, server rows through the same
+  `mcpSetEnabled` as `/mcp`. Toggling rebuilds the rows in place so the
+  checkbox flips visibly. A source with `only`/`exclude` filters notes
+  "(name filters set — edit config)" instead of pretending the toggle is
+  complete.
+- **Live source toggles, no restart** — `mcpSetImport` persists the gate then
+  applies it in place: off calls `Manager.RemoveServers` (sessions close, the
+  gen bump stops auto-reconnect and stale watchers, tools leave
+  `Agent.SetMCPTools` on the next `fireOnChange`); on calls
+  `Manager.AddServers` (lazy-with-kickoff connects like startup, skipped for
+  names already live so whip-owned shadow entries win). Both refresh
+  `SetBlocked` so `/mcp` stays accurate. With no manager yet (nothing
+  configured), enabling builds one on the spot so imports can be switched on
+  from zero. Every `Manager.servers` map read (Tools/Statuses/Config/Disable/
+  Enable/Reconnect/InstructionsBlock/Close) takes `onChangeMu` — the same
+  lock that guards AddServers/RemoveServers mutations — so a mid-turn toggle
+  never races the slice a running request reads. Source attribution matches
+  BOTH shapes: `Filtered.Sources` uses short labels (`"codex"`,
+  `".mcp.json"`) while the live manager's `Statuses()` carry the absolute
+  discovery path — `isSource` in `tui/mcp.go` normalizes both, and a
+  remove-mid-connect is guarded by `connect`'s `startGen`/`stillOurs` check
+  so a toggled-off server's in-flight connect can't resurrect it.
 - **CLI** — `whip mcp list` (merged view with per-name source labels —
   `whip config` / `.mcp.json` / `codex config` — and a `blocked` state),
   `whip mcp add <name> -- <cmd...>` / `--url`, `whip mcp remove`,
@@ -639,6 +699,13 @@ a fake provider; stale def on a dead server returns `"Error: …"` and the turn
 completes), `selfhost_test.go` (`whip mcp serve` end-to-end, gated on
 `WHIP_TEST_SELFHOST=1`), `tui/mcp_test.go` (status view incl. blocked rows,
 toggle persistence round-trip, enable-on-blocked refusal),
+`tui/mcp_panel_test.go` (row assembly, palette-driven source toggle off →
+server gone + gate persisted + whip-owned entries untouched, enable → live
+re-discovery, only/exclude filters survive a toggle, panel row replaces the
+old run-row), `manager_live_test.go` (`AddServers` connects a late server,
+duplicate add no-ops, `RemoveServers` drops tools immediately, remove-
+while-connecting + concurrent readers race-clean, stale tool closure fails
+as an error string, remove-then-add reconnects),
 `config/config_test.go` (mcpImport JSONC round-trip, clobber recovery
 preserving the block), `cmd/whip/mcp_import_test.go` (import dry-run vs
 apply, idempotence, blocked servers never imported).
