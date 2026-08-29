@@ -30,6 +30,14 @@ const whipPlaceholder = "Ask whip anything… (/ for commands, tab completes)"
 // method on block, not model) can branch on the render mode. Set by applyUIMode.
 var ocActive bool
 
+// Panel background fills give opencode's layered contrast (main bg < panel <
+// element). Theme-aware so opencode mode still honors whip's light/dark/auto:
+// a subtle shade darker than a light background, lighter than a dark one.
+var (
+	ocPanelBg   = lipgloss.AdaptiveColor{Light: "254", Dark: "#161616"} // user/tool cards, sidebar
+	ocElementBg = lipgloss.AdaptiveColor{Light: "252", Dark: "#1e1e1e"} // prompt input box
+)
+
 // sidebarWidth is the fixed width of the opencode-mode right sidebar, matching
 // opencode (routes/session/sidebar.tsx). The sidebar shows only when the
 // terminal is at least sidebarMinWidth columns wide, so a narrow terminal
@@ -96,7 +104,10 @@ func (m *model) sidebarVisible() bool {
 // the number of rows to fill so the sidebar spans the body. All styling uses
 // whip's theme styles, so it honors light/dark/auto.
 func (m *model) sidebarView(height int) string {
-	head := lipgloss.NewStyle().Bold(true)
+	// Every style carries the panel background so text doesn't punch holes in the
+	// filled panel column.
+	head := lipgloss.NewStyle().Bold(true).Background(ocPanelBg)
+	dim := dimStyle.Background(ocPanelBg)
 
 	title := strings.TrimSpace(m.sessTitle)
 	if title == "" {
@@ -109,24 +120,24 @@ func (m *model) sidebarView(height int) string {
 	// Context: tokens used, share of the window, spend.
 	b.WriteString(head.Render("Context") + "\n")
 	u := m.agent.Usage()
-	b.WriteString(dimStyle.Render(fmt.Sprintf("%s tokens", fmtTok(u.PromptTokens+u.CompletionTokens))) + "\n")
+	b.WriteString(dim.Render(fmt.Sprintf("%s tokens", fmtTok(u.PromptTokens+u.CompletionTokens))) + "\n")
 	if m.agent.ContextLimit > 0 {
 		pct := agent.EstimateTokens(m.agent.Messages) * 100 / m.agent.ContextLimit
-		b.WriteString(dimStyle.Render(fmt.Sprintf("%d%% used", pct)) + "\n")
+		b.WriteString(dim.Render(fmt.Sprintf("%d%% used", pct)) + "\n")
 	}
 	if cost, ok := m.sessionCost(); ok {
-		b.WriteString(dimStyle.Render(fmt.Sprintf("$%.2f spent", cost)) + "\n\n")
+		b.WriteString(dim.Render(fmt.Sprintf("$%.2f spent", cost)) + "\n\n")
 	} else {
-		b.WriteString(dimStyle.Render("$0.00 spent") + "\n\n")
+		b.WriteString(dim.Render("$0.00 spent") + "\n\n")
 	}
 
 	// LSP status.
 	b.WriteString(head.Render("LSP") + "\n")
-	b.WriteString(dimStyle.Render(m.lspSummary()) + "\n")
+	b.WriteString(dim.Render(m.lspSummary()) + "\n")
 
 	// Top content (title + Context + LSP), clipped if the sidebar is very short.
 	top := strings.Split(strings.TrimRight(b.String(), "\n"), "\n")
-	footer := growStyle.Render("• ") + head.Render("whip") + dimStyle.Render(" "+Version)
+	footer := growStyle.Background(ocPanelBg).Render("• ") + head.Render("whip") + dim.Render(" "+Version)
 
 	rows := make([]string, 0, height)
 	if height <= 0 {
@@ -141,9 +152,13 @@ func (m *model) sidebarView(height int) string {
 		}
 		rows = append(rows, footer) // pinned to the bottom row
 	}
-	// opencode's sidebar has no border — it's set apart by a panel background and
-	// spacing; keeping whip's theme, a left pad plus the gap is the analog.
-	col := lipgloss.NewStyle().Width(sidebarWidth).PaddingLeft(2).PaddingRight(2)
+	// opencode's sidebar is set apart by a panel background (no border). Fill the
+	// whole column with the panel shade so it reads as a distinct panel.
+	col := lipgloss.NewStyle().
+		Width(sidebarWidth).
+		PaddingLeft(2).
+		PaddingRight(2).
+		Background(ocPanelBg)
 	return col.Render(strings.Join(rows, "\n"))
 }
 
@@ -180,15 +195,23 @@ func (m *model) opencodePrompt(inner string, width int) string {
 	if width < 6 {
 		return inner
 	}
-	bar := youStyle.Render("┃")
+	elem := lipgloss.NewStyle().Background(ocElementBg)
+	bar := youStyle.Background(ocElementBg).Render("┃")
+	row := func(content string) string { return elem.Width(width).Render(content) }
 	var b strings.Builder
+	b.WriteString(row("") + "\n") // paddingTop
 	for _, ln := range strings.Split(inner, "\n") {
-		b.WriteString(bar + "  " + ln + "\n")
+		b.WriteString(row(bar+elem.Render("  "+ln)) + "\n")
 	}
+	b.WriteString(row("") + "\n") // padding below the input, above the meta row
 	// model/mode row: "Low · kimi-k3  provider"
-	meta := m.ocModeLabel() + dimStyle.Render(" · ") + m.modelName + dimStyle.Render("  "+m.provName)
-	b.WriteString(bar + "  " + meta + "\n")
-	b.WriteString(youStyle.Render("╹") + dimStyle.Render(strings.Repeat("▀", max(width-1, 0))))
+	meta := m.ocModeLabel() + dimStyle.Background(ocElementBg).Render(" · ") +
+		elem.Render(m.modelName) + dimStyle.Background(ocElementBg).Render("  "+m.provName)
+	b.WriteString(row(bar+elem.Render("  "+meta)) + "\n")
+	// Soft bottom edge: a ╹ tail then a ▀ line the SAME color as the box fill, so
+	// it reads as the box's rounded bottom rather than a bright bar.
+	shadow := lipgloss.NewStyle().Foreground(ocElementBg)
+	b.WriteString(youStyle.Render("╹") + shadow.Render(strings.Repeat("▀", max(width-1, 0))))
 	return b.String()
 }
 
@@ -200,16 +223,21 @@ func opencodeUserCard(text string, width int) string {
 	if width < 4 {
 		return text
 	}
-	bar := youStyle.Render("┃")
+	panel := lipgloss.NewStyle().Background(ocPanelBg)
+	bar := youStyle.Background(ocPanelBg).Render("┃")
 	lines := strings.Split(wrap(text, width-3), "\n")
-	rows := append([]string{""}, lines...) // blank row above
-	rows = append(rows, "")                // blank row below
+	rows := append([]string{""}, lines...) // blank padding row above
+	rows = append(rows, "")                // blank padding row below
 	var b strings.Builder
 	for i, ln := range rows {
 		if i > 0 {
 			b.WriteByte('\n')
 		}
-		b.WriteString(bar + "  " + ln) // opencode uses two spaces after the bar
+		content := ""
+		if ln != "" {
+			content = bar + panel.Render("  "+ln) // two spaces after the bar
+		}
+		b.WriteString(panel.Width(width).Render(content)) // fill the row to width with the panel bg
 	}
 	return b.String()
 }
@@ -280,11 +308,24 @@ func (m *model) applyUIMode(mode string) {
 		ocActive = true
 		m.input.Prompt = "" // opencodePrompt supplies the ┃ bar per line
 		m.input.Placeholder = "Ask anything…"
+		// Fill the textarea with the element background so the input box reads as
+		// a filled panel (opencode's prompt box).
+		elem := lipgloss.NewStyle().Background(ocElementBg)
+		m.input.FocusedStyle.Text = elem
+		m.input.FocusedStyle.CursorLine = elem
+		m.input.FocusedStyle.Placeholder = dimStyle.Background(ocElementBg)
+		m.input.BlurredStyle.Text = elem
+		m.input.BlurredStyle.Placeholder = dimStyle.Background(ocElementBg)
 	} else {
 		m.uiMode = ""
 		ocActive = false
 		m.input.Prompt = "┃ "
 		m.input.Placeholder = whipPlaceholder
+		m.input.FocusedStyle.Text = lipgloss.NewStyle()
+		m.input.FocusedStyle.CursorLine = lipgloss.NewStyle()
+		m.input.FocusedStyle.Placeholder = dimStyle
+		m.input.BlurredStyle.Text = lipgloss.NewStyle()
+		m.input.BlurredStyle.Placeholder = dimStyle
 	}
 }
 

@@ -1575,9 +1575,9 @@ func (m *model) layout() {
 	// status line + its blank were never budgeted).
 	chrome := 6 + m.input.Height()
 	if m.uiMode == opencodeMode {
-		// drops the header row and the tips line + its blank (-3); adds the prompt
-		// panel's model/mode row and ▀ tail (+2).
-		chrome--
+		// drops the header row and the tips line + its blank (-3); the prompt
+		// panel adds paddingTop, a blank, the model/mode row, and the ▀ tail (+4).
+		chrome++
 	}
 	if m.iactive != nil {
 		// input box is hidden while a command has the terminal; drop its height
