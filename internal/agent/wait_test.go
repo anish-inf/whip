@@ -169,12 +169,30 @@ func TestWaitToolRegisters(t *testing.T) {
 	if !strings.Contains(out, "do NOT sleep-poll") {
 		t.Fatalf("tool output should state the no-poll contract: %q", out)
 	}
-	// The registered wait (exit 0) settles on the immediate first check.
+	// The registered wait (exit 0) settles on the immediate first check —
+	// which also removes it from the registry map, so the handle may already
+	// be gone by the time we look. Either outcome proves the wiring.
+	ag.Waits().mu.Lock()
+	var ws []*waitTask
 	for _, w := range ag.Waits().waits {
+		ws = append(ws, w)
+	}
+	ag.Waits().mu.Unlock()
+	if len(ws) > 1 {
+		t.Fatalf("at most one wait should be registered, got %d", len(ws))
+	}
+	if len(ws) == 1 {
 		select {
-		case <-w.Done:
+		case <-ws[0].Done:
 		case <-time.After(2 * time.Second):
 			t.Fatal("registered wait never settled")
+		}
+		// Settled waits are dropped from the map (no listing surface exists).
+		ag.Waits().mu.Lock()
+		left := len(ag.Waits().waits)
+		ag.Waits().mu.Unlock()
+		if left != 0 {
+			t.Fatalf("settled wait should be deleted from the registry, %d left", left)
 		}
 	}
 }

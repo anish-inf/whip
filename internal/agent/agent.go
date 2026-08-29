@@ -459,10 +459,16 @@ func (a *Agent) turn(ctx context.Context, input string, parts []llm.ContentPart,
 // deferred teardown routes each survivor to the wait registry's OnWake, which
 // submits a machine turn — the same wake path as an idle wait firing.
 func (a *Agent) drainOrphanedSteers() {
+	// Locked read: Waits()/wireWaits write waitReg under a.mu from the TUI
+	// goroutine; a bare field read here races an agent swap mid-turn.
+	a.mu.Lock()
+	reg := a.waitReg
+	a.mu.Unlock()
+	if reg == nil || reg.OnWake == nil {
+		return
+	}
 	for _, s := range a.drainPending() {
-		if a.waitReg != nil && a.waitReg.OnWake != nil {
-			a.waitReg.OnWake(s.text)
-		}
+		reg.OnWake(s.text)
 	}
 }
 

@@ -167,7 +167,12 @@ func (r *waitRegistry) poll(ctx context.Context, w *waitTask, until *regexp.Rege
 	defer deadline.Stop()
 	strikes := 0
 	check := func() (done bool) {
-		res := bashrun.Run(ctx, bashrun.Options{Command: w.Command, Timeout: w.Interval})
+		// Per-run budget is decoupled from the poll cadence: a slow command
+		// (gh pr checks, a cold curl) must not eat a strike just because the
+		// interval is short. Floor 30s so short-interval waits still let real
+		// commands finish; capped at 60s so a hung command can't stall the
+		// ticker for the whole session timeout.
+		res := bashrun.Run(ctx, bashrun.Options{Command: w.Command, Timeout: min(max(w.Interval, 30*time.Second), 60*time.Second)})
 		if ctx.Err() != nil {
 			return true // cancelled / registry stopped — deliver nothing
 		}
@@ -217,18 +222,25 @@ func (r *waitRegistry) deliver(w *waitTask, status WaitStatus, msg string) {
 	}
 	w.setStatus(status)
 	w.Detail = msg
-	close(w.Done)
-	w.cancel() // stop the ticker select
+	// Route BEFORE closing Done: a waiter woken by the close must already
+	// find the terminal message delivered (steered or woken) — the old order
+	// (close → steer) let a woken test/caller drain pending before the steer
+	// landed. Same ordering rule as the task registry's settle.
 	if r.agent.TurnRunning() {
 		r.agent.Steer(msg)
-		return
-	}
-	if r.OnWake != nil {
+	} else if r.OnWake != nil {
 		r.OnWake(msg)
-		return
 	}
-	// Headless idle: no loop boundary is coming and no wake hook exists; the
-	// message is dropped by design (see waitRegistry doc).
+	// Headless idle (no turn, no hook): the message is dropped by design —
+	// an idle headless agent has no loop boundary coming (see waitRegistry doc).
+	close(w.Done)
+	w.cancel() // stop the ticker select
+	// ponytail: no listing surface exists yet (no /waits command), so a
+	// settled wait serves no one — drop it to keep the map bounded. If a
+	// listing lands later, keep settled rows and bound by count instead.
+	r.mu.Lock()
+	delete(r.waits, w.ID)
+	r.mu.Unlock()
 }
 
 // Close stops every poller goroutine. Called when the agent is being torn
@@ -257,6 +269,9 @@ func (r *waitRegistry) CancelWait(id string) bool {
 	w.setStatus(WaitKilled)
 	close(w.Done)
 	w.cancel()
+	r.mu.Lock()
+	delete(r.waits, id)
+	r.mu.Unlock()
 	return true
 }
 
