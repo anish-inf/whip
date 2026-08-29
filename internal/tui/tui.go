@@ -87,15 +87,15 @@ type turnDoneMsg struct {
 	clean bool   // the turn left the tree clean — snap is worthless, drop it
 }
 type (
-	catalogsMsg   map[string]config.Catalog // background /models fetch result
-	noticeMsg     string                    // dim one-liner appended to the transcript
-	usageMsg      llm.Usage                 // one request's token usage
-	quitArmMsg    struct{}                  // the idle ctrl+c arm window expired
-	taskUpdateMsg struct{}                  // a background subagent started/settled — redraw
-	orphanSteerMsg string                   // a steer orphaned at turn teardown — submit as a machine turn
-	mcpStatusMsg  struct{}                  // an MCP server changed state — redraw
-	thinkMsg      string                    // streamed reasoning tokens
-	imageMsg      struct {                  // ctrl+v clipboard image result
+	catalogsMsg    map[string]config.Catalog // background /models fetch result
+	noticeMsg      string                    // dim one-liner appended to the transcript
+	usageMsg       llm.Usage                 // one request's token usage
+	quitArmMsg     struct{}                  // the idle ctrl+c arm window expired
+	taskUpdateMsg  struct{}                  // a background subagent started/settled — redraw
+	orphanSteerMsg string                    // a steer orphaned at turn teardown — submit as a machine turn
+	mcpStatusMsg   struct{}                  // an MCP server changed state — redraw
+	thinkMsg       string                    // streamed reasoning tokens
+	imageMsg       struct {                  // ctrl+v clipboard image result
 		path string // clipboard image saved to disk
 		err  error
 	}
