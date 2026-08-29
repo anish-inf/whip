@@ -67,8 +67,11 @@ func renderTaskEvent(buf *strings.Builder, kind int, s, s2 string) {
 			preview = append(preview[:4], fmt.Sprintf("… +%d lines", len(s2)-4))
 		}
 		fmt.Fprintf(buf, "%s\n", dimStyle.Render("  "+strings.Join(preview, "\n  ")))
-	case 3: // a steered message reached the running subagent (task_steer / chat)
-		fmt.Fprintf(buf, "\n%s %s\n", youStyle.Render("↪ steered:"), s)
+	case 3: // a steered message reached the running subagent (task_steer /
+		// chat). Render it as a user message — the steering main agent (or the
+		// human in the task chat) is the subagent's orchestrator, acting as its
+		// user, so the transcript reads like a normal user turn.
+		fmt.Fprintf(buf, "\n%s %s\n", youStyle.Render("you:"), s)
 	case 4: // follow-up turn settled
 		if s != "" {
 			fmt.Fprintf(buf, "\n%s\n", errStyle.Render(s))
@@ -304,7 +307,7 @@ func (m *model) taskSend(tv *taskView, text string) {
 			fmt.Fprintf(&tv.buf, "\n%s\n", errStyle.Render(err.Error()))
 			break
 		}
-		fmt.Fprintf(&tv.buf, "\n%s %s\n", youStyle.Render("you (steer):"), text)
+		fmt.Fprintf(&tv.buf, "\n%s %s\n", youStyle.Render("you:"), text)
 	case tv.busy:
 		fmt.Fprintf(&tv.buf, "\n%s\n", dimStyle.Render("(still replying — wait for the current reply)"))
 	default:
