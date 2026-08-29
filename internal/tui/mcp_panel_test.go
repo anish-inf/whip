@@ -17,7 +17,7 @@ import (
 // panelMCPModel builds a headless model with a started MCP manager, the
 // OnChange wiring Run installs, and a cfg whose Save lands in a scratch
 // WHIP_HOME (mcpSetImport persists there).
-func panelMCPModel(t *testing.T, cfgs map[string]mcp.ServerConfig, blocked map[string]mcp.ServerConfig) *model {
+func panelMCPModel(t *testing.T, cfgs, blocked map[string]mcp.ServerConfig) *model {
 	t.Helper()
 	t.Setenv("WHIP_HOME", t.TempDir())
 	m := tasksModel("http://unused")
@@ -94,15 +94,13 @@ func TestPanelMCPToggleImportOffLive(t *testing.T) {
 	// also matches other rows by subsequence), drill in, move to the codex
 	// row, toggle it off.
 	m.openPalette()
-	var tm tea.Model
-	tm = m
 	for i, it := range m.palette.items {
 		if it.title == "MCPs" {
 			m.palette.idx = i
 			break
 		}
 	}
-	tm, _ = m.paletteKey(tea.KeyMsg{Type: tea.KeyEnter})
+	tm, _ := m.paletteKey(tea.KeyMsg{Type: tea.KeyEnter})
 	mdl := tm.(*model)
 	pp := mdl.palette.top()
 	if pp == nil || pp.kind != panelMCP {
@@ -133,10 +131,11 @@ func TestPanelMCPToggleImportOffLive(t *testing.T) {
 	}
 	// The transcript claims the actual disconnect count — the production
 	// no-op (0 removed while servers stay live) is caught here, not masked.
-	joined := ""
+	var sb strings.Builder
 	for _, b := range mdl.blocks {
-		joined += b.text + "\n"
+		sb.WriteString(b.text + "\n")
 	}
+	joined := sb.String()
 	if !strings.Contains(joined, "codex imports: off") || !strings.Contains(joined, "1 server(s) disconnected") {
 		t.Fatalf("transcript should report 1 disconnected server, got %q", joined)
 	}
@@ -260,10 +259,11 @@ func TestMCPSetImportKeepsFilters(t *testing.T) {
 	}
 	// The toggle note is one of the last two transcript blocks (the status
 	// table follows it when discovery finds anything; here it finds nothing).
-	joined := ""
+	var sb strings.Builder
 	for _, b := range m.blocks[max(0, len(m.blocks)-2):] {
-		joined += b.text
+		sb.WriteString(b.text)
 	}
+	joined := sb.String()
 	if !strings.Contains(joined, "codex imports: on") {
 		t.Errorf("transcript should note the toggle, got %q", joined)
 	}

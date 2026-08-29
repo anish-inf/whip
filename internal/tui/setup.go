@@ -28,9 +28,11 @@ import (
 // caller's shared stdin reader (checkTrust just used it — a fresh bufio here
 // would lose its buffered read-ahead).
 func setupWizard(cfg *config.Config, r *bufio.Reader) error {
-	st, err := os.Stdin.Stat()
-	if err != nil || st.Mode()&os.ModeCharDevice == 0 {
-		return nil // no terminal to ask on: keep defaults
+	// A failed Stat means we can't tell whether stdin is a terminal — treat it
+	// as non-terminal and skip, rather than error out of install.
+	st, statErr := os.Stdin.Stat()
+	if statErr != nil || st.Mode()&os.ModeCharDevice == 0 {
+		return nil //nolint:nilerr // no terminal to ask on: keep defaults
 	}
 	return runSetupWizard(cfg, r, os.Stderr)
 }

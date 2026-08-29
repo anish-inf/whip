@@ -49,7 +49,7 @@ func run(pass *analysis.Pass) (any, error) {
 	// Only the TUI drives a *tea.Program's event loop directly; other packages
 	// never touch bubbletea, so skip them entirely.
 	if !strings.Contains(pass.Pkg.Path(), "internal/tui") {
-		return nil, nil
+		return nil, nil //nolint:nilnil // go/analysis convention: (nil, nil) means "no findings"
 	}
 
 	insp := pass.ResultOf[inspect.Analyzer].(*inspector.Inspector)
@@ -87,7 +87,7 @@ func run(pass *analysis.Pass) (any, error) {
 			"synchronous (*tea.Program).Send can deadlock the TUI event loop: detach it (go x.Send(...)) or, if this runs on a background goroutine, mark it //nolint:uilock")
 		return true
 	})
-	return nil, nil
+	return nil, nil //nolint:nilnil // go/analysis convention: (nil, nil) means "no findings"
 }
 
 // detached reports whether the Send runs on a spawned goroutine. Two shapes:

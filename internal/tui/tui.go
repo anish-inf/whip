@@ -282,7 +282,7 @@ var (
 // was active on exit ("" if nothing was said). firstRun reports the config
 // file did not exist at startup (the caller checks config.Exists before
 // config.Load creates it) and triggers the one-time setup wizard.
-func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string, cautious bool, firstRun bool) (string, error) {
+func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string, cautious, firstRun bool) (string, error) {
 	// One shared stdin reader for the pre-TUI prompts: a bufio.Reader reads
 	// ahead, so separate readers for the trust gate and the setup wizard would
 	// lose buffered answers (a pasted "y\n2\n…\n" answers both).

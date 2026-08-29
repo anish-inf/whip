@@ -82,7 +82,7 @@ func TestWizardDefaultsOptOut(t *testing.T) {
 // TestWizardOptIn pins the yes answers: thinking stays on (nil), imports on.
 func TestWizardOptIn(t *testing.T) {
 	// provider=skip, thinking=y, claude=y, codex=y
-	saved := driveWizard(t, "3\ny\ny\ny\n")
+	saved := driveWizard(t, "3\ny\ny\ny\n") //nolint:dupword // scripted yes-answers, one per wizard question
 	if !*saved.MCPImport.Claude.Enabled || !*saved.MCPImport.Codex.Enabled {
 		t.Fatalf("explicit yes should import, got %+v", saved.MCPImport)
 	}
@@ -91,7 +91,7 @@ func TestWizardOptIn(t *testing.T) {
 // TestWizardThinkingOff pins that "n" writes the thinking block.
 func TestWizardThinkingOff(t *testing.T) {
 	// provider=skip, thinking=n, claude=n, codex=n
-	saved := driveWizard(t, "3\nn\nn\nn\n")
+	saved := driveWizard(t, "3\nn\nn\nn\n") //nolint:dupword // scripted no-answers, one per wizard question
 	if saved.Thinking == nil || *saved.Thinking {
 		t.Fatalf("thinking off should persist as false, got %+v", saved.Thinking)
 	}
@@ -106,7 +106,7 @@ func TestWizardProviderOpenRouterBadKey(t *testing.T) {
 	}
 	t.Cleanup(func() { openRouterValidate = orig })
 
-	saved := driveWizard(t, "2\nnot-a-real-key\n\nn\nn\n")
+	saved := driveWizard(t, "2\nnot-a-real-key\n\nn\nn\n") //nolint:dupword // scripted answers, one per question
 	if _, ok := saved.Providers["openrouter"]; ok {
 		t.Fatal("a rejected key must not register the provider")
 	}
@@ -121,7 +121,7 @@ func TestWizardProviderOpenRouterGoodKey(t *testing.T) {
 	}
 	t.Cleanup(func() { openRouterValidate = orig })
 
-	saved := driveWizard(t, "2\nsk-or-good\n\nn\nn\n")
+	saved := driveWizard(t, "2\nsk-or-good\n\nn\nn\n") //nolint:dupword // scripted answers, one per question
 	p, ok := saved.Providers["openrouter"]
 	if !ok {
 		t.Fatal("a validated key should register openrouter")

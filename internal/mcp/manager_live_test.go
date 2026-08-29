@@ -161,20 +161,18 @@ func TestRemoveWhileConnecting(t *testing.T) {
 	m.Start(context.Background())
 
 	var wg sync.WaitGroup
-	for i := 0; i < 8; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for j := 0; j < 50; j++ {
+	for range 8 {
+		wg.Go(func() {
+			for range 50 {
 				_ = m.Tools()
 				_ = m.Statuses()
 				_ = m.InstructionsBlock()
 			}
-		}()
+		})
 	}
 	// Add then immediately remove, several times — the connect goroutine is
 	// mid-flight for at least some of them.
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		m.AddServers(context.Background(), map[string]ServerConfig{"churn": testCfg("churn")})
 		m.RemoveServers("churn")
 	}
