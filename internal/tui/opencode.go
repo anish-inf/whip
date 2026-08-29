@@ -21,6 +21,14 @@ import (
 // opencodeMode is the config/UIMode value that selects this render mode.
 const opencodeMode = "opencode"
 
+// whipPlaceholder is whip's default prompt placeholder, restored when leaving
+// opencode mode. Keep in sync with newInput.
+const whipPlaceholder = "Ask whip anything… (/ for commands, tab completes)"
+
+// ocActive mirrors m.uiMode == opencodeMode at package scope so block.render (a
+// method on block, not model) can branch on the render mode. Set by applyUIMode.
+var ocActive bool
+
 // sidebarWidth is the fixed width of the opencode-mode right sidebar, matching
 // opencode (routes/session/sidebar.tsx). The sidebar shows only when the
 // terminal is at least sidebarMinWidth columns wide, so a narrow terminal
@@ -104,28 +112,26 @@ func (m *model) sidebarView(height int) string {
 	b.WriteString(head.Render("LSP") + "\n")
 	b.WriteString(dimStyle.Render(m.lspSummary()) + "\n")
 
-	body := b.String()
+	// Top content (title + Context + LSP), clipped if the sidebar is very short.
+	top := strings.Split(strings.TrimRight(b.String(), "\n"), "\n")
+	footer := growStyle.Render("• ") + head.Render("whip") + dimStyle.Render(" "+Version)
 
-	// Pad/clip to the requested height, then style as a fixed-width column with
-	// a subtle left border to set it apart from the transcript.
-	rows := strings.Split(body, "\n")
-	for len(rows) < height {
-		rows = append(rows, "")
+	rows := make([]string, 0, height)
+	if height <= 0 {
+		rows = append(top, footer)
+	} else {
+		if len(top) > height-1 { // keep the last row for the footer
+			top = top[:max(height-1, 0)]
+		}
+		rows = append(rows, top...)
+		for len(rows) < height-1 {
+			rows = append(rows, "")
+		}
+		rows = append(rows, footer) // pinned to the bottom row
 	}
-	if height > 0 && len(rows) > height {
-		rows = rows[:height]
-	}
-	// Footer pinned to the bottom row (like opencode's "• OpenCode {version}").
-	if height > 0 && len(rows) == height {
-		rows[height-1] = growStyle.Render("• ") + head.Render("whip") + dimStyle.Render(" "+Version)
-	}
-	col := lipgloss.NewStyle().
-		Width(sidebarWidth).
-		PaddingLeft(2).
-		PaddingRight(2).
-		BorderStyle(lipgloss.NormalBorder()).
-		BorderLeft(true).
-		BorderForeground(lipgloss.AdaptiveColor{Light: "250", Dark: "238"})
+	// opencode's sidebar has no border — it's set apart by a panel background and
+	// spacing; keeping whip's theme, a left pad plus the gap is the analog.
+	col := lipgloss.NewStyle().Width(sidebarWidth).PaddingLeft(2).PaddingRight(2)
 	return col.Render(strings.Join(rows, "\n"))
 }
 
@@ -153,14 +159,73 @@ func lspSummaryLine(servers []lsp.Status) string {
 	return fmt.Sprintf("%d/%d connected", connected, len(servers))
 }
 
+// opencodePrompt wraps the textarea in opencode's prompt chrome: a ┃ left bar,
+// the input, a model/mode row beneath, and a ╹ tail with a ▀ underline. Themed
+// with whip's styles (no forced colors). width is the content width. inner is
+// m.input.View() (already includes the textarea's own "┃ " prompt, so we strip
+// it and supply the bar ourselves for the full-height box).
+func (m *model) opencodePrompt(inner string, width int) string {
+	if width < 6 {
+		return inner
+	}
+	bar := youStyle.Render("┃")
+	var b strings.Builder
+	for _, ln := range strings.Split(inner, "\n") {
+		b.WriteString(bar + " " + ln + "\n")
+	}
+	// model/mode row: "Low · kimi-k3  provider"
+	meta := m.ocModeLabel() + dimStyle.Render(" · ") + m.modelName + dimStyle.Render("  "+m.provName)
+	b.WriteString(bar + " " + meta + "\n")
+	b.WriteString(youStyle.Render("╹") + dimStyle.Render(strings.Repeat("▀", max(width-2, 0))))
+	return b.String()
+}
+
+// opencodeUserCard renders a user turn as opencode's bordered card: a ┃ left
+// bar (accent color) with one blank padding row above and below the text.
+// Themed with whip's styles (no forced background), so the bar + padding give
+// the card impression while honoring light/dark/auto.
+func opencodeUserCard(text string, width int) string {
+	if width < 4 {
+		return text
+	}
+	bar := youStyle.Render("┃")
+	lines := strings.Split(wrap(text, width-2), "\n")
+	rows := append([]string{""}, lines...) // blank row above
+	rows = append(rows, "")                // blank row below
+	var b strings.Builder
+	for i, ln := range rows {
+		if i > 0 {
+			b.WriteByte('\n')
+		}
+		b.WriteString(bar + " " + ln)
+	}
+	return b.String()
+}
+
+// ocModeLabel is the left segment of the prompt meta row. whip has no named
+// agents like opencode's "Build"; its closest analog is the reasoning effort.
+func (m *model) ocModeLabel() string {
+	eff := m.agent.Effort
+	if eff == "" {
+		eff = "off"
+	}
+	return strings.ToUpper(eff[:1]) + eff[1:]
+}
+
 // applyUIMode points the live render state at the given UI mode. opencode mode
 // is purely structural — it does not touch whip's theme, colors, glyphs, or
 // spinner — so this only records the flag.
 func (m *model) applyUIMode(mode string) {
 	if mode == opencodeMode {
 		m.uiMode = opencodeMode
+		ocActive = true
+		m.input.Prompt = "" // opencodePrompt supplies the ┃ bar per line
+		m.input.Placeholder = "Ask anything…"
 	} else {
 		m.uiMode = ""
+		ocActive = false
+		m.input.Prompt = "┃ "
+		m.input.Placeholder = whipPlaceholder
 	}
 }
 

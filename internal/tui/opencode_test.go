@@ -43,14 +43,55 @@ func TestUIModeLabel(t *testing.T) {
 }
 
 func TestApplyUIMode(t *testing.T) {
-	m := &model{}
+	m := &model{input: newInput()}
 	m.applyUIMode(opencodeMode)
-	if m.uiMode != opencodeMode {
-		t.Fatalf("uiMode = %q, want opencode", m.uiMode)
+	if m.uiMode != opencodeMode || !ocActive || m.input.Prompt != "" {
+		t.Fatalf("opencode: uiMode=%q ocActive=%v prompt=%q", m.uiMode, ocActive, m.input.Prompt)
 	}
 	m.applyUIMode("bogus")
-	if m.uiMode != "" {
-		t.Fatalf("uiMode = %q, want default", m.uiMode)
+	if m.uiMode != "" || ocActive || m.input.Prompt != "┃ " {
+		t.Fatalf("default: uiMode=%q ocActive=%v prompt=%q", m.uiMode, ocActive, m.input.Prompt)
+	}
+}
+
+func TestOpencodeUserCard(t *testing.T) {
+	if got := opencodeUserCard("hi", 2); got != "hi" {
+		t.Fatalf("tiny width should pass through, got %q", got)
+	}
+	got := opencodeUserCard("hello", 40)
+	if !strings.Contains(got, "┃") || !strings.Contains(got, "hello") {
+		t.Fatal("card missing bar/text")
+	}
+	if n := strings.Count(got, "\n"); n != 2 { // blank above + text + blank below
+		t.Fatalf("card rows: %d newlines, want 2", n)
+	}
+}
+
+func TestOpencodePrompt(t *testing.T) {
+	m := &model{agent: &agent.Agent{}}
+	if got := m.opencodePrompt("in", 4); got != "in" {
+		t.Fatalf("tiny width should pass through, got %q", got)
+	}
+	got := m.opencodePrompt("type here", 40)
+	if !strings.Contains(got, "┃") || !strings.Contains(got, "╹") || !strings.Contains(got, "▀") {
+		t.Fatal("prompt chrome missing ┃/╹/▀")
+	}
+	if !strings.Contains(got, "kimi") && !strings.Contains(got, "Off") {
+		// meta row present (mode label at minimum)
+		if !strings.Contains(got, "Off") {
+			t.Fatalf("prompt meta row missing mode label: %q", got)
+		}
+	}
+}
+
+func TestOCModeLabel(t *testing.T) {
+	m := &model{agent: &agent.Agent{}}
+	if got := m.ocModeLabel(); got != "Off" {
+		t.Fatalf("empty effort = %q, want Off", got)
+	}
+	m.agent.Effort = "high"
+	if got := m.ocModeLabel(); got != "High" {
+		t.Fatalf("high = %q, want High", got)
 	}
 }
 
@@ -116,6 +157,10 @@ func TestSidebarView(t *testing.T) {
 	// clip path: request fewer rows than the content produces
 	if out := m.sidebarView(1); out == "" {
 		t.Fatal("clipped sidebar should still render")
+	}
+	// height<=0: natural-height path (no padding/clip)
+	if out := m.sidebarView(0); !strings.Contains(out, "whip") {
+		t.Fatalf("height<=0 sidebar missing footer: %q", out)
 	}
 
 	// Priced model with a context window -> the ctx% and spend branches.

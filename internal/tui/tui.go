@@ -415,6 +415,9 @@ func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string, ca
 	// this launch if its 1 RTT beats startup (first-run trust prompt), else
 	// next launch — the record is durable either way.
 	m.updateLatest = update.Pending(Version)
+	if cfg.UIMode == opencodeMode {
+		m.applyUIMode(opencodeMode) // set the mode BEFORE startupReport so it renders opencode-clean
+	}
 	m.startupReport()
 
 	// Inline rendering (no alt-screen): the transcript lives in the normal
@@ -447,9 +450,6 @@ func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string, ca
 	// pick the glamour style that matches the pick/detection resolution;
 	// keep how detection resolved so /report can name the source
 	m.themeHow = m.applyTheme(cfg.Theme)
-	if cfg.UIMode == opencodeMode {
-		m.applyUIMode(opencodeMode) // opencode render mode: structural layout (sidebar), keeps whip's theme
-	}
 	if m.cfgExtra == nil {
 		m.cfgExtra = map[string]string{}
 	}
@@ -502,7 +502,7 @@ func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string, ca
 // already carries the past).
 func (m *model) startupReport() {
 	if m.uiMode == opencodeMode {
-		m.append(opencodeLogo())
+		return // opencode keeps the startup clean; the logo shows as the empty-state home screen
 	}
 	sk, problems := skills.ScanDetailed(skills.DefaultDirs()...)
 	var b strings.Builder
@@ -1147,8 +1147,19 @@ func (b *block) renderAt(width int) string {
 func (b block) render(width int) string {
 	switch b.kind {
 	case blockUser:
+		if ocActive {
+			return opencodeUserCard(b.text, width)
+		}
 		return wrap(youStyle.Render(glyphUser)+b.text, width)
 	case blockAssistant:
+		if ocActive {
+			// opencode assistant messages carry no bullet: the body is indented 3.
+			w := width - 3
+			if w <= 0 {
+				w = 80
+			}
+			return indentLines(renderMarkdown(b.text, w), 3)
+		}
 		w := width - 2 // body indents under the "● " marker
 		if w <= 0 {
 			w = 80 // no terminal size yet: sane default
@@ -1291,6 +1302,13 @@ func (m *model) viewportView() string {
 	s := sanitizeView(m.vp.View())
 	if m.sel != nil {
 		s = m.highlightSelection(s) // content space, pre-trim
+	}
+	if m.uiMode == opencodeMode {
+		// Full-height viewport: keep the pad so the transcript is bottom-anchored
+		// (blanks above, content near the prompt) and the prompt/status sit at the
+		// bottom of the screen, like opencode's session layout.
+		m.vpLead = 0
+		return s
 	}
 	lines := strings.Split(s, "\n")
 	// Drop leading pad rows by count: the content starts after the pad, but
@@ -1549,6 +1567,11 @@ func (m *model) layout() {
 	// that many rows above the pointer (the off-by-two drag-select bug: the
 	// status line + its blank were never budgeted).
 	chrome := 6 + m.input.Height()
+	if m.uiMode == opencodeMode {
+		// drops the header row and the tips line + its blank (-3); adds the prompt
+		// panel's model/mode row and ▀ tail (+2).
+		chrome--
+	}
 	if m.iactive != nil {
 		// input box is hidden while a command has the terminal; drop its height
 		// and the leading blank line View inserts before it.
@@ -3919,7 +3942,9 @@ func (m *model) viewBody() string {
 	m.effortX = max(m.width-len(right)-1, 0) // ⚡ renders 2 cells wide
 	left = truncLine(left, max(m.width-len(right)-2, 0))
 	pad := max(m.width-len(left)-len(right)-1, 1)
-	b.WriteString(dimStyle.Render(left+strings.Repeat(" ", pad)) + toolStyle.Render(right) + "\n")
+	if m.uiMode != opencodeMode { // opencode has no top header bar
+		b.WriteString(dimStyle.Render(left+strings.Repeat(" ", pad)) + toolStyle.Render(right) + "\n")
+	}
 	if m.palette != nil {
 		b.WriteString(m.paletteView())
 		return b.String()
@@ -3938,8 +3963,10 @@ func (m *model) viewBody() string {
 	}
 	// One compact hint up top — the full roster lives behind the ctrl+p palette
 	// and the /help command. The bottom hint covers the busy/interactive states.
-	tips := "`ctrl+p` commands"
-	b.WriteString(dimStyle.Render(tips) + "\n\n")
+	if m.uiMode != opencodeMode { // opencode keeps the top clean; the hint lives in the prompt row
+		tips := "`ctrl+p` commands"
+		b.WriteString(dimStyle.Render(tips) + "\n\n")
+	}
 	b.WriteString(m.viewportView() + "\n") // selection highlight paints inside
 	if m.curThink != "" {
 		b.WriteString("\n" + m.thinkView() + "\n")
@@ -3993,6 +4020,8 @@ func (m *model) viewBody() string {
 			} else {
 				b.WriteString(m.input.View())
 			}
+		} else if m.uiMode == opencodeMode {
+			b.WriteString(m.opencodePrompt(m.input.View(), m.width))
 		} else {
 			b.WriteString(m.input.View())
 		}
