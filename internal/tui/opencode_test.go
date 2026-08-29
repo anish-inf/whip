@@ -36,6 +36,17 @@ func TestPaletteChrome(t *testing.T) {
 	}
 }
 
+func TestOpencodeMDStyle(t *testing.T) {
+	dark := opencodeMDStyle(false)
+	if dark.Document.Color == nil || *dark.Document.Color != "#eeeeee" {
+		t.Fatalf("dark document color = %v, want #eeeeee", dark.Document.Color)
+	}
+	light := opencodeMDStyle(true)
+	if light.Document.Color == nil || *light.Document.Color != "#1a1a1a" {
+		t.Fatalf("light document color = %v, want #1a1a1a", light.Document.Color)
+	}
+}
+
 func TestOpencodeHome(t *testing.T) {
 	out := opencodeHome(80, 20)
 	if !strings.Contains(out, "█") {
