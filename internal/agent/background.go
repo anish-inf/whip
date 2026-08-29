@@ -39,8 +39,13 @@ type BackgroundTask struct {
 	// never live, and the dock leaves it out.
 	Restored bool
 
-	Done   chan struct{}      // closed on settle; <-Done() wakes all waiters
-	cancel context.CancelFunc // cancels the subagent's turn
+	Done chan struct{} // closed on settle; <-Done() wakes all waiters
+	// ctx/cancel are the task's own context: cancel kills the subagent's turn.
+	// ctx rides along so launchBackground (split from RegisterBackground for
+	// the spawn-lag fix) can start the turn after a worktree provision
+	// intervened between the two.
+	ctx    context.Context
+	cancel context.CancelFunc
 
 	// sub is the retained subagent: while running it receives SteerTask
 	// guidance, and after settle FollowupTask keeps chatting on its preserved
@@ -240,6 +245,19 @@ var taskIDCounter atomic.Int64
 // There is no ctx parameter on purpose: a background task outlives the turn
 // that started it, so it owns its own cancellable context.
 func (a *Agent) StartBackground(description, prompt string, o SubModel) *BackgroundTask {
+	t := a.RegisterBackground(description, prompt, o)
+	a.launchBackground(t)
+	return t
+}
+
+// RegisterBackground inserts the task row and fires OnChange/OnRecord WITHOUT
+// starting the turn goroutine. Split from StartBackground so the tool layer
+// can show the dock row before a synchronous worktree provision delays it
+// (spawn-lag fix): register → provision → LaunchBackground. Callers that skip
+// provisioning should use StartBackground directly. The task is live from
+// this point — Cancel/Steer/Done are all initialized; only the turn isn't
+// running yet.
+func (a *Agent) RegisterBackground(description, prompt string, o SubModel) *BackgroundTask {
 	if a.bg == nil {
 		a.bg = newTaskRegistry()
 	}
@@ -248,7 +266,7 @@ func (a *Agent) StartBackground(description, prompt string, o SubModel) *Backgro
 	t := &BackgroundTask{
 		ID: id, Description: description, Prompt: prompt,
 		Status: TaskRunning, StartedAt: time.Now(),
-		Done: make(chan struct{}), cancel: cancel,
+		Done: make(chan struct{}), ctx: taskCtx, cancel: cancel,
 		sub: a.newSub(o),
 	}
 	a.bg.mu.Lock()
@@ -260,7 +278,26 @@ func (a *Agent) StartBackground(description, prompt string, o SubModel) *Backgro
 	if a.bg.OnRecord != nil {
 		a.bg.OnRecord(a.bg.recordSession(), t)
 	}
+	return t
+}
 
+// LaunchBackground starts a registered task's turn goroutine — the second
+// half of StartBackground. The worktree path (if the task provisioned one
+// between register and launch) is steered in as the subagent's first message
+// rather than baked into the initial prompt: the prompt was already persisted
+// by OnRecord at register time, and a late-arriving path instruction reads
+// the same to the model either way.
+func (a *Agent) LaunchBackground(t *BackgroundTask, worktreePath string) {
+	if worktreePath != "" {
+		t.sub.Steer("Work entirely inside the git worktree at " + worktreePath + " (run `cd " + worktreePath + "` first; it is your own branch, isolated from other agents). Commit your changes there.")
+	}
+	a.launchBackground(t)
+}
+
+// launchBackground is the shared goroutine half.
+func (a *Agent) launchBackground(t *BackgroundTask) {
+	id, description, prompt := t.ID, t.Description, t.Prompt
+	taskCtx := t.ctx
 	go func() {
 		report, err := t.sub.Turn(taskCtx, prompt, FanIn(a.bg.emitter(id), Events{OnUsage: a.AddUsage}))
 		status := TaskDone
@@ -282,7 +319,6 @@ func (a *Agent) StartBackground(description, prompt string, o SubModel) *Backgro
 		// text/status are locals (not the shared task struct), so no race.
 		a.Steer(fmt.Sprintf("[subagent %s %s] %s\n\n%s", id, status, description, text))
 	}()
-	return t
 }
 
 // Subscribe registers a live event subscriber for a running task. Returns

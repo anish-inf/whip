@@ -87,9 +87,10 @@ func TestStartBackgroundSlugID(t *testing.T) {
 }
 
 // A background subagent registers in the task registry (dock row + badge via
-// OnChange) BEFORE the synchronous worktree provision runs, and the provisioned
-// path is baked into the subagent's initial prompt — delivered deterministically
-// with the turn, never as a post-spawn steer a fast-settling task would lose.
+// OnChange) BEFORE the synchronous worktree provision runs, so the dock shows
+// the row even while git worktree add is still working (spawn-lag fix). The
+// provisioned path reaches the subagent as its first steered message at launch
+// — drained at the turn's first loop boundary, deterministic delivery.
 func TestBackgroundWorktreeRegistersBeforeProvisioning(t *testing.T) {
 	if os.Getenv("WHIP_SKIP_WORKTREE_TEST") == "1" {
 		t.Skip("skipped via WHIP_SKIP_WORKTREE_TEST")
@@ -119,12 +120,17 @@ func TestBackgroundWorktreeRegistersBeforeProvisioning(t *testing.T) {
 	ag := New(llm.New(srv.URL, "k"), "m", 100, "sys")
 	ag.WorktreeSubagents = true
 
-	// The registry must see the task before the tool call returns, the result
-	// names the worktree, and the subagent's initial prompt carries the
-	// worktree instruction (deterministic delivery, not a steer).
+	// Registration order probe: OnChange must fire before the tool result
+	// returns (which happens after provision + launch).
+	registeredBeforeReturn := false
+	ag.Tasks().OnChange = func(*BackgroundTask) { registeredBeforeReturn = true }
+
 	out, err := findTool(t, ag, "subagent").Run(ctx, json.RawMessage(`{"prompt":"go","background":true}`))
 	if err != nil {
 		t.Fatalf("run: %v", err)
+	}
+	if !registeredBeforeReturn {
+		t.Fatal("the task row must register before the tool call returns (spawn lag)")
 	}
 	tasks := ag.Tasks().List()
 	if len(tasks) != 1 {
@@ -134,8 +140,8 @@ func TestBackgroundWorktreeRegistersBeforeProvisioning(t *testing.T) {
 		t.Fatalf("with isolation on, the result should name the worktree: %q", out)
 	}
 	found := false
-	// The background goroutine appends the baked prompt inside Turn; wait for
-	// the task to settle so Messages holds the full conversation.
+	// The worktree instruction is steered in at launch; wait for the task to
+	// settle so Messages holds the full conversation.
 	<-tasks[0].Done
 	for _, msg := range tasks[0].sub.Messages {
 		if msg.Role == "user" && strings.Contains(msg.Content, "git worktree at") {
@@ -143,7 +149,7 @@ func TestBackgroundWorktreeRegistersBeforeProvisioning(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Fatal("worktree path should be baked into the subagent's initial prompt")
+		t.Fatal("worktree path should reach the subagent as its first steered message")
 	}
 	ag.Tasks().Cancel(tasks[0].ID)
 }
