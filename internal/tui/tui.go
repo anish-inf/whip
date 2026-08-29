@@ -2578,9 +2578,9 @@ func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		if m.tasksFocus { // open the selected task's detail view
 			m.tasksFocus = false
-			// dockTasks is time-dependent (settled tasks age out after
-			// dockSettledGrace), so the strip can go empty — or shrink below
-			// taskSel — between the last paint and this keypress
+			// settled tasks linger in the dock until the user sends a new
+			// message, so the strip is stable between the last paint and this
+			// keypress; the list can still be empty (or smaller than taskSel)
 			if tasks := m.dockTasks(); len(tasks) > 0 {
 				m.openTask(tasks[min(m.taskSel, len(tasks)-1)].ID)
 			}
@@ -3356,10 +3356,13 @@ func (m *model) submitTurn(text string, authored bool) (tea.Model, tea.Cmd) {
 		}
 	}
 	m.discardFuture() // new activity while rewound kills the redo stack
-	// settled subagents already reported into the transcript; clear them off
-	// the dock strip so a new turn starts with only what's still running —
-	// except a task whose chat pane is open (its retained subagent is in use)
-	if m.agent != nil {
+	// Settled subagents stay in the dock until the user sends a new message, so
+	// they can review a finished subagent's transcript before moving on. A
+	// user-typed (authored) turn sweeps them; machine turns (steered reports,
+	// wake turns) don't, or a settling background task would clear its own row
+	// before the user ever saw it. A task whose chat pane is open is kept (its
+	// retained subagent is in use).
+	if authored && m.agent != nil {
 		var keep []string
 		if m.taskVP != nil {
 			keep = append(keep, m.taskVP.id)

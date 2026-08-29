@@ -355,9 +355,11 @@ func TestEnterOpensTaskViewAndEscBacksOut(t *testing.T) {
 	}
 }
 
-// dockTasks is time-dependent (settled tasks age out after dockSettledGrace),
-// so the focused dock can go empty — or shrink below the selection — between
-// the last paint and the keypress. Enter must not index the empty list.
+// settled tasks linger in the dock until the user sends a new message, so the
+// focused dock's list is stable between the last paint and the keypress
+// (submitTurn sweeps it on the next authored turn). Enter must not index the
+// empty list, and a stale selection beyond the list clamps instead of
+// panicking.
 func TestEnterOnEmptyFocusedDockDoesNotPanic(t *testing.T) {
 	srv := sseTextServer(t, "ok")
 	defer srv.Close()
@@ -890,5 +892,36 @@ func TestSteeredMessageRendersAsUser(t *testing.T) {
 	}
 	if strings.Contains(view, "steered:") || strings.Contains(view, "you (steer)") {
 		t.Fatalf("steered message must not carry a 'steered' label, got:\n%s", view)
+	}
+}
+
+// Settled tasks stay in the dock until the user sends a new message: a
+// machine turn (steer/wake, authored=false) must NOT sweep them, a user-typed
+// turn (authored=true) does.
+func TestSettledTasksLingerUntilUserMessage(t *testing.T) {
+	srv := sseTextServer(t, "ok")
+	defer srv.Close()
+	m := tasksModel(srv.URL)
+	task := m.agent.StartBackground("finished probe", "p", agent.SubModel{})
+	waitSettled(t, task)
+
+	// still in the dock after settling (no age-out)
+	if len(m.dockTasks()) != 1 {
+		t.Fatalf("settled task should stay in the dock, got %d", len(m.dockTasks()))
+	}
+
+	// a machine turn (authored=false, e.g. a steered report or wake) must not sweep it
+	m.submitTurn("[subagent done] report", false)
+	if len(m.dockTasks()) != 1 {
+		t.Fatal("a machine turn must not clear the settled task from the dock")
+	}
+
+	// the user sending a new message sweeps it
+	m2 := tasksModel(srv.URL)
+	task2 := m2.agent.StartBackground("another probe", "p", agent.SubModel{})
+	waitSettled(t, task2)
+	m2.submitTurn("what's next?", true)
+	if len(m2.dockTasks()) != 0 {
+		t.Fatalf("a user message should sweep settled tasks, got %d", len(m2.dockTasks()))
 	}
 }
