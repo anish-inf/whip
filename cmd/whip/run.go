@@ -1,7 +1,9 @@
 // `whip run` — non-interactive (headless) mode: one turn of the agent with
 // no TUI and no trust prompt, for trusted automation and scripting. Piped
 // stdin is appended to the prompt. --format json emits the raw event stream
-// as newline-delimited JSON; the final event is {"type":"done",...} or
+// as newline-delimited JSON: {"type":"reasoning","delta":...} for thinking
+// tokens, {"type":"text","delta":...} for reply text, {"type":"tool_start"/
+// "tool_end",...} for tool calls; the final event is {"type":"done",...} or
 // {"type":"error",...}. Exit code 0 on success, 1 on error.
 package main
 
@@ -173,6 +175,9 @@ func runCLI(args []string) error {
 			}
 		}
 		ev.OnText = func(d string) { emit(map[string]string{"type": "text", "delta": d}) }
+		ev.OnThink = func(d string) {
+			emit(map[string]string{"type": "reasoning", "delta": d})
+		}
 		ev.OnToolStart = func(_, name, args string) {
 			emit(map[string]string{"type": "tool_start", "name": name, "args": args})
 		}
