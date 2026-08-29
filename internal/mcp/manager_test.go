@@ -433,7 +433,7 @@ func TestFlattenTruncates(t *testing.T) {
 	big := strings.Repeat("x", 60_000)
 	res := &sdkmcp.CallToolResult{Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: big}}}
 	out := flattenResult(res)
-	if len(out) > 60_0000 || !strings.Contains(out, "[truncated") {
+	if len(out) > 60_0000 || !strings.Contains(out, "bytes elided from the middle") {
 		t.Errorf("truncation missing, len=%d", len(out))
 	}
 }

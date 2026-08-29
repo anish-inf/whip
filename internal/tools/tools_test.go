@@ -56,11 +56,20 @@ func TestHelpersAndEdgeCases(t *testing.T) {
 		t.Fatal("expected 4 tool defs")
 	}
 	long := strings.Repeat("x", maxOutput+10)
-	if out := truncate(long); !strings.Contains(out, "truncated 10 bytes") {
-		t.Fatalf("truncate: %q", out[len(out)-40:])
+	out := truncate(long)
+	if !strings.Contains(out, "10 bytes elided from the middle") {
+		t.Fatalf("truncate: %q", out[len(out)-60:])
 	}
-	if out := TruncateTail(long); !strings.HasPrefix(out, "[... first 10 bytes truncated]") {
-		t.Fatalf("truncateTail: %q", out[:40])
+	// head and tail both survive the middle elision, and the spill marker
+	// points at a recoverable full copy
+	if !strings.HasPrefix(out, strings.Repeat("x", 100)) || !strings.HasSuffix(out, strings.Repeat("x", 100)) {
+		t.Fatal("middle elision must keep head and tail")
+	}
+	if !strings.Contains(out, "full output") {
+		t.Fatal("truncation should spill the full output and point at it")
+	}
+	if out2 := TruncateTail(long); !strings.HasPrefix(out2, "[... first 10 bytes truncated]") {
+		t.Fatalf("truncateTail: %q", out2[:40])
 	}
 	// short strings pass through untouched
 	if truncate("ok") != "ok" || TruncateTail("ok") != "ok" {
@@ -108,7 +117,9 @@ func TestHelpersAndEdgeCases(t *testing.T) {
 	if out := run(t, "edit", fmt.Sprintf(`{"path":%q,"old_string":"x","new_string":"y","replace_all":true}`, f)); !strings.Contains(out, "3 occurrence") {
 		t.Fatalf("replace_all: %q", out)
 	}
+}
 
+func TestBashToolFastFailOnTTYRead(t *testing.T) {
 	// Regression: a command that reads from /dev/tty (as sudo does for a
 	// password) must NOT hang the tool. pre-fix the tool used CombinedOutput
 	// with the child sharing whip's controlling terminal, so the read

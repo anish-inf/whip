@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	acpsdk "github.com/coder/acp-go-sdk"
 
@@ -117,14 +118,15 @@ func acpCLI(args []string) error {
 	factory := func(ctx context.Context, wd string, servers map[string]mcp.ServerConfig) (*agent.Agent, *mcp.Manager, error) {
 		client := llm.New(prov.BaseURL, key)
 		client.MaxRetries = cfg.MaxRetries
-		ag := agent.New(client, apiID, maxOut, systemPrompt(wd))
+		ag := agent.New(client, apiID, maxOut, systemPrompt(wd, time.Now()))
 		ag.ModelName, ag.Provider = modelName, provName
 		ag.ComputerDisabled = true
 		ag.ContextLimit = ctxLimit
-		ag.Effort = cfg.DefaultEffort
-		if ag.Effort == "" {
-			ag.Effort = "medium"
-		}
+		// Reasoning effort: explicit cfg.DefaultEffort wins; "" resolves
+		// model-aware — "low" when the model advertises it, else the lowest
+		// supported level, else off — so a non-reasoning model never sends an
+		// effort parameter the provider would reject.
+		ag.Effort = tui.DefaultEffortFor(config.LoadCatalogs(), provName, ag.Model, cfg.DefaultEffort)
 
 		// Skills + memory ride the system prompt. The TUI refreshes these per
 		// turn; ACP sessions refresh at session creation — a new skill lands

@@ -647,3 +647,165 @@ func TestScheduleRoundTrip(t *testing.T) {
 		t.Fatalf("after delete: %+v", scs)
 	}
 }
+
+// A subagent transcript round-trips as an attributed session row: id
+// <parent>/task/<task>, forked_from the parent, task_id set, messages intact.
+// Re-saving after a follow-up turn replaces the same row (no duplicate).
+func TestSubagentTranscriptRoundTrip(t *testing.T) {
+	st, err := Open(filepath.Join(t.TempDir(), "s.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+
+	parent, err := st.Create("/tmp", "m", "p")
+	if err != nil {
+		t.Fatal(err)
+	}
+	msgs := []llm.Message{
+		{Role: "system", Content: "sub sys"},
+		{Role: "user", Content: "explore the codebase"},
+		{Role: "assistant", Content: "found 3 things"},
+	}
+	id, err := st.SaveSubagentTranscript(parent, "probe-1", msgs, "sub-m", "sub-p")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id != "task-"+parent+"-probe-1" {
+		t.Fatalf("id = %q", id)
+	}
+	meta, got, err := st.Load(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.TaskID != "probe-1" || meta.ForkedFrom != parent {
+		t.Fatalf("attribution: taskID=%q forkedFrom=%q", meta.TaskID, meta.ForkedFrom)
+	}
+	if len(got) != 3 || got[1].Content != "explore the codebase" || got[2].Content != "found 3 things" {
+		t.Fatalf("transcript round-trip: %+v", got)
+	}
+
+	// Follow-up turn appends; re-save replaces the row, no duplicate session.
+	msgs = append(msgs, llm.Message{Role: "user", Content: "follow up"}, llm.Message{Role: "assistant", Content: "answered"})
+	if _, err := st.SaveSubagentTranscript(parent, "probe-1", msgs, "sub-m", "sub-p"); err != nil {
+		t.Fatal(err)
+	}
+	_, got, err = st.Load(id)
+	if err != nil || len(got) != 5 {
+		t.Fatalf("after follow-up: %d msgs, err %v", len(got), err)
+	}
+
+	// No parent / no task id → no-op ("" id, no error).
+	if id, err := st.SaveSubagentTranscript("", "t", msgs, "m", "p"); id != "" || err != nil {
+		t.Fatalf("empty parent should no-op: id=%q err=%v", id, err)
+	}
+}
+
+// SubagentTranscript loads by EXACT id, not Load's prefix scan: two sibling
+// task ids that share a stem (foo-1 vs foo-12) would make the prefix form
+// return "ambiguous", so the transcript lookup must bypass it.
+func TestSubagentTranscriptExactIDNoPrefixCollision(t *testing.T) {
+	st, err := Open(filepath.Join(t.TempDir(), "s.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+
+	parent, err := st.Create("/tmp", "m", "p")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Two sibling tasks whose ids share a stem: task-<parent>-foo-1 and
+	// task-<parent>-foo-12. Loading "-foo-1" by prefix would also match
+	// "-foo-12" and fail "ambiguous".
+	mk := []llm.Message{{Role: "user", Content: "one"}}
+	if _, err := st.SaveSubagentTranscript(parent, "foo-1", mk, "m", "p"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.SaveSubagentTranscript(parent, "foo-12", mk, "m", "p"); err != nil {
+		t.Fatal(err)
+	}
+
+	// The exact-id lookup must succeed where the prefix form would be ambiguous.
+	got, err := st.SubagentTranscript(parent, "foo-1")
+	if err != nil {
+		t.Fatalf("exact-id transcript load: %v", err)
+	}
+	if len(got) != 1 || got[0].Content != "one" {
+		t.Fatalf("wrong transcript: %+v", got)
+	}
+	// And a nonexistent task yields empty, not an error.
+	if got, err := st.SubagentTranscript(parent, "nope-9"); err != nil || len(got) != 0 {
+		t.Fatalf("missing transcript should be empty, got %d msgs err %v", len(got), err)
+	}
+}
+
+// A follow-up turn that compacts the transcript writes FEWER messages than
+// the first save; the re-save must delete the stale rows past the new tail,
+// not leave them to reload as phantom trailing messages.
+func TestSubagentTranscriptResaveDeletesOrphanRows(t *testing.T) {
+	st, err := Open(filepath.Join(t.TempDir(), "s.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+
+	parent, err := st.Create("/tmp", "m", "p")
+	if err != nil {
+		t.Fatal(err)
+	}
+	long := []llm.Message{
+		{Role: "user", Content: "u1"},
+		{Role: "assistant", Content: "a1"},
+		{Role: "user", Content: "u2"},
+		{Role: "assistant", Content: "a2"},
+		{Role: "user", Content: "u3"},
+		{Role: "assistant", Content: "a3"},
+	}
+	if _, err := st.SaveSubagentTranscript(parent, "t-1", long, "m", "p"); err != nil {
+		t.Fatal(err)
+	}
+	// Re-save a shorter transcript (post-compaction): 2 messages.
+	short := []llm.Message{
+		{Role: "system", Content: "Summary of the conversation so far: ..."},
+		{Role: "assistant", Content: "a3"},
+	}
+	if _, err := st.SaveSubagentTranscript(parent, "t-1", short, "m", "p"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := st.SubagentTranscript(parent, "t-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != len(short) {
+		t.Fatalf("orphan rows survived: %d msgs, want %d (%+v)", len(got), len(short), got)
+	}
+}
+
+// The transcript records the SUBAGENT's model, not the parent's — the settle
+// path passes t.SubModel, so the saved session row attributes the work to the
+// model that actually produced it.
+func TestSubagentTranscriptAttributesSubModel(t *testing.T) {
+	st, err := Open(filepath.Join(t.TempDir(), "s.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+
+	parent, err := st.Create("/tmp", "parent-model", "parent-prov")
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := st.SaveSubagentTranscript(parent, "t-1",
+		[]llm.Message{{Role: "user", Content: "x"}}, "sub-model-id", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta, _, err := st.Load(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.Model != "sub-model-id" {
+		t.Fatalf("transcript should attribute the sub's model, got %q", meta.Model)
+	}
+}

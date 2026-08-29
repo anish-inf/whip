@@ -24,6 +24,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/context-labs/whip/internal/agent"
+	"github.com/context-labs/whip/internal/llm"
 )
 
 // taskEventMsg is one live event from an opened background task (OnText /
@@ -235,11 +236,51 @@ func (m *model) openTask(id string) {
 			tv.buf.WriteString("\n")
 		}
 		fmt.Fprintf(&tv.buf, "\n%s\n", dimStyle.Render("  running…"))
+	case len(events) > 0:
+		// Settled with a journal: the replay above already shows the work;
+		// close it out with the final status line.
+		fmt.Fprintf(&tv.buf, "\n%s %s\n", toolStyle.Render(string(t.Status)+":"), t.Report)
+	case t.Restored && m.store != nil:
+		// A restored task's subagent died with the last process, so there's no
+		// live stream and no journal — but its transcript persisted. Replay it
+		// read-only so the view shows the completed work, not just the report.
+		if msgs, err := m.store.SubagentTranscript(m.sessionID, t.ID); err == nil && len(msgs) > 0 {
+			renderTranscript(&tv.buf, msgs)
+		} else {
+			fmt.Fprintf(&tv.buf, "\n%s %s\n", toolStyle.Render(string(t.Status)+":"), t.Report)
+		}
 	default:
 		fmt.Fprintf(&tv.buf, "\n%s %s\n", toolStyle.Render(string(t.Status)+":"), t.Report)
 	}
 	m.taskVP = tv
 	m.refreshTaskVP()
+}
+
+// renderTranscript writes a persisted conversation as role-labeled blocks for
+// the restored-task detail view (read-only history). Tool calls show as their
+// name; the system prompt is skipped.
+func renderTranscript(buf *strings.Builder, msgs []llm.Message) {
+	for _, msg := range msgs {
+		switch msg.Role {
+		case "system":
+			continue
+		case "user":
+			fmt.Fprintf(buf, "\n%s %s\n", youStyle.Render("you:"), msg.Content)
+		case "assistant":
+			if msg.Content != "" {
+				fmt.Fprintf(buf, "\n%s\n", msg.Content)
+			}
+			for _, tc := range msg.ToolCalls {
+				fmt.Fprintf(buf, "\n%s %s %s\n", toolStyle.Render("⚒"), tc.Function.Name, dimStyle.Render(tc.Function.Arguments))
+			}
+		case "tool":
+			preview := strings.Split(strings.TrimRight(msg.Content, "\n"), "\n")
+			if len(preview) > 4 {
+				preview = append(preview[:4], fmt.Sprintf("… +%d lines", len(msg.Content)-4))
+			}
+			fmt.Fprintf(buf, "%s\n", dimStyle.Render("  "+strings.Join(preview, "\n  ")))
+		}
+	}
 }
 
 // taskChatable reports whether the open task can receive messages: restored

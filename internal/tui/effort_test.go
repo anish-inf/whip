@@ -90,6 +90,36 @@ func TestEffortsForAdvertisedLevels(t *testing.T) {
 	}
 }
 
+// DefaultEffortFor picks "low" when the model advertises it, the lowest
+// supported level otherwise, and off ("") for non-reasoning models — so a
+// startup never opens on an effort the provider would reject. An explicit
+// pinned value is honored verbatim, even if unsupported.
+func TestDefaultEffortForModelAware(t *testing.T) {
+	cats := map[string]config.Catalog{
+		"inference": {Models: []config.ModelInfoLite{
+			{ID: "deepseek-v4-flash", ReasoningEfforts: []string{"low", "high", "max"}}, // no medium
+			{ID: "claude-opus-5", ReasoningEfforts: []string{"none", "minimal", "low", "medium", "high", "xhigh", "max"}},
+			{ID: "gemini-3.5-flash"}, // no reasoning_efforts
+		}},
+	}
+	cases := []struct{ model, pinned, want string }{
+		{"deepseek-v4-flash", "", "low"},          // low is supported → low
+		{"claude-opus-5", "", "low"},              // low is supported → low
+		{"gemini-3.5-flash", "", ""},              // non-reasoning → off (no parameter)
+		{"deepseek-v4-flash", "high", "high"},     // pinned honored
+		{"deepseek-v4-flash", "medium", "medium"}, // pinned honored even though unsupported
+	}
+	for _, c := range cases {
+		if got := DefaultEffortFor(cats, "inference", c.model, c.pinned); got != c.want {
+			t.Fatalf("DefaultEffortFor(%q, pinned=%q): got %q want %q", c.model, c.pinned, got, c.want)
+		}
+	}
+	// unknown provider → default-effort cycle's first non-off (low)
+	if got := DefaultEffortFor(map[string]config.Catalog{}, "elsewhere", "anything", ""); got != "low" {
+		t.Fatalf("unknown provider should fall back to low, got %q", got)
+	}
+}
+
 // bare /effort opens the level selector (palette panel) so the user can
 // scroll ↑/↓ and pick — cycling blindly hides the choices.
 func TestEffortBareOpensSelector(t *testing.T) {

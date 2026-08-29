@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/context-labs/whip/internal/llm"
@@ -32,6 +33,10 @@ type Events struct {
 	OnCompacted  func(summary string, cutoff int) // a compaction ran; record it (raw log survives)
 	OnUsage      func(u llm.Usage)                // a request reported its token usage
 	OnRetry      func(ev llm.RetryEvent)          // a transient request failure is being retried
+	// OnDecay fires when the per-turn decay pass rewrote n history messages
+	// (superseded reads / aged tool outputs). The caller must re-persist the
+	// affected prefix — the store's Save(from=1) INSERT OR REPLACEs it.
+	OnDecay func(n int)
 }
 
 // OnTodos is the agent-level hook fired by setTodos (the todowrite tool)
@@ -112,7 +117,7 @@ type Agent struct {
 	todosMu sync.Mutex
 	onTodos func(items []Todo)
 
-	sessionID string // scopes the per-session memory file (SetSessionID)
+	sessionID atomic.Pointer[string] // scopes the per-session memory file + keys the prompt cache (SetSessionID)
 
 	// toolsMu guards mcpTools: the MCP manager's OnChange can fire (server
 	// settled) while a Turn is streaming, and Turn reads the tool set per
@@ -323,6 +328,13 @@ func (a *Agent) TurnWithImages(ctx context.Context, input string, parts []llm.Co
 }
 
 func (a *Agent) turn(ctx context.Context, input string, parts []llm.ContentPart, authored bool, ev Events) (string, error) {
+	// Decay old tool output before the new user message lands: the pass only
+	// prunes history outside the hot window, and running it pre-append keeps
+	// the new message (and this turn's tool results) inside the window where
+	// they stay byte-stable for the prefix cache.
+	if n := a.decay(); n > 0 && ev.OnDecay != nil {
+		ev.OnDecay(n)
+	}
 	msg := llm.Message{Role: "user", Content: input, Parts: parts, Authored: authored}
 	if authored {
 		now := time.Now()

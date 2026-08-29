@@ -294,12 +294,11 @@ func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string, ca
 
 	ti := newInput()
 
-	// default on: "" (config never set / pre-feature file) means medium, not
-	// off; an explicit "off" in the file is honored
-	ag.Effort = cfg.DefaultEffort
-	if ag.Effort == "" {
-		ag.Effort = "medium"
-	}
+	// Reasoning effort: an explicit cfg.DefaultEffort is honored as-is; "" (no
+	// config / pre-feature file) resolves model-aware — "low" when the model
+	// advertises it, else the lowest supported level, else off (no parameter) —
+	// so a non-reasoning model never opens on an effort it can't accept.
+	ag.Effort = DefaultEffortFor(config.LoadCatalogs(), pn, ag.Model, cfg.DefaultEffort)
 	// Mouse capture ON by default so the wheel scrolls the transcript viewport
 	// and ⚡/tool clicks work — with button-motion reporting (?1002) so a left
 	// drag becomes whip's own selection (select.go): enabling click reporting
@@ -2800,6 +2799,16 @@ func (m *model) wireTasks() {
 		}); err != nil {
 			config.LogEvent("session.task", "save failed: "+err.Error())
 		}
+		// Persist the subagent's full transcript as its own attributed session
+		// (id <parent>/task/<id>) once it settles — start rows carry no
+		// transcript yet, so only settled tasks with a live sub have one.
+		// Attribute it to the sub's own route (t.SubModel): a model-overridden
+		// subagent must not be recorded under the parent's model/provider.
+		if t.Status != agent.TaskRunning && t.SubMessages != nil {
+			if _, err := st.SaveSubagentTranscript(sessionID, t.ID, t.SubMessages, t.SubModel, ""); err != nil {
+				config.LogEvent("session.task", "transcript save failed: "+err.Error())
+			}
+		}
 	}
 	m.agent.Tasks().SetSessionID(m.sessionID)
 	m.agent.SetSessionID(m.sessionID)
@@ -3360,6 +3369,13 @@ func (m *model) submitTurn(text string, authored bool) (tea.Model, tea.Cmd) {
 			},
 			OnCompacted: func(sum string, cutoff int) { send(compactMsg{summary: sum, cutoff: cutoff}) },
 			OnUsage:     func(u llm.Usage) { send(usageMsg(u)) },
+			// The decay pass rewrote n prefix messages in agent.Messages; drop
+			// the saved watermark so the next persist re-saves everything
+			// (from 1 — seq 0 is the system prompt, never a stored row; the
+			// store INSERT OR REPLACEs rows). Direct field write: we're in the
+			// turn goroutine but m.saved is only touched by the UI goroutine's
+			// persist at turn end, and this lands before it.
+			OnDecay: func(n int) { m.saved = 1 },
 			OnRetry: func(ev llm.RetryEvent) {
 				flush()
 				send(noticeMsg(fmt.Sprintf("⚠ request failed (%s) — retrying in %s (attempt %d/%d)",

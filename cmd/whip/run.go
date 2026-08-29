@@ -16,6 +16,7 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/context-labs/whip/internal/agent"
 	"github.com/context-labs/whip/internal/config"
@@ -96,7 +97,7 @@ func runCLI(args []string) error {
 
 	// System prompt: -system-file wins over -system (a file is the deliberate
 	// choice; a stray -system alongside it is almost certainly stale).
-	sys := systemPrompt(cwd())
+	sys := systemPrompt(cwd(), time.Now())
 	if *systemFlag != "" {
 		sys = *systemFlag
 	}
@@ -114,10 +115,11 @@ func runCLI(args []string) error {
 	// stays disabled (no interactive approver is ever installed).
 	ag.ComputerDisabled = true
 	ag.ContextLimit = mdl.ContextWindow()
-	ag.Effort = cfg.DefaultEffort
-	if ag.Effort == "" {
-		ag.Effort = "medium"
-	}
+	// Reasoning effort: explicit cfg.DefaultEffort wins; "" resolves
+	// model-aware — "low" when the model advertises it, else the lowest
+	// supported level, else off — so a non-reasoning model never sends an
+	// effort parameter the provider would reject.
+	ag.Effort = tui.DefaultEffortFor(config.LoadCatalogs(), provName, ag.Model, cfg.DefaultEffort)
 	ag.MaxTurns = *maxTurnsFlag
 
 	// Session: resume an existing one, or create a fresh one — unless
