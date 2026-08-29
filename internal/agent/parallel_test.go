@@ -358,9 +358,9 @@ func TestBackgroundTaskSubscribersSeeLiveStream(t *testing.T) {
 	task := ag.StartBackground("d", "p", SubModel{})
 
 	var got atomic.Int32
-	ok := ag.Tasks().Subscribe(task.ID, Events{OnText: func(s string) { got.Add(int32(len(s))) }})
+	_, _, ok := ag.Tasks().SubscribeWithJournal(task.ID, Events{OnText: func(s string) { got.Add(int32(len(s))) }})
 	if !ok {
-		t.Fatal("Subscribe on a running task should succeed")
+		t.Fatal("SubscribeWithJournal on a running task should report live")
 	}
 	select {
 	case <-task.Done:
@@ -370,8 +370,8 @@ func TestBackgroundTaskSubscribersSeeLiveStream(t *testing.T) {
 	if got.Load() == 0 {
 		t.Fatal("subscriber saw no text events")
 	}
-	if ag.Tasks().Subscribe(task.ID, Events{}) {
-		t.Fatal("Subscribe on a settled task should report false")
+	if _, _, ok := ag.Tasks().SubscribeWithJournal(task.ID, Events{}); ok {
+		t.Fatal("SubscribeWithJournal on a settled task should not report live")
 	}
 }
 
@@ -424,13 +424,13 @@ func TestBackgroundTaskSubscriberSeesToolEvents(t *testing.T) {
 
 	var mu sync.Mutex
 	var seq []string
-	ok := ag.Tasks().Subscribe(task.ID, Events{
+	_, _, ok := ag.Tasks().SubscribeWithJournal(task.ID, Events{
 		OnText:      func(s string) { mu.Lock(); seq = append(seq, "text:"+s); mu.Unlock() },
 		OnToolStart: func(_, n, _ string) { mu.Lock(); seq = append(seq, "start:"+n); mu.Unlock() },
 		OnToolEnd:   func(_, n, r string) { mu.Lock(); seq = append(seq, "end:"+n+":"+r); mu.Unlock() },
 	})
 	if !ok {
-		t.Fatal("Subscribe on a running task should succeed")
+		t.Fatal("SubscribeWithJournal on a running task should report live")
 	}
 	select {
 	case <-task.Done:
@@ -462,7 +462,7 @@ func TestBackgroundTaskManySubscribers(t *testing.T) {
 	const subs = 4
 	var counts [subs]atomic.Int32
 	for i := range subs {
-		if !ag.Tasks().Subscribe(task.ID, Events{OnText: func(s string) { counts[i].Add(int32(len(s))) }}) {
+		if _, _, ok := ag.Tasks().SubscribeWithJournal(task.ID, Events{OnText: func(s string) { counts[i].Add(int32(len(s))) }}); !ok {
 			t.Fatalf("subscriber %d rejected", i)
 		}
 	}
@@ -478,11 +478,11 @@ func TestBackgroundTaskManySubscribers(t *testing.T) {
 	}
 }
 
-// Subscribing an unknown task id reports false rather than panicking.
+// Subscribing an unknown task id reports not-ok rather than panicking.
 func TestSubscribeUnknownTask(t *testing.T) {
 	ag := New(llm.New("http://unused", "k"), "m", 100, "sys")
-	if ag.Tasks().Subscribe("task-999", Events{}) {
-		t.Fatal("Subscribe on an unknown id should report false")
+	if _, _, ok := ag.Tasks().SubscribeWithJournal("task-999", Events{}); ok {
+		t.Fatal("SubscribeWithJournal on an unknown id should report not-ok")
 	}
 }
 
@@ -563,12 +563,12 @@ func TestBroadcastBlockingSubscriberCannotDeadlock(t *testing.T) {
 
 	inCallback := make(chan struct{})
 	notify := sync.OnceFunc(func() { close(inCallback) })
-	if !ag.Tasks().Subscribe(task.ID, Events{
+	if _, _, ok := ag.Tasks().SubscribeWithJournal(task.ID, Events{
 		OnText: func(string) {
 			notify()  // parked mid-broadcast, like Send on a full queue
 			<-release // simulates prog.Send parked behind a stuck UI event loop
 		},
-	}) {
+	}); !ok {
 		t.Fatal("task should accept a subscriber while running")
 	}
 

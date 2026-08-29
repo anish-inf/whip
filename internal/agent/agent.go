@@ -99,6 +99,7 @@ type Agent struct {
 	pending   []pendingSteer // steered user messages awaiting injection
 	compacted bool           // a compaction already happened this turn — don't retry-loop
 	running   atomic.Bool    // a turn is in flight (wait delivery routes on it)
+	waitReg   *waitRegistry  // lazily created by waits()
 
 	// msgsMu guards Messages for concurrent READERS: the turn goroutine
 	// mutates Messages freely, but a test/UI reader taking msgsMu sees a
@@ -272,6 +273,7 @@ func New(client *llm.Client, model string, maxTokens int, systemPrompt string) *
 	}
 	a.Tools = append(a.Tools, taskTool(a), taskSteerTool(a))
 	a.Tools = append(a.Tools, todoTool(a))
+	a.Tools = append(a.Tools, waitTool(a))
 	a.Tools = append(a.Tools, memoryTools(a)...)
 	a.files = newFileLocks()
 	a.bg = newTaskRegistry()

@@ -92,6 +92,7 @@ type (
 	usageMsg       llm.Usage                 // one request's token usage
 	quitArmMsg     struct{}                  // the idle ctrl+c arm window expired
 	taskUpdateMsg  struct{}                  // a background subagent started/settled — redraw
+	waitWakeMsg    string                    // an idle wait fired — wake as a machine turn
 	orphanSteerMsg string                    // a steer orphaned at turn teardown — submit as a machine turn
 	mcpStatusMsg   struct{}                  // an MCP server changed state — redraw
 	thinkMsg       string                    // streamed reasoning tokens
@@ -2111,15 +2112,26 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case orphanSteerMsg:
-		// A user steer arrived after the drain snapshot at turn teardown and
-		// was orphaned when the wait wake fired. The agent can't message the
-		// TUI itself (same seam as waitWakeFunc) — it surfaced the steer
-		// through OnOrphanedSteer; run it as a machine turn so the steer is
-		// never lost.
+		// A steer arrived after the drain snapshot at turn teardown and was
+		// orphaned. The agent can't message the TUI itself (same seam as
+		// waitWakeMsg) — it surfaced the steer through OnOrphanedSteer; run it
+		// as a machine turn so the steer is never lost.
 		if !m.busy {
 			return m.submitTurn(string(msg), true)
 		}
 		return m, nil
+
+	case waitWakeMsg:
+		// An idle wait fired: wake as a machine-authored turn (the opencode/
+		// exo wake pattern). If a turn started between the wait's TurnRunning
+		// check and this message, steer into the live turn instead of
+		// double-submitting — a steer parks until the next loop boundary.
+		m.append(dimStyle.Render("⏲ " + firstLine(string(msg))))
+		if m.busy {
+			m.agent.Steer(string(msg))
+			return m, nil
+		}
+		return m.submitTurn(string(msg), false)
 
 	case mcpStatusMsg:
 		// An MCP server changed state. Announce each server's FIRST settle in
@@ -2158,27 +2170,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if tv == nil || msg.id != tv.id {
 			return m, nil
 		}
-		switch msg.kind {
-		case 0: // text delta
-			tv.buf.WriteString(msg.s)
-		case 1: // tool start
-			fmt.Fprintf(&tv.buf, "\n%s %s %s\n", toolStyle.Render("⚒"), msg.s, dimStyle.Render(msg.s2))
-		case 2: // tool end
-			preview := strings.Split(strings.TrimRight(msg.s2, "\n"), "\n")
-			if len(preview) > 4 {
-				preview = append(preview[:4], fmt.Sprintf("… +%d lines", len(msg.s2)-4))
-			}
-			fmt.Fprintf(&tv.buf, "%s\n", dimStyle.Render("  "+strings.Join(preview, "\n  ")))
-		case 3: // a steered message reached the running subagent (task_steer / chat)
-			fmt.Fprintf(&tv.buf, "\n%s %s\n", youStyle.Render("↪ steered:"), msg.s)
-		case 4: // follow-up turn settled; unlock the chat input
+		if msg.kind == 4 { // follow-up turn settled; unlock the chat input
 			tv.busy, tv.followCancel = false, nil
-			if msg.s != "" {
-				fmt.Fprintf(&tv.buf, "\n%s\n", errStyle.Render(msg.s))
-			} else {
-				tv.buf.WriteString("\n")
-			}
 		}
+		renderTaskEvent(&tv.buf, msg.kind, msg.s, msg.s2)
 		m.refreshTaskVP()
 		return m, nil
 
@@ -2852,6 +2847,7 @@ func (m *model) wireTasks() {
 	}
 	m.agent.Tasks().SetSessionID(m.sessionID)
 	m.agent.SetSessionID(m.sessionID)
+	m.wireWaits()
 	if m.prog == nil {
 		return // headless (tests)
 	}
@@ -2870,6 +2866,20 @@ func (m *model) wireTasks() {
 	// specific agent, precisely so this handoff works.
 	if m.mcpMgr != nil {
 		m.agent.SetMCPTools(m.mcpMgr.Tools())
+	}
+}
+
+// wireWaits points the active agent's wait registry at this UI's wake hook:
+// an idle wait firing submits a machine-authored turn (the opencode/exo
+// pattern — whip's Steer only reaches a RUNNING turn, so idle delivery needs
+// the wake). Called from wireTasks so every agent swap re-installs it. The
+// hook runs on the wait's poller goroutine, so it only sends a message.
+func (m *model) wireWaits() {
+	if m.prog == nil {
+		return // headless (tests)
+	}
+	m.agent.Waits().OnWake = func(text string) {
+		go m.prog.Send(waitWakeMsg(text)) // detached, same rule as OnChange
 	}
 }
 

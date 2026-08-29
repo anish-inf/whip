@@ -469,8 +469,85 @@ func TestSettledTaskViewShowsReport(t *testing.T) {
 	if !strings.Contains(stripAll(m.taskViewView()), "the final report") {
 		t.Fatalf("settled task view should render the report, got %q", stripAll(m.taskViewView()))
 	}
-	if m.agent.Tasks().Subscribe(task.ID, agent.Events{}) {
-		t.Fatal("subscribing a settled task should fail")
+	if _, _, ok := m.agent.Tasks().SubscribeWithJournal(task.ID, agent.Events{}); ok {
+		t.Fatal("subscribing a settled task should not report live")
+	}
+}
+
+// The detail view replays the journaled transcript, so opening a task AFTER
+// it emitted (or even settled) shows the full history — tool calls included —
+// not just the final report.
+func TestTaskViewReplaysJournal(t *testing.T) {
+	call := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		call++
+		switch call {
+		case 1:
+			fmt.Fprint(w, `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"t1","type":"function","function":{"name":"read","arguments":"{\"path\":\"/tmp/x\"}"}}]}}]}`+"\n\n")
+			fmt.Fprint(w, `data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}`+"\n\n")
+		default:
+			fmt.Fprint(w, `data: {"choices":[{"delta":{"content":"the final report"},"finish_reason":"stop"}]}`+"\n\n")
+		}
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer srv.Close()
+	m := tasksModel(srv.URL)
+	task := m.agent.StartBackground("probe", "p", agent.SubModel{})
+	waitSettled(t, task)
+
+	m.openTask(task.ID)
+	if m.taskVP.live {
+		t.Fatal("a settled task's view should not subscribe to events")
+	}
+	view := stripAll(m.taskViewView())
+	for _, want := range []string{"⚒ read", "the final report", "done:"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("replayed view missing %q:\n%s", want, view)
+		}
+	}
+}
+
+// Opening a RUNNING task replays what streamed before the open, then keeps
+// streaming live events after it.
+func TestRunningTaskViewReplaysThenStreams(t *testing.T) {
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, `data: {"choices":[{"delta":{"content":"early-text"}}]}`+"\n\n")
+		w.(http.Flusher).Flush() // delivered before the view opens
+		select {
+		case <-release:
+		case <-r.Context().Done():
+			return
+		}
+		fmt.Fprint(w, `data: {"choices":[{"delta":{"content":"late-text"},"finish_reason":"stop"}]}`+"\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	t.Cleanup(func() { close(release) })
+	defer srv.Close()
+	m := tasksModel(srv.URL)
+	task := m.agent.StartBackground("probe", "p", agent.SubModel{})
+	defer m.agent.Tasks().Cancel(task.ID)
+
+	// Wait for the journal to hold the early delta, then open mid-run.
+	for range 100 {
+		if events, _, _ := m.agent.Tasks().SubscribeWithJournal(task.ID, agent.Events{}); len(events) > 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	m.openTask(task.ID)
+	if !m.taskVP.live {
+		t.Fatal("a running task's view should subscribe to live events")
+	}
+	if view := stripAll(m.taskViewView()); !strings.Contains(view, "early-text") {
+		t.Fatalf("view opened mid-run should replay pre-open output:\n%s", view)
+	}
+	// Live events keep arriving after the open (headless model: Update direct).
+	m.Update(taskEventMsg{id: task.ID, kind: 0, s: "late-text"})
+	if view := stripAll(m.taskViewView()); !strings.Contains(view, "late-text") {
+		t.Fatalf("live event after open missing:\n%s", view)
 	}
 }
 

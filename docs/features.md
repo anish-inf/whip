@@ -70,6 +70,45 @@ Tests: `internal/tools/bashrun/feedback_test.go` — `TestOnUpdateThrottle`
 `internal/tui/tool_output_test.go` — `TestToolOutputMsgUpdatesRunningRow`
 (unknown id ignored, tail replaces, end clears), `TestLastLines`.
 
+### Waiting without polling (`wait` tool)
+
+`internal/agent/wait.go` — the `wait` tool replaces `sleep N && check` loops
+(which spend a full LLM turn per poll) with a **harness-owned poller**. The
+model names a shell command, an optional `until` regex, an interval (min 2s,
+default 10s) and a timeout (default 10m, max 1h); a goroutine re-runs the
+command via `bashrun` on the interval with zero model involvement.
+
+Exactly one message re-enters the loop when the wait resolves — never a poll
+per check. Delivery routes on whether a turn is in flight (`Agent.TurnRunning`
+— an `atomic.Bool` set at `turn()` entry/exit): **busy** → `Steer`, drained at
+the next loop boundary like any steered message; **idle** → the registry's
+`OnWake` hook, which the TUI installs (`wireWaits`, called from `wireTasks` so
+every agent swap re-installs it) to submit a machine-authored turn
+(`submitTurn(text, false)`), the opencode/exo wake pattern. A turn that starts
+between the `TurnRunning` check and the wake message is caught by the
+`waitWakeMsg` handler re-checking `m.busy` and steering instead of
+double-submitting. Headless idle (`whip run`, tests) has no loop boundary and
+no wake hook, so the message is dropped by design; the busy path is the one
+that matters there.
+
+Resolution states (`WaitStatus`): `condition met` (exit 0 and `until` regex
+matches, checked immediately on registration and then per interval), `timed
+out`, and `command failing` — 3 consecutive non-zero exits strike out the wait
+early (hermes' 3-strike lesson) so a broken command doesn't poll for the full
+timeout. Delivery is once-only (`atomic.Bool` CAS in `deliver`), `Done` closes
+on settle like `BackgroundTask`, and `CancelWait` suppresses a pending
+delivery. Waits are live-only: a dead process's waits die with it, and the
+registry's `Close` cancels every poller on agent teardown.
+
+The system prompt (`cmd/whip/main.go`) tells the model to prefer `wait` over
+`sleep` loops, and the tool's return message restates the no-poll contract.
+
+Tests: `internal/agent/wait_test.go` — `TestWaitConditionMetImmediately`,
+`TestWaitUntilRegex`, `TestWaitStrikesOut`, `TestWaitTimeout`,
+`TestWaitBusySteersInsteadOfWaking` (busy → Steer, not OnWake),
+`TestWaitCancel`, `TestWaitToolRegisters` (def parsing + settle).
+`go test -race ./internal/agent` green.
+
 ### Compaction
 
 When the conversation fills the context window, old turns fold into an
@@ -173,6 +212,18 @@ as a **steered message**, so the model sees it on the next loop boundary.
   The dock itself shows running tasks plus ones settled within a one-minute
   grace window (`dockSettledGrace`) — long enough to notice the ✓, then the
   strip cleans itself.
+- **Full transcript on open.** The registry journals every emitted event per
+  task (`taskJournal`, byte-capped at 128KB, drop-oldest with a "[earlier
+  output dropped]" marker). `openTask` replays the journal and subscribes to
+  the live stream as ONE atomic call (`SubscribeWithJournal`), so a detail
+  view opened mid-run or after settle shows the complete transcript — tool
+  calls, steers, and all — instead of only what streams in after attach.
+  Replay and live rendering share `renderTaskEvent` (internal/tui/tasks.go)
+  so the two paths can't drift in format. Tests: `journal_test.go`
+  (recording, delta coalescing, overflow truncation, atomicity under
+  concurrent emit, survive-settle/clear lifecycle),
+  `TestTaskViewReplaysJournal`, `TestRunningTaskViewReplaysThenStreams`.
+
 - **Full transcript persisted.** When a background subagent settles, its whole
   conversation is saved as its own attributed session
   (`Store.SaveSubagentTranscript`, id `task-<parentID>-<taskID>` — the

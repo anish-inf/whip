@@ -65,6 +65,57 @@ type BackgroundTask struct {
 	SubModel string
 }
 
+// JournaledEvent is one recorded task event. Kind mirrors the TUI's
+// taskEventMsg kinds: 0 text, 1 tool start, 2 tool end, 3 steer, 4 compact.
+// S/S2 carry the payload (text / tool name+args / tool result). Consecutive
+// text deltas coalesce into one entry so long streams don't fill the slice.
+type JournaledEvent struct {
+	Kind  int
+	S, S2 string
+}
+
+// taskJournal is a per-task ring of recent events, byte-bounded so a chatty
+// subagent can't grow memory without limit. Over budget → drop from the front
+// and mark Truncated (the detail view renders a "[earlier output dropped]"
+// header line instead of pretending the transcript is complete).
+type taskJournal struct {
+	events    []JournaledEvent
+	bytes     int
+	Truncated bool
+}
+
+// journalBudget caps one task's journal at 128KB of payload text. Sized to
+// hold a typical exploration's full transcript (tool outputs dominate) while
+// bounding a registry full of tasks at single-digit MB.
+const journalBudget = 128 * 1024
+
+// append records one event, coalescing consecutive text deltas (kind 0) into
+// the previous entry — the stream emits one event per SSE delta.
+func (j *taskJournal) append(kind int, s, s2 string) {
+	if kind == 0 && len(j.events) > 0 && j.events[len(j.events)-1].Kind == 0 {
+		j.events[len(j.events)-1].S += s
+		j.bytes += len(s)
+	} else {
+		j.events = append(j.events, JournaledEvent{Kind: kind, S: s, S2: s2})
+		j.bytes += len(s) + len(s2)
+	}
+	for j.bytes > journalBudget && len(j.events) > 1 {
+		j.bytes -= len(j.events[0].S) + len(j.events[0].S2)
+		j.events = j.events[1:]
+		j.Truncated = true
+	}
+	// A pure-text stream (no interleaving tool calls) coalesces into ONE
+	// entry, which the front-drop loop above can't touch (it keeps len>=1) —
+	// without this tail cap the "bounded at 128KB" guarantee is false for the
+	// one case a long uninterrupted answer hits.
+	if len(j.events) == 1 && len(j.events[0].S) > journalBudget {
+		drop := len(j.events[0].S) - journalBudget
+		j.events[0].S = j.events[0].S[drop:]
+		j.bytes -= drop
+		j.Truncated = true
+	}
+}
+
 // taskRegistry tracks background subagents for one parent agent. It is the
 // Go-channels counterpart of opencode's BackgroundJob registry: a map of id →
 // task whose Done channel fans completion out to the tool caller, the TUI, and
@@ -72,6 +123,12 @@ type BackgroundTask struct {
 type taskRegistry struct {
 	mu    sync.Mutex
 	tasks map[string]*BackgroundTask
+	// journals record each task's emitted events so a detail view opened
+	// mid-run (or after settle) replays the full transcript instead of only
+	// what streams in after Subscribe. Written under mu in emitter(); read
+	// under mu by SubscribeWithJournal. Entries die with their task in
+	// ClearSettled.
+	journals map[string]*taskJournal
 	// subs are live event subscribers per task id (the TUI's per-task view).
 	// Events is all callbacks, so fan-out is a slice the worker walks per
 	// event — no channel to close, no per-subscriber goroutine. Kept here
@@ -112,7 +169,7 @@ func (r *taskRegistry) recordSession() string {
 }
 
 func newTaskRegistry() *taskRegistry {
-	return &taskRegistry{tasks: map[string]*BackgroundTask{}, subs: map[string][]Events{}}
+	return &taskRegistry{tasks: map[string]*BackgroundTask{}, subs: map[string][]Events{}, journals: map[string]*taskJournal{}}
 }
 
 // List returns a snapshot of all tasks, oldest first.
@@ -197,6 +254,7 @@ func (r *taskRegistry) ClearSettled(keep ...string) int {
 		if !slices.Contains(keep, id) && t.Status != TaskRunning {
 			delete(r.tasks, id)
 			delete(r.subs, id)
+			delete(r.journals, id)
 			n++
 		}
 	}
@@ -335,92 +393,133 @@ func (r *taskRegistry) refreshTranscript(id string, sub *Agent) {
 	r.OnRecord(r.recordSession(), t)
 }
 
-// Subscribe registers a live event subscriber for a running task. Returns
-// false when the task is unknown or already settled — the caller should then
-// render the stored Report instead of a live stream.
-func (r *taskRegistry) Subscribe(id string, ev Events) bool {
+// SubscribeWithJournal returns the task's journaled events so far and, when
+// the task is still running, registers ev as a live subscriber — atomically
+// under one lock hold, so no event between the replay point and the
+// subscription is missed or delivered twice. Running reports ok=true; a
+// settled (or restored) task reports ok=false and the caller renders the
+// journal as history. Returns false with a nil journal for unknown ids.
+func (r *taskRegistry) SubscribeWithJournal(id string, ev Events) (events []JournaledEvent, truncated, ok bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	t, ok := r.tasks[id]
-	if !ok || t.Status != TaskRunning {
-		return false
+	t, exists := r.tasks[id]
+	if !exists {
+		return nil, false, false
+	}
+	j := r.journals[id]
+	if j != nil {
+		events = append([]JournaledEvent(nil), j.events...)
+		truncated = j.Truncated
+	}
+	if t.Status != TaskRunning {
+		return events, truncated, false
 	}
 	r.subs[id] = append(r.subs[id], ev)
-	return true
+	return events, truncated, true
 }
 
-// emitter returns an Events that forwards every callback to the task's
-// current subscribers (the TUI's per-task view). Subscriber callbacks run on
-// the worker goroutine, so they must be cheap and non-blocking.
+// emitter returns an Events that journals every callback and forwards it to
+// the task's current subscribers (the TUI's per-task view). Subscriber
+// callbacks run on the worker goroutine, so they must be cheap and
+// non-blocking. Tool calls stream in as args deltas (OnToolCall); only the
+// start (kind 1) and end (kind 2) are journaled — the deltas would fill the
+// journal with partial JSON.
+//
+// emitLocked folds the journal append and the subscriber snapshot into a
+// single registry lock hold so an event can never be both replayed from the
+// journal AND delivered live to the same view: a SubscribeWithJournal that
+// runs before emitLocked sees the event in the journal (and the subscriber
+// isn't registered yet, so it's not in the snapshot); one that runs after
+// finds the event already journaled and the subscriber registered for the
+// NEXT event. The two-orderings-are-exhaustive property is what makes the
+// replay→live seam neither drop nor double an event.
+//
+// Callbacks run AFTER the lock is released (the snapshot is taken under it):
+// subscribers are allowed to block (the TUI's task view funnels events
+// through prog.Send, which parks when the UI event queue backs up), and a
+// blocked callback must never hold mu hostage — the UI goroutine itself takes
+// mu via List/Get when rendering the dock, so running a blocking callback
+// under the lock is an ABBA deadlock (worker holds mu → waits on the UI
+// queue; UI waits on mu).
+func (r *taskRegistry) emitLocked(id string, kind int, s, s2 string, journaled bool) []Events {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if journaled {
+		j := r.journals[id]
+		if j == nil {
+			j = &taskJournal{}
+			r.journals[id] = j
+		}
+		j.append(kind, s, s2)
+	}
+	return append([]Events(nil), r.subs[id]...)
+}
+
+// emitter returns an Events that journals every callback and forwards it to
+// the task's current subscribers (the TUI's per-task view). Subscriber
+// callbacks run on the worker goroutine, so they must be cheap and
+// non-blocking. Tool calls stream in as args deltas (OnToolCall); only the
+// start (kind 1) and end (kind 2) are journaled — the deltas would fill the
+// budget with partial JSON. Compaction is NOT journaled: kind 4 is reserved
+// for the TUI's follow-up-settled message, and replaying a compact as if it
+// were a settle would render it as an error.
 func (r *taskRegistry) emitter(id string) Events {
 	return Events{
 		OnText: func(s string) {
-			r.broadcast(id, func(e Events) {
+			subs := r.emitLocked(id, 0, s, "", true)
+			for _, e := range subs {
 				if e.OnText != nil {
 					e.OnText(s)
 				}
-			})
+			}
 		},
 		OnThink: func(s string) {
-			r.broadcast(id, func(e Events) {
+			for _, e := range r.emitLocked(id, 0, "", "", false) {
 				if e.OnThink != nil {
 					e.OnThink(s)
 				}
-			})
+			}
 		},
 		OnToolStart: func(tcID, n, a string) {
-			r.broadcast(id, func(e Events) {
+			subs := r.emitLocked(id, 1, n, a, true)
+			for _, e := range subs {
 				if e.OnToolStart != nil {
 					e.OnToolStart(tcID, n, a)
 				}
-			})
+			}
 		},
 		OnToolCall: func(tcID, n, a string) {
-			r.broadcast(id, func(e Events) {
+			for _, e := range r.emitLocked(id, 0, "", "", false) {
 				if e.OnToolCall != nil {
 					e.OnToolCall(tcID, n, a)
 				}
-			})
+			}
 		},
 		OnToolEnd: func(tcID, n, res string) {
-			r.broadcast(id, func(e Events) {
+			subs := r.emitLocked(id, 2, n, res, true)
+			for _, e := range subs {
 				if e.OnToolEnd != nil {
 					e.OnToolEnd(tcID, n, res)
 				}
-			})
+			}
 		},
 		OnSteer: func(s string) {
-			r.broadcast(id, func(e Events) {
+			subs := r.emitLocked(id, 3, s, "", true)
+			for _, e := range subs {
 				if e.OnSteer != nil {
 					e.OnSteer(s)
 				}
-			})
+			}
 		},
 		OnCompact: func(took, kept int) {
-			r.broadcast(id, func(e Events) {
+			// journaled=false: kind 4 is follow-up-settled in the TUI, so a
+			// journaled compact would replay as an error line.
+			for _, e := range r.emitLocked(id, 0, "", "", false) {
 				if e.OnCompact != nil {
 					e.OnCompact(took, kept)
 				}
-			})
+			}
 		},
-	}
-}
-
-// broadcast runs a subscriber callback for each of the task's subscribers.
-// The slice is snapshotted under the registry lock, then callbacks run AFTER
-// the lock is released: subscribers are allowed to block (the TUI's task view
-// funnels events through prog.Send, which parks when the UI event queue is
-// backed up), and a blocked callback must never hold mu hostage — the UI
-// goroutine itself takes mu via List/Get when rendering the dock, so running
-// a blocking callback under the lock is an ABBA deadlock (worker holds mu →
-// waits on the UI queue; UI waits on mu). settle deletes the entry, so
-// post-settle events (there should be none) go nowhere.
-func (r *taskRegistry) broadcast(id string, call func(Events)) {
-	r.mu.Lock()
-	subs := append([]Events(nil), r.subs[id]...)
-	r.mu.Unlock()
-	for _, e := range subs {
-		call(e)
 	}
 }
 

@@ -120,17 +120,22 @@ func TestWaitingOnSubagentsDuringForegroundSubagent(t *testing.T) {
 func TestDrainOrphanedSteers(t *testing.T) {
 	ag := New(llm.New("http://unused", "k"), "m", 100, "sys")
 
-	// No hook: drainOrphanedSteers is a no-op, pending survives.
+	// No hook: a steer with no turn running parks for a later drain (headless
+	// contract), and drainOrphanedSteers without a hook leaves it put.
 	ag.Steer("keep me")
 	ag.drainOrphanedSteers()
 	if got := ag.drainPending(); len(got) != 1 || got[0].text != "keep me" {
 		t.Fatalf("no hook: pending should survive, got %+v", got)
 	}
 
+	// With the hook: a steer landing mid-turn (running=true) queues, and the
+	// teardown drain hands each survivor to the hook in order.
 	var surfaced []string
 	ag.OnOrphanedSteer = func(text string) { surfaced = append(surfaced, text) }
+	ag.running.Store(true)
 	ag.Steer("one")
 	ag.Steer("two")
+	ag.running.Store(false)
 	ag.drainOrphanedSteers()
 	if len(surfaced) != 2 || surfaced[0] != "one" || surfaced[1] != "two" {
 		t.Fatalf("hook should receive both steers in order, got %v", surfaced)
