@@ -16,6 +16,7 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/context-labs/whip/internal/agent"
 	"github.com/context-labs/whip/internal/config"
@@ -96,7 +97,7 @@ func runCLI(args []string) error {
 
 	// System prompt: -system-file wins over -system (a file is the deliberate
 	// choice; a stray -system alongside it is almost certainly stale).
-	sys := systemPrompt(cwd())
+	sys := systemPrompt(cwd(), time.Now())
 	if *systemFlag != "" {
 		sys = *systemFlag
 	}
