@@ -36,6 +36,33 @@ func TestPaletteChrome(t *testing.T) {
 	}
 }
 
+func TestOcPadTo(t *testing.T) {
+	got := ocPadTo("ab", 6, lipgloss.Color("#ebebeb"))
+	if lipgloss.Width(got) != 6 {
+		t.Fatalf("padded width = %d, want 6", lipgloss.Width(got))
+	}
+	if !strings.Contains(got, "    ") {
+		t.Fatalf("missing pad spaces: %q", got)
+	}
+	if got := ocPadTo("abcdef", 4, lipgloss.Color("#ebebeb")); got != "abcdef" {
+		t.Fatalf("over-width content must pass through, got %q", got)
+	}
+}
+
+func TestSanitizeViewKeepsPanelFillInOpencodeMode(t *testing.T) {
+	old := ocActive
+	t.Cleanup(func() { ocActive = old })
+	line := "x\x1b[48;2;235;235;235m    \x1b[0m" // styled trailing spaces = panel fill
+	ocActive = true
+	if got := sanitizeView(line); !strings.Contains(got, "    ") {
+		t.Fatalf("opencode mode must keep styled trailing spaces: %q", got)
+	}
+	ocActive = false
+	if got := sanitizeView(line); strings.Contains(got, "    ") {
+		t.Fatalf("default mode must strip styled trailing spaces: %q", got)
+	}
+}
+
 func TestOcPick(t *testing.T) {
 	mdMu.Lock()
 	sl, sk := mdLight, mdKnown

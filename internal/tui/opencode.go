@@ -55,6 +55,18 @@ func ocPick(dark, light, neutral string) lipgloss.TerminalColor {
 	}
 }
 
+// ocPadTo pads content to width with spaces EXPLICITLY styled with the panel
+// background. lipgloss's Style.Width padding lands after the nested segments'
+// closing resets without re-opening the background, so padded panel rows
+// rendered their tail on the terminal default — a text-width chip instead of a
+// full-width panel.
+func ocPadTo(content string, width int, bg lipgloss.TerminalColor) string {
+	if pad := width - lipgloss.Width(content); pad > 0 {
+		content += lipgloss.NewStyle().Background(bg).Render(strings.Repeat(" ", pad))
+	}
+	return content
+}
+
 // ocThemeKnown reports whether whip resolved the terminal background — glyph
 // art that depends on a bg-matched color (the prompt's ▀ shadow) must skip
 // rendering when it's unknown, or it draws in the default fg (a black bar on a
@@ -65,8 +77,11 @@ func ocThemeKnown() bool {
 	return mdKnown
 }
 
-func ocPanelBg() lipgloss.TerminalColor    { return ocPick("#141414", "#fafafa", "") }  // cards, sidebar (no fill if unknown)
-func ocElementBg() lipgloss.TerminalColor  { return ocPick("#1e1e1e", "#f5f5f5", "") }  // prompt box
+// Light fills use deeper steps from opencode's own light ramp (step4/step5)
+// rather than its literal panel values (#fafafa/#f5f5f5): a 2% delta from
+// white is invisible in a terminal, which read as zero panel contrast.
+func ocPanelBg() lipgloss.TerminalColor    { return ocPick("#141414", "#ebebeb", "") }  // cards, sidebar (no fill if unknown)
+func ocElementBg() lipgloss.TerminalColor  { return ocPick("#1e1e1e", "#e1e1e1", "") }  // prompt box
 func ocAgentCol() lipgloss.TerminalColor   { return ocPick("#5c9cf5", "#7b5bb6", "4") } // bars, ▣
 func ocTextCol() lipgloss.TerminalColor    { return ocPick("#eeeeee", "#1a1a1a", "") }  // text (default fg if unknown)
 func ocMutedCol() lipgloss.TerminalColor   { return ocPick("#808080", "#8a8a8a", "8") } // muted
@@ -188,14 +203,16 @@ func (m *model) sidebarView(height int) string {
 		}
 		rows = append(rows, footer) // pinned to the bottom row
 	}
-	// opencode's sidebar is set apart by a panel background (no border). Fill the
-	// whole column with the panel shade so it reads as a distinct panel.
-	col := lipgloss.NewStyle().
-		Width(sidebarWidth).
-		PaddingLeft(2).
-		PaddingRight(2).
-		Background(ocPanelBg())
-	return col.Render(strings.Join(rows, "\n"))
+	// opencode's sidebar is set apart by a panel background (no border). Pad each
+	// row manually with bg-styled spaces (ocPadTo) so the WHOLE column carries
+	// the panel shade — style.Width padding drops the bg after nested resets.
+	bg := ocPanelBg()
+	pad2 := lipgloss.NewStyle().Background(bg).Render("  ")
+	out := make([]string, len(rows))
+	for i, r := range rows {
+		out[i] = ocPadTo(pad2+r, sidebarWidth, bg)
+	}
+	return strings.Join(out, "\n")
 }
 
 // lspSummary is a one-line LSP status for the sidebar: a connected count, or a
@@ -231,9 +248,10 @@ func (m *model) opencodePrompt(inner string, width int) string {
 	if width < 6 {
 		return inner
 	}
-	elem := lipgloss.NewStyle().Background(ocElementBg())
-	bar := lipgloss.NewStyle().Foreground(ocAgentCol()).Background(ocElementBg()).Render("┃")
-	row := func(content string) string { return elem.Width(width).Render(content) }
+	ebg := ocElementBg()
+	elem := lipgloss.NewStyle().Background(ebg)
+	bar := lipgloss.NewStyle().Foreground(ocAgentCol()).Background(ebg).Render("┃")
+	row := func(content string) string { return ocPadTo(content, width, ebg) }
 	var b strings.Builder
 	b.WriteString(row(bar) + "\n") // paddingTop (bar continues down the whole box)
 	for _, ln := range strings.Split(inner, "\n") {
@@ -267,9 +285,9 @@ func opencodeUserCard(text string, width int) string {
 	if width < 4 {
 		return text
 	}
-	panel := lipgloss.NewStyle().Background(ocPanelBg())
-	bar := lipgloss.NewStyle().Foreground(ocAgentCol()).Background(ocPanelBg()).Render("┃")
-	txt := lipgloss.NewStyle().Foreground(ocTextCol()).Background(ocPanelBg())
+	bg := ocPanelBg()
+	bar := lipgloss.NewStyle().Foreground(ocAgentCol()).Background(bg).Render("┃")
+	txt := lipgloss.NewStyle().Foreground(ocTextCol()).Background(bg)
 	lines := strings.Split(wrap(text, width-3), "\n")
 	rows := append([]string{""}, lines...) // blank padding row above
 	rows = append(rows, "")                // blank padding row below
@@ -282,7 +300,7 @@ func opencodeUserCard(text string, width int) string {
 		if ln != "" {
 			content = bar + txt.Render("  "+ln) // two spaces after the bar
 		}
-		b.WriteString(panel.Width(width).Render(content)) // fill the row to width with the panel bg
+		b.WriteString(ocPadTo(content, width, bg)) // fill the row to width with the panel bg
 	}
 	return b.String()
 }

@@ -326,7 +326,13 @@ func sanitizeView(s string) string {
 	s = bareSGR.Replace(s)
 	lines := strings.Split(s, "\n")
 	for i, l := range lines {
-		lines[i] = selfTerminate(padStripRE.ReplaceAllString(l, "$1"))
+		if !ocActive {
+			// opencode mode: styled trailing spaces ARE the panel fills (user
+			// cards) — stripping them collapses a full-width panel to a chip.
+			// Markdown got its own padding stripped at render time either way.
+			l = padStripRE.ReplaceAllString(l, "$1")
+		}
+		lines[i] = selfTerminate(l)
 	}
 	return strings.Join(lines, "\n")
 }
