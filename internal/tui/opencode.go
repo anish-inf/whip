@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/context-labs/whip/internal/agent"
 	"github.com/context-labs/whip/internal/lsp"
@@ -154,8 +155,10 @@ func (m *model) applyUIMode(mode string) {
 	}
 }
 
-// setUIMode switches render mode live, persists the choice, and redraws.
-func (m *model) setUIMode(mode string) {
+// setUIMode switches render mode live, persists the choice, and redraws. It
+// returns the bubbletea command that enters/exits the alternate screen so the
+// full-screen state tracks the mode.
+func (m *model) setUIMode(mode string) tea.Cmd {
 	if mode != opencodeMode {
 		mode = ""
 	}
@@ -174,6 +177,10 @@ func (m *model) setUIMode(mode string) {
 	}
 	m.refreshVP()
 	m.append(dimStyle.Render("◐ ui mode: " + uiModeLabel(mode)))
+	if mode == opencodeMode {
+		return tea.EnterAltScreen
+	}
+	return tea.ExitAltScreen
 }
 
 // uiModeLabel is the display name for a UI mode value.

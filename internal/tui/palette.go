@@ -339,14 +339,10 @@ func (m *model) paletteItems() []paletteItem {
 			dynHint: func(m *model) string { return "opencode / default" },
 			run: func(m *model) (tea.Model, tea.Cmd) {
 				if m.uiMode == opencodeMode {
-					m.setUIMode("")
-				} else {
-					m.setUIMode(opencodeMode)
+					return m, m.setUIMode("")
 				}
-				return m, nil
+				return m, m.setUIMode(opencodeMode)
 			},
-			stepBack: func(m *model) { m.setUIMode("") },
-			stepFwd:  func(m *model) { m.setUIMode(opencodeMode) },
 		},
 		{
 			title: "Browser driver", category: "Display",

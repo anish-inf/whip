@@ -430,6 +430,9 @@ func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string, ca
 	// 0 and the whole layout collapses). Instead we keep the real TTY as the
 	// output and enable click/wheel reporting directly on it.
 	opts := []tea.ProgramOption{}
+	if cfg.UIMode == opencodeMode {
+		opts = append(opts, tea.WithAltScreen()) // opencode mode owns the whole screen
+	}
 	// Bottom-anchor the inline view: move the cursor to the terminal's last
 	// row before bubbletea's first paint, so the view's screen position is
 	// knowable (viewTop = height - viewH). Without this the view starts
@@ -3870,7 +3873,11 @@ func (m *model) View() string {
 	}
 	if m.height > 0 {
 		m.viewH = lipgloss.Height(v)
-		m.viewTop = max(min(m.viewTop, m.height-m.viewH), 0)
+		if m.uiMode == opencodeMode {
+			m.viewTop = 0 // altscreen: the view is drawn from row 0, so mouse Y maps directly
+		} else {
+			m.viewTop = max(min(m.viewTop, m.height-m.viewH), 0)
+		}
 	}
 	return v
 }
