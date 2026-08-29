@@ -36,6 +36,9 @@ var ocActive bool
 const (
 	sidebarWidth    = 42
 	sidebarMinWidth = 120
+	// opencodeLeftMargin is the left padding on opencode's main column
+	// (routes/session paddingLeft=2), applied to the whole main body.
+	opencodeLeftMargin = 2
 )
 
 // The "opencode" block-glyph wordmark (src/logo.ts), decoded to plain runes.
@@ -179,12 +182,12 @@ func (m *model) opencodePrompt(inner string, width int) string {
 	bar := youStyle.Render("┃")
 	var b strings.Builder
 	for _, ln := range strings.Split(inner, "\n") {
-		b.WriteString(bar + " " + ln + "\n")
+		b.WriteString(bar + "  " + ln + "\n")
 	}
 	// model/mode row: "Low · kimi-k3  provider"
 	meta := m.ocModeLabel() + dimStyle.Render(" · ") + m.modelName + dimStyle.Render("  "+m.provName)
-	b.WriteString(bar + " " + meta + "\n")
-	b.WriteString(youStyle.Render("╹") + dimStyle.Render(strings.Repeat("▀", max(width-2, 0))))
+	b.WriteString(bar + "  " + meta + "\n")
+	b.WriteString(youStyle.Render("╹") + dimStyle.Render(strings.Repeat("▀", max(width-1, 0))))
 	return b.String()
 }
 
@@ -197,7 +200,7 @@ func opencodeUserCard(text string, width int) string {
 		return text
 	}
 	bar := youStyle.Render("┃")
-	lines := strings.Split(wrap(text, width-2), "\n")
+	lines := strings.Split(wrap(text, width-3), "\n")
 	rows := append([]string{""}, lines...) // blank row above
 	rows = append(rows, "")                // blank row below
 	var b strings.Builder
@@ -205,7 +208,7 @@ func opencodeUserCard(text string, width int) string {
 		if i > 0 {
 			b.WriteByte('\n')
 		}
-		b.WriteString(bar + " " + ln)
+		b.WriteString(bar + "  " + ln) // opencode uses two spaces after the bar
 	}
 	return b.String()
 }

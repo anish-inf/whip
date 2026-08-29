@@ -1664,8 +1664,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.termWidth = msg.Width
 		w := msg.Width
-		if m.uiMode == opencodeMode && msg.Width >= sidebarMinWidth {
-			w -= sidebarWidth // reserve columns for the right sidebar
+		if m.uiMode == opencodeMode {
+			w -= opencodeLeftMargin // opencode's main column has a left margin
+			if msg.Width >= sidebarMinWidth {
+				w -= sidebarWidth // reserve columns for the right sidebar
+			}
 		}
 		resized := w != m.width // width change → re-wrap the whole transcript
 		m.width, m.height = w, msg.Height
@@ -3897,6 +3900,9 @@ func (m *model) currentView() string {
 // (WindowSizeMsg handler) and the next render re-anchors to the bottom.
 func (m *model) View() string {
 	v := m.viewBody()
+	if m.uiMode == opencodeMode {
+		v = lipgloss.NewStyle().PaddingLeft(opencodeLeftMargin).Render(v) // opencode's main-column left margin
+	}
 	if m.sidebarVisible() {
 		v = lipgloss.JoinHorizontal(lipgloss.Top, v, m.sidebarView(lipgloss.Height(v)))
 	}
