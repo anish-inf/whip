@@ -823,9 +823,13 @@ func (m *model) paletteView() string {
 			line += dimStyle.Render("  — " + it.dynDesc(m))
 		}
 		state := paletteState(m, it)
-		if i == p.idx {
+		switch {
+		case i == p.idx && m.uiMode == opencodeMode:
+			// opencode highlights the whole selected row behind a ▌ bar.
+			b.WriteString(botStyle.Render("▌") + botStyle.Render(line) + state + "  " + hint)
+		case i == p.idx:
 			b.WriteString(botStyle.Render("→") + line + state + "  " + hint)
-		} else {
+		default:
 			b.WriteString(" " + line + state + "  " + hint)
 		}
 		b.WriteString("\n")
