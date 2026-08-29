@@ -416,6 +416,10 @@ func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string, ca
 	// this launch if its 1 RTT beats startup (first-run trust prompt), else
 	// next launch — the record is durable either way.
 	m.updateLatest = update.Pending(Version)
+	// Resolve the theme BEFORE applyUIMode/startupReport: opencode mode bakes
+	// theme-resolved colors into the input styles, and startupReport's
+	// unknown-background notice must reflect the final detection result.
+	m.themeHow = m.applyTheme(cfg.Theme)
 	if cfg.UIMode == opencodeMode {
 		m.applyUIMode(opencodeMode) // set the mode BEFORE startupReport so it renders opencode-clean
 	}
@@ -448,9 +452,6 @@ func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string, ca
 	if m.mouseOn {
 		enableClickWheelMouse(os.Stdout)
 	}
-	// pick the glamour style that matches the pick/detection resolution;
-	// keep how detection resolved so /report can name the source
-	m.themeHow = m.applyTheme(cfg.Theme)
 	if m.cfgExtra == nil {
 		m.cfgExtra = map[string]string{}
 	}
@@ -503,7 +504,13 @@ func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string, ca
 // already carries the past).
 func (m *model) startupReport() {
 	if m.uiMode == opencodeMode {
-		return // opencode keeps the startup clean; the logo shows as the empty-state home screen
+		// opencode keeps the startup clean; the logo shows as the empty-state home
+		// screen. But an unknown background means the panels render with no fill —
+		// zero contrast — so say why and how to fix it instead of failing silently.
+		if !ocThemeKnown() {
+			m.append(dimStyle.Render("◐ terminal background unknown — panels have no contrast; run /theme light (or dark) to fix"))
+		}
+		return
 	}
 	sk, problems := skills.ScanDetailed(skills.DefaultDirs()...)
 	var b strings.Builder
@@ -906,6 +913,9 @@ func (m *model) setTheme(theme string) {
 	}
 	how := m.applyTheme(theme)
 	m.themeHow = how // explicit picks return "" — detection source no longer applies
+	if m.uiMode == opencodeMode {
+		m.applyUIMode(opencodeMode) // refresh opencode styles (input box fill) for the new scheme
+	}
 	m.cfg.Theme = theme
 	if theme == "auto" {
 		m.cfg.Theme = "" // auto persists as "" (omitted = auto-detect)

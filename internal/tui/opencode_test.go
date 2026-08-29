@@ -36,6 +36,49 @@ func TestPaletteChrome(t *testing.T) {
 	}
 }
 
+func TestSetThemeRefreshesOpencodeInputStyles(t *testing.T) {
+	t.Setenv("WHIP_HOME", t.TempDir()) // keep cfg.Save() off the real config
+	mdMu.Lock()
+	sl, sk := mdLight, mdKnown
+	mdMu.Unlock()
+	t.Cleanup(func() { mdMu.Lock(); mdLight, mdKnown = sl, sk; mdMu.Unlock() })
+
+	m := &model{cfg: &config.Config{}, input: newInput()}
+	mdMu.Lock()
+	mdKnown = false // start unknown: styles bake NoColor
+	mdMu.Unlock()
+	m.applyUIMode(opencodeMode)
+	m.setTheme("light") // must re-bake the input styles with the light palette
+	if got := m.input.FocusedStyle.Placeholder.GetBackground(); got != lipgloss.Color("#e1e1e1") {
+		t.Fatalf("placeholder bg after /theme light = %v, want #e1e1e1", got)
+	}
+}
+
+func TestStartupReportUnknownBgNotice(t *testing.T) {
+	mdMu.Lock()
+	sl, sk := mdLight, mdKnown
+	mdMu.Unlock()
+	t.Cleanup(func() { mdMu.Lock(); mdLight, mdKnown = sl, sk; mdMu.Unlock() })
+
+	mdMu.Lock()
+	mdKnown = false
+	mdMu.Unlock()
+	m := &model{uiMode: opencodeMode}
+	m.startupReport()
+	if len(m.blocks) == 0 || !strings.Contains(m.blocks[len(m.blocks)-1].text, "background unknown") {
+		t.Fatal("unknown background should append an actionable notice")
+	}
+
+	mdMu.Lock()
+	mdKnown, mdLight = true, true
+	mdMu.Unlock()
+	m2 := &model{uiMode: opencodeMode}
+	m2.startupReport()
+	if len(m2.blocks) != 0 {
+		t.Fatalf("known background should append nothing, got %d blocks", len(m2.blocks))
+	}
+}
+
 func TestOcPadTo(t *testing.T) {
 	got := ocPadTo("ab", 6, lipgloss.Color("#ebebeb"))
 	if lipgloss.Width(got) != 6 {
