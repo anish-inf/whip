@@ -159,8 +159,16 @@ func (a *Agent) TurnRunning() bool { return a.running.Load() }
 
 // Steer queues a user message for injection at the next loop boundary of the
 // running turn — after the in-flight response and its tool calls complete,
-// never mid-generation.
+// never mid-generation. When NO turn is running (the caller raced a teardown:
+// it saw WaitingOnSubagents true, then the turn ended before this Steer
+// landed), there is no boundary left to drain the queue — so the steer goes
+// straight to OnOrphanedSteer instead of parking forever. One guard here
+// covers every Steer caller (TUI keys, wait-tool delivery, subagent fan-in).
 func (a *Agent) Steer(text string) {
+	if !a.running.Load() && a.OnOrphanedSteer != nil {
+		a.OnOrphanedSteer(text)
+		return
+	}
 	a.mu.Lock()
 	a.pending = append(a.pending, pendingSteer{text: text})
 	a.mu.Unlock()

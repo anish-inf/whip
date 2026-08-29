@@ -139,3 +139,27 @@ func TestDrainOrphanedSteers(t *testing.T) {
 		t.Fatalf("orphaned steers must be drained, got %+v", got)
 	}
 }
+
+// A Steer landing while NO turn is running (the caller raced a teardown: it
+// saw WaitingOnSubagents true, then the turn ended before Steer executed)
+// must not park in pending forever — with the hook installed it fires
+// immediately; without one it parks for a later drain (headless contract).
+func TestSteerOnIdleAgentFiresOrphanHook(t *testing.T) {
+	ag := New(llm.New("http://unused", "k"), "m", 100, "sys")
+
+	// No hook: parked, not lost, not fired.
+	ag.Steer("parked")
+	if got := ag.drainPending(); len(got) != 1 {
+		t.Fatalf("no hook: steer should park, got %+v", got)
+	}
+
+	var fired []string
+	ag.OnOrphanedSteer = func(text string) { fired = append(fired, text) }
+	ag.Steer("late arrival")
+	if len(fired) != 1 || fired[0] != "late arrival" {
+		t.Fatalf("idle steer should fire the hook, got %v", fired)
+	}
+	if got := ag.drainPending(); len(got) != 0 {
+		t.Fatalf("fired steer must not also park, got %+v", got)
+	}
+}

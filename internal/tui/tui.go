@@ -239,7 +239,7 @@ type picker struct {
 // Newlines come from ctrl+j / shift+enter / alt+enter; plain enter submits.
 func newInput() textarea.Model {
 	ti := textarea.New()
-	ti.Placeholder = "Ask whip anything… (/ for commands, tab completes)"
+	ti.Placeholder = inputPlaceholder
 	ti.Prompt = "┃ "
 	ti.SetHeight(1)
 	ti.MaxHeight = 24 // input grows with content up to this many lines
@@ -3999,6 +3999,10 @@ func (m *model) viewBody() string {
 	return b.String()
 }
 
+// inputPlaceholder is the idle input hint; syncInputPlaceholder re-uses it
+// when the busy state clears so the two sites never drift.
+const inputPlaceholder = "Ask whip anything… (/ for commands, tab completes)"
+
 // syncInputPlaceholder reflects the busy state into the input's placeholder:
 // while a turn runs, typing either steers into it (when the agent is only
 // waiting on subagents) or queues behind it. Called from View so it tracks
@@ -4009,7 +4013,7 @@ func (m *model) syncInputPlaceholder() {
 	}
 	switch {
 	case !m.busy:
-		m.input.Placeholder = "Ask whip anything… (/ for commands, tab completes)"
+		m.input.Placeholder = inputPlaceholder
 	case m.agent != nil && m.agent.WaitingOnSubagents():
 		m.input.Placeholder = "waiting on subagents — type to steer this turn"
 	default:
