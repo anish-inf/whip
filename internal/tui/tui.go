@@ -53,6 +53,15 @@ var (
 	thinkingStyle = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "240", Dark: "245"}).Italic(true)
 )
 
+// Marker glyphs prefixing user and assistant turns. Package-level so the
+// opencode render mode can swap them (❯→┃, ●→▣) in one place; both defaults
+// and both opencode glyphs are 2 cells wide, so no layout math changes. See
+// applyOpencodeMode / applyDefaultTheme in opencode.go.
+var (
+	glyphUser      = "❯ "
+	glyphAssistant = "● "
+)
+
 // messages sent from the agent goroutine
 type (
 	textMsg      string
@@ -186,6 +195,7 @@ type model struct {
 	viewTop      int    // screen row of the view's first line (View tracks it; mouse Y is absolute)
 	viewH        int    // height of the last rendered view
 	themeHow     string // how auto theme detection resolved (env var, OSC query, …) — captured at startup/theme change for /report; never re-queried
+	uiMode       string // "" = default whip look; "opencode" = opencode render mode (see opencode.go)
 	compactModel string // config model name for compaction summaries; "" = the built-in default
 	compactProv  string
 	// updateLatest is a pending newer release tag ("" when none), picked up
@@ -432,6 +442,9 @@ func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string, ca
 	// pick the glamour style that matches the pick/detection resolution;
 	// keep how detection resolved so /report can name the source
 	m.themeHow = m.applyTheme(cfg.Theme)
+	if cfg.UIMode == opencodeMode {
+		m.applyUIMode(opencodeMode) // opencode render mode: swap palette/glyphs/spinner/input
+	}
 	if m.cfgExtra == nil {
 		m.cfgExtra = map[string]string{}
 	}
@@ -483,6 +496,9 @@ func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string, ca
 // servers — plus degraded-mode notices. Skipped on resume (the transcript
 // already carries the past).
 func (m *model) startupReport() {
+	if m.uiMode == opencodeMode {
+		m.append(opencodeLogo())
+	}
 	sk, problems := skills.ScanDetailed(skills.DefaultDirs()...)
 	var b strings.Builder
 	var warned bool
@@ -798,7 +814,7 @@ func (m *model) seedTranscript(msgs []llm.Message, base int) {
 		switch msg.Role {
 		case "user":
 			bi = len(m.blocks)
-			m.blocks = append(m.blocks, block{kind: blockText, text: youStyle.Render("❯ ") + linkifyFilePaths(msg.TextContent(), realFileExists)})
+			m.blocks = append(m.blocks, block{kind: blockText, text: youStyle.Render(glyphUser) + linkifyFilePaths(msg.TextContent(), realFileExists)})
 		case "assistant":
 			if strings.TrimSpace(msg.TextContent()) != "" {
 				bi = len(m.blocks)
@@ -1129,7 +1145,7 @@ func (b block) render(width int) string {
 			w = 80 // no terminal size yet: sane default
 		}
 		body := indentLines(renderMarkdown(b.text, w), 2)
-		return botStyle.Render("● ") + strings.TrimPrefix(body, "  ")
+		return botStyle.Render(glyphAssistant) + strings.TrimPrefix(body, "  ")
 	case blockTool:
 		// A result carrying a fenced diff (write/edit) renders claude-style:
 		// "⎿ Added N lines, removed M lines" over a colored, line-numbered
@@ -1914,7 +1930,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case steeredMsg:
 		m.flushThink()
 		m.flushCurrent()
-		m.append(youStyle.Render("❯ ") + linkifyFilePaths(string(msg), realFileExists) + dimStyle.Render("  (steered)"))
+		m.append(youStyle.Render(glyphUser) + linkifyFilePaths(string(msg), realFileExists) + dimStyle.Render("  (steered)"))
 		return m, nil
 
 	case shellDoneMsg:
@@ -3416,7 +3432,7 @@ func (m *model) submitTurn(text string, authored bool) (tea.Model, tea.Cmd) {
 		}
 		send(turnDoneMsg{final: final, err: err, at: userMsgIdx, snap: preSnap, clean: workspaceClean()})
 	}()
-	m.append(youStyle.Render("❯ ") + linkifyFilePaths(text, realFileExists))
+	m.append(youStyle.Render(glyphUser) + linkifyFilePaths(text, realFileExists))
 	if authored {
 		// map the message index to its block for rewind live-scroll
 		for len(m.msgBlock) <= userMsgIdx {
@@ -3825,7 +3841,7 @@ const menuRows = 8
 func (m *model) currentView() string {
 	s := m.current
 	if !m.inMsg {
-		s = botStyle.Render("● ") + s
+		s = botStyle.Render(glyphAssistant) + s
 	}
 	return wrap(s, m.width) // streamed mid-flight: plain text; markdown renders on flush
 }
@@ -3933,7 +3949,7 @@ func (m *model) viewBody() string {
 		for i, q := range m.queue {
 			// one line per queued message: truncate (never wrap) so long
 			// messages don't crowd out the transcript
-			line := ansi.Truncate(youStyle.Render(" ❯ ")+q, m.width, "…")
+			line := ansi.Truncate(youStyle.Render(" " + glyphUser)+q, m.width, "…")
 			if i == m.queueSel {
 				line = ansi.Truncate(botStyle.Render(" → ")+q+dimStyle.Render("  (del to remove)"), m.width, "…")
 			}
@@ -4061,8 +4077,8 @@ func (m *model) pickerView() string {
 		}
 		rows = append(rows, wrap(botStyle.Render("  → ")+line, m.width))
 		prev := p.previews[meta.ID]
-		rows = append(rows, previewBlock(youStyle.Render("❯ "), prev[0], m.width)...)
-		rows = append(rows, previewBlock(botStyle.Render("● "), prev[1], m.width)...)
+		rows = append(rows, previewBlock(youStyle.Render(glyphUser), prev[0], m.width)...)
+		rows = append(rows, previewBlock(botStyle.Render(glyphAssistant), prev[1], m.width)...)
 	}
 	rows = append(rows, dimStyle.Render(fmt.Sprintf("  (%d/%d) ↑ older · ↓ newer · enter resume · esc cancel", p.idx+1, len(p.metas))))
 	// pad so the footer stays at the bottom of the screen

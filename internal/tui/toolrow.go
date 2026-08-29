@@ -98,9 +98,9 @@ func queuedSubject(name, args string) string {
 func toolHeaderRow(name, args string, failed bool) string {
 	head := toolHeaderName(name) + "(" + toolSubject(name, args) + ")"
 	if failed {
-		return errStyle.Render("● " + head)
+		return errStyle.Render(glyphAssistant + head)
 	}
-	return toolStyle.Render("● ") + toolHeadStyle.Render(toolHeaderName(name)) + "(" + toolSubject(name, args) + ")"
+	return toolStyle.Render(glyphAssistant) + toolHeadStyle.Render(toolHeaderName(name)) + "(" + toolSubject(name, args) + ")"
 }
 
 // extractDiff splits a tool result into its fenced ```diff block and the

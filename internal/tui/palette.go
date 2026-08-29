@@ -332,6 +332,23 @@ func (m *model) paletteItems() []paletteItem {
 			stepFwd:  func(m *model) { m.setTheme("dark") },
 		},
 		{
+			title: "UI mode", category: "Display",
+			dynDesc: func(m *model) string {
+				return "current: " + uiModeLabel(m.uiMode) + " — opencode reproduces opencode's TUI look"
+			},
+			dynHint: func(m *model) string { return "opencode / default" },
+			run: func(m *model) (tea.Model, tea.Cmd) {
+				if m.uiMode == opencodeMode {
+					m.setUIMode("")
+				} else {
+					m.setUIMode(opencodeMode)
+				}
+				return m, nil
+			},
+			stepBack: func(m *model) { m.setUIMode("") },
+			stepFwd:  func(m *model) { m.setUIMode(opencodeMode) },
+		},
+		{
 			title: "Browser driver", category: "Display",
 			dynDesc: func(m *model) string {
 				return "current: " + browser.Driver + " — which automation engine drives Chrome"
@@ -782,7 +799,7 @@ func (m *model) paletteView() string {
 		return b.String()
 	}
 
-	b.WriteString(" " + youStyle.Render("❯ ") + p.filter + dimStyle.Render("█"))
+	b.WriteString(" " + youStyle.Render(glyphUser) + p.filter + dimStyle.Render("█"))
 	b.WriteString("\n\n")
 
 	lastCat := ""
@@ -952,7 +969,7 @@ func (m *model) panelView(pp *ppanel) string {
 		b.WriteString("\n" + dimStyle.Render("  ↑/↓ select · enter/←/→ apply · esc back"))
 
 	case panelGoal:
-		b.WriteString(" " + youStyle.Render("❯ ") + pp.prepare + dimStyle.Render("█"))
+		b.WriteString(" " + youStyle.Render(glyphUser) + pp.prepare + dimStyle.Render("█"))
 		b.WriteString("\n\n" + dimStyle.Render(fmt.Sprintf("  type the goal · empty clears · enter/esc apply · max %d rounds (/goal rounds)", m.goalMaxRounds())))
 	}
 	b.WriteString("\n")
