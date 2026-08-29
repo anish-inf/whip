@@ -139,9 +139,9 @@ type model struct {
 	blocks []block // finalized transcript (raw; rendered at the current width)
 	// msgBlock[i] is the block index rendering agent.Messages[i] (-1: none) —
 	// rewind live-scroll uses it to jump to a message's transcript position.
-	msgBlock []int
-	follow   bool // auto-scroll to bottom on new content
-	width     int // content width: full terminal width, minus the opencode sidebar when it shows
+	msgBlock  []int
+	follow    bool // auto-scroll to bottom on new content
+	width     int  // content width: full terminal width, minus the opencode sidebar when it shows
 	height    int
 	termWidth int // full terminal width (opencode mode places the sidebar in the reserved columns)
 
@@ -197,6 +197,7 @@ type model struct {
 	viewH        int    // height of the last rendered view
 	themeHow     string // how auto theme detection resolved (env var, OSC query, …) — captured at startup/theme change for /report; never re-queried
 	uiMode       string // "" = default whip look; "opencode" = opencode render mode (see opencode.go)
+	sessTitle    string // cached session title for the opencode sidebar (from the store; updated on title/rename)
 	compactModel string // config model name for compaction summaries; "" = the built-in default
 	compactProv  string
 	// updateLatest is a pending newer release tag ("" when none), picked up
@@ -766,6 +767,7 @@ func (m *model) resume(id string) error {
 		m.agent.Effort = effort
 	}
 	m.sessionID = meta.ID
+	m.sessTitle = meta.Title
 	bashrun.SetMarkers(meta.ID, m.agent.Model)
 	m.saved = len(m.agent.Messages)
 	// Add this session's user messages to recall, skipping any already present
@@ -1664,6 +1666,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				if meta.Title == first {
 					_ = m.store.SetTitle(m.sessionID, msg.title)
+					m.sessTitle = msg.title
 					m.append(dimStyle.Render("◎ session titled: " + msg.title))
 				}
 			}
@@ -3968,7 +3971,7 @@ func (m *model) viewBody() string {
 		for i, q := range m.queue {
 			// one line per queued message: truncate (never wrap) so long
 			// messages don't crowd out the transcript
-			line := ansi.Truncate(youStyle.Render(" " + glyphUser)+q, m.width, "…")
+			line := ansi.Truncate(youStyle.Render(" "+glyphUser)+q, m.width, "…")
 			if i == m.queueSel {
 				line = ansi.Truncate(botStyle.Render(" → ")+q+dimStyle.Render("  (del to remove)"), m.width, "…")
 			}

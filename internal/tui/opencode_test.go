@@ -22,6 +22,17 @@ func TestOpencodeLogo(t *testing.T) {
 	}
 }
 
+func TestPaletteChrome(t *testing.T) {
+	m := &model{}
+	if got := m.paletteChrome("x"); got != "x" {
+		t.Fatalf("default mode should pass through, got %q", got)
+	}
+	m.uiMode = opencodeMode
+	if got := m.paletteChrome("x"); !strings.HasPrefix(got, "   ") {
+		t.Fatalf("opencode mode should indent, got %q", got)
+	}
+}
+
 func TestUIModeLabel(t *testing.T) {
 	if uiModeLabel(opencodeMode) != "opencode" {
 		t.Fatal("opencode label")

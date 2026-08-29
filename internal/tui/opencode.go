@@ -78,8 +78,13 @@ func (m *model) sidebarVisible() bool {
 func (m *model) sidebarView(height int) string {
 	head := lipgloss.NewStyle().Bold(true)
 
+	title := strings.TrimSpace(m.sessTitle)
+	if title == "" {
+		title = filepath.Base(cwd()) // untitled session: fall back to the working dir
+	}
+
 	var b strings.Builder
-	b.WriteString(head.Render(truncLine(filepath.Base(cwd()), sidebarWidth-4)) + "\n\n")
+	b.WriteString(head.Render(truncLine(title, sidebarWidth-4)) + "\n\n")
 
 	// Context: tokens used, share of the window, spend.
 	b.WriteString(head.Render("Context") + "\n")
@@ -109,6 +114,10 @@ func (m *model) sidebarView(height int) string {
 	}
 	if height > 0 && len(rows) > height {
 		rows = rows[:height]
+	}
+	// Footer pinned to the bottom row (like opencode's "• OpenCode {version}").
+	if height > 0 && len(rows) == height {
+		rows[height-1] = growStyle.Render("• ") + head.Render("whip") + dimStyle.Render(" "+Version)
 	}
 	col := lipgloss.NewStyle().
 		Width(sidebarWidth).

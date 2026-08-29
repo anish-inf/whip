@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/context-labs/whip/internal/browser"
 	"github.com/context-labs/whip/internal/config"
@@ -792,7 +793,7 @@ func (m *model) paletteView() string {
 
 	if pp := p.top(); pp != nil {
 		b.WriteString(m.panelView(pp))
-		return b.String()
+		return m.paletteChrome(b.String())
 	}
 
 	b.WriteString(" " + youStyle.Render(glyphUser) + p.filter + dimStyle.Render("█"))
@@ -840,7 +841,16 @@ func (m *model) paletteView() string {
 	}
 	b.WriteString("\n" + dimStyle.Render(fmt.Sprintf("  (%d/%d) ↑/↓ select · enter open/apply · ←/→ change · esc close",
 		min(p.idx+1, len(p.items)), len(p.items))))
-	return b.String()
+	return m.paletteChrome(b.String())
+}
+
+// paletteChrome applies opencode's dialog chrome (a paddingLeft-4 indent for the
+// whole palette) in opencode mode; default mode renders unchanged.
+func (m *model) paletteChrome(s string) string {
+	if m.uiMode != opencodeMode {
+		return s
+	}
+	return lipgloss.NewStyle().PaddingLeft(3).Render(s) // +3 over the base 1-col indent = 4
 }
 
 // paletteState renders a row's live value (toggle state, effort level, …).
