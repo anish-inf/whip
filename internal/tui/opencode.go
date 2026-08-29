@@ -73,6 +73,14 @@ func opencodeLogo() string {
 	return b.String()
 }
 
+// opencodeHome renders the empty-state "home" screen: the wordmark logo
+// centered in the given area, like opencode's home route before any messages.
+func opencodeHome(width, height int) string {
+	logo := opencodeLogo()
+	block := lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, logo)
+	return block
+}
+
 // sidebarVisible reports whether the opencode-mode sidebar should render: the
 // mode is on and the terminal is wide enough to spare sidebarWidth columns.
 func (m *model) sidebarVisible() bool {

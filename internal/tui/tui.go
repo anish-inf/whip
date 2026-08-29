@@ -1304,10 +1304,13 @@ func (m *model) viewportView() string {
 		s = m.highlightSelection(s) // content space, pre-trim
 	}
 	if m.uiMode == opencodeMode {
+		m.vpLead = 0
+		if len(m.blocks) == 0 { // empty transcript: opencode's centered-logo home screen
+			return opencodeHome(m.vp.Width, m.vp.Height)
+		}
 		// Full-height viewport: keep the pad so the transcript is bottom-anchored
 		// (blanks above, content near the prompt) and the prompt/status sit at the
 		// bottom of the screen, like opencode's session layout.
-		m.vpLead = 0
 		return s
 	}
 	lines := strings.Split(s, "\n")

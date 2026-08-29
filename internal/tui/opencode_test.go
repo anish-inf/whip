@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/context-labs/whip/internal/agent"
 	"github.com/context-labs/whip/internal/config"
 	"github.com/context-labs/whip/internal/lsp"
@@ -30,6 +31,16 @@ func TestPaletteChrome(t *testing.T) {
 	m.uiMode = opencodeMode
 	if got := m.paletteChrome("x"); !strings.HasPrefix(got, "   ") {
 		t.Fatalf("opencode mode should indent, got %q", got)
+	}
+}
+
+func TestOpencodeHome(t *testing.T) {
+	out := opencodeHome(80, 20)
+	if !strings.Contains(out, "█") {
+		t.Fatal("home screen missing logo glyphs")
+	}
+	if lipgloss.Height(out) != 20 {
+		t.Fatalf("home height = %d, want 20", lipgloss.Height(out))
 	}
 }
 
