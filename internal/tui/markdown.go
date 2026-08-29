@@ -187,7 +187,7 @@ func invalidateMDRenderer() {
 // glamour's default cell padding wastes ~4 columns per cell, which is the
 // difference between a readable table and wrapped mush at narrow widths.
 func mdStyle() glamouransi.StyleConfig {
-	if ocActive {
+	if ocActive && mdKnown { // unknown bg → fall through to neutralStyle (no light/dark assumption)
 		return opencodeMDStyle(mdLight)
 	}
 	var st glamouransi.StyleConfig

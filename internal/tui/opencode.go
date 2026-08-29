@@ -31,17 +31,37 @@ const whipPlaceholder = "Ask whip anything… (/ for commands, tab completes)"
 var ocActive bool
 
 // opencode's own theme palette (packages/tui/src/theme/assets/opencode.json),
-// both variants, so opencode mode matches opencode pixel-for-pixel while still
-// honoring whip's light/dark/auto — dark terminal → opencode dark, light → light.
-var (
-	ocPanelBg    = lipgloss.AdaptiveColor{Light: "#fafafa", Dark: "#141414"} // backgroundPanel: cards, sidebar
-	ocElementBg  = lipgloss.AdaptiveColor{Light: "#f5f5f5", Dark: "#1e1e1e"} // backgroundElement: prompt box
-	ocAgentCol   = lipgloss.AdaptiveColor{Light: "#7b5bb6", Dark: "#5c9cf5"} // secondary: agent color (bars, ▣)
-	ocTextCol    = lipgloss.AdaptiveColor{Light: "#1a1a1a", Dark: "#eeeeee"} // text
-	ocMutedCol   = lipgloss.AdaptiveColor{Light: "#8a8a8a", Dark: "#808080"} // textMuted
-	ocWarnCol    = lipgloss.AdaptiveColor{Light: "#d68c27", Dark: "#f5a742"} // warning: reasoning "+ Thought"
-	ocSuccessCol = lipgloss.AdaptiveColor{Light: "#3d9a57", Dark: "#7fd88f"} // success: sidebar footer bullet
-)
+// resolved against whip's OWN detected theme (mdLight/mdKnown) rather than
+// lipgloss.AdaptiveColor — AdaptiveColor reads lipgloss's separate background
+// detection, which desyncs from whip's in the auto/unknown case (SetUnknownTheme
+// leaves lipgloss at its dark default), rendering dark panels on a light
+// terminal. When the background is unknown, each role falls back to a
+// terminal-palette-safe value (ANSI 0-15, or no fill) so nothing assumes
+// light or dark — mirroring the markdown neutralStyle.
+func ocPick(dark, light, neutral string) lipgloss.TerminalColor {
+	mdMu.Lock()
+	l, known := mdLight, mdKnown
+	mdMu.Unlock()
+	switch {
+	case !known:
+		if neutral == "" {
+			return lipgloss.NoColor{} // transparent: no light/dark assumption
+		}
+		return lipgloss.Color(neutral)
+	case l:
+		return lipgloss.Color(light)
+	default:
+		return lipgloss.Color(dark)
+	}
+}
+
+func ocPanelBg() lipgloss.TerminalColor    { return ocPick("#141414", "#fafafa", "") }  // cards, sidebar (no fill if unknown)
+func ocElementBg() lipgloss.TerminalColor  { return ocPick("#1e1e1e", "#f5f5f5", "") }  // prompt box
+func ocAgentCol() lipgloss.TerminalColor   { return ocPick("#5c9cf5", "#7b5bb6", "4") } // bars, ▣
+func ocTextCol() lipgloss.TerminalColor    { return ocPick("#eeeeee", "#1a1a1a", "") }  // text (default fg if unknown)
+func ocMutedCol() lipgloss.TerminalColor   { return ocPick("#808080", "#8a8a8a", "8") } // muted
+func ocWarnCol() lipgloss.TerminalColor    { return ocPick("#f5a742", "#d68c27", "3") } // "+ Thought"
+func ocSuccessCol() lipgloss.TerminalColor { return ocPick("#7fd88f", "#3d9a57", "2") } // footer bullet
 
 // sidebarWidth is the fixed width of the opencode-mode right sidebar, matching
 // opencode (routes/session/sidebar.tsx). The sidebar shows only when the
@@ -76,8 +96,8 @@ var (
 // opencodeLogo renders the wordmark: dim "open", bold "code", joined with a
 // single-column gap per line. Colored via whip's theme (dimStyle / bold text).
 func opencodeLogo() string {
-	left := lipgloss.NewStyle().Foreground(ocMutedCol)
-	right := lipgloss.NewStyle().Foreground(ocTextCol).Bold(true)
+	left := lipgloss.NewStyle().Foreground(ocMutedCol())
+	right := lipgloss.NewStyle().Foreground(ocTextCol()).Bold(true)
 	var b strings.Builder
 	for i := range ocLogoOpen {
 		if i > 0 {
@@ -111,8 +131,8 @@ func (m *model) sidebarVisible() bool {
 func (m *model) sidebarView(height int) string {
 	// Every style carries the panel background so text doesn't punch holes in the
 	// filled panel column; opencode's exact text/muted colors for readability.
-	head := lipgloss.NewStyle().Bold(true).Foreground(ocTextCol).Background(ocPanelBg)
-	dim := lipgloss.NewStyle().Foreground(ocMutedCol).Background(ocPanelBg)
+	head := lipgloss.NewStyle().Bold(true).Foreground(ocTextCol()).Background(ocPanelBg())
+	dim := lipgloss.NewStyle().Foreground(ocMutedCol()).Background(ocPanelBg())
 
 	title := strings.TrimSpace(m.sessTitle)
 	if title == "" {
@@ -142,7 +162,7 @@ func (m *model) sidebarView(height int) string {
 
 	// Top content (title + Context + LSP), clipped if the sidebar is very short.
 	top := strings.Split(strings.TrimRight(b.String(), "\n"), "\n")
-	bullet := lipgloss.NewStyle().Foreground(ocSuccessCol).Background(ocPanelBg)
+	bullet := lipgloss.NewStyle().Foreground(ocSuccessCol()).Background(ocPanelBg())
 	footer := bullet.Render("• ") + head.Render("whip") + dim.Render(" "+Version)
 
 	rows := make([]string, 0, height)
@@ -164,7 +184,7 @@ func (m *model) sidebarView(height int) string {
 		Width(sidebarWidth).
 		PaddingLeft(2).
 		PaddingRight(2).
-		Background(ocPanelBg)
+		Background(ocPanelBg())
 	return col.Render(strings.Join(rows, "\n"))
 }
 
@@ -201,8 +221,8 @@ func (m *model) opencodePrompt(inner string, width int) string {
 	if width < 6 {
 		return inner
 	}
-	elem := lipgloss.NewStyle().Background(ocElementBg)
-	bar := lipgloss.NewStyle().Foreground(ocAgentCol).Background(ocElementBg).Render("┃")
+	elem := lipgloss.NewStyle().Background(ocElementBg())
+	bar := lipgloss.NewStyle().Foreground(ocAgentCol()).Background(ocElementBg()).Render("┃")
 	row := func(content string) string { return elem.Width(width).Render(content) }
 	var b strings.Builder
 	b.WriteString(row(bar) + "\n") // paddingTop (bar continues down the whole box)
@@ -211,15 +231,15 @@ func (m *model) opencodePrompt(inner string, width int) string {
 	}
 	b.WriteString(row(bar) + "\n") // padding below the input, above the meta row
 	// model/mode row: mode in the agent color, model in text, provider muted.
-	agent := lipgloss.NewStyle().Foreground(ocAgentCol).Background(ocElementBg)
-	txt := lipgloss.NewStyle().Foreground(ocTextCol).Background(ocElementBg)
-	muted := lipgloss.NewStyle().Foreground(ocMutedCol).Background(ocElementBg)
+	agent := lipgloss.NewStyle().Foreground(ocAgentCol()).Background(ocElementBg())
+	txt := lipgloss.NewStyle().Foreground(ocTextCol()).Background(ocElementBg())
+	muted := lipgloss.NewStyle().Foreground(ocMutedCol()).Background(ocElementBg())
 	meta := agent.Render(m.ocModeLabel()) + muted.Render(" · ") + txt.Render(m.modelName) + muted.Render("  "+m.provName)
 	b.WriteString(row(bar+elem.Render("  ")+meta) + "\n")
 	// Soft bottom edge: a ╹ tail then a ▀ line the SAME color as the box fill, so
 	// it reads as the box's rounded bottom rather than a bright bar.
-	shadow := lipgloss.NewStyle().Foreground(ocElementBg)
-	b.WriteString(lipgloss.NewStyle().Foreground(ocAgentCol).Render("╹") + shadow.Render(strings.Repeat("▀", max(width-1, 0))))
+	shadow := lipgloss.NewStyle().Foreground(ocElementBg())
+	b.WriteString(lipgloss.NewStyle().Foreground(ocAgentCol()).Render("╹") + shadow.Render(strings.Repeat("▀", max(width-1, 0))))
 	return b.String()
 }
 
@@ -231,9 +251,9 @@ func opencodeUserCard(text string, width int) string {
 	if width < 4 {
 		return text
 	}
-	panel := lipgloss.NewStyle().Background(ocPanelBg)
-	bar := lipgloss.NewStyle().Foreground(ocAgentCol).Background(ocPanelBg).Render("┃")
-	txt := lipgloss.NewStyle().Foreground(ocTextCol).Background(ocPanelBg)
+	panel := lipgloss.NewStyle().Background(ocPanelBg())
+	bar := lipgloss.NewStyle().Foreground(ocAgentCol()).Background(ocPanelBg()).Render("┃")
+	txt := lipgloss.NewStyle().Foreground(ocTextCol()).Background(ocPanelBg())
 	lines := strings.Split(wrap(text, width-3), "\n")
 	rows := append([]string{""}, lines...) // blank padding row above
 	rows = append(rows, "")                // blank padding row below
@@ -255,8 +275,8 @@ func opencodeUserCard(text string, width int) string {
 // the left, and "{tokens} ({pct%})  ctrl+p commands" on the right. Themed with
 // whip's dim style; the +2 main-column margin is applied by View().
 func (m *model) opencodeStatus() string {
-	muted := lipgloss.NewStyle().Foreground(ocMutedCol)
-	txt := lipgloss.NewStyle().Foreground(ocTextCol)
+	muted := lipgloss.NewStyle().Foreground(ocMutedCol())
+	txt := lipgloss.NewStyle().Foreground(ocTextCol())
 	// right side: "{tokens} ({pct})  " muted, then "ctrl+p" in text, " commands" muted.
 	rightRaw := ""
 	if u := m.agent.Usage(); u.PromptTokens+u.CompletionTokens > 0 {
@@ -281,16 +301,16 @@ func (m *model) opencodeStatus() string {
 // opencodeThought renders opencode's collapsed reasoning line, "+ Thought:
 // {duration}", indented 3 to sit under the assistant column.
 func (m *model) opencodeThought(d time.Duration) string {
-	warn := lipgloss.NewStyle().Foreground(ocWarnCol)
+	warn := lipgloss.NewStyle().Foreground(ocWarnCol())
 	return "   " + warn.Render("+ Thought: "+fmtShortDur(d)) // 3-space indent to sit under the assistant column
 }
 
 // opencodeAttribution renders opencode's per-response attribution line:
 // "▣  {mode} · {model} · {duration}", indented 3 to sit under the assistant body.
 func (m *model) opencodeAttribution(d time.Duration) string {
-	agent := lipgloss.NewStyle().Foreground(ocAgentCol)
-	txt := lipgloss.NewStyle().Foreground(ocTextCol)
-	muted := lipgloss.NewStyle().Foreground(ocMutedCol)
+	agent := lipgloss.NewStyle().Foreground(ocAgentCol())
+	txt := lipgloss.NewStyle().Foreground(ocTextCol())
+	muted := lipgloss.NewStyle().Foreground(ocMutedCol())
 	return "   " + agent.Render("▣") + txt.Render("  "+m.ocModeLabel()) + // 3-space indent under the assistant column
 		muted.Render(" · "+m.modelName+" · "+fmtShortDur(d))
 }
@@ -326,12 +346,12 @@ func (m *model) applyUIMode(mode string) {
 		m.input.Placeholder = "Ask anything…"
 		// Fill the textarea with the element background so the input box reads as
 		// a filled panel (opencode's prompt box).
-		elem := lipgloss.NewStyle().Background(ocElementBg)
+		elem := lipgloss.NewStyle().Background(ocElementBg())
 		m.input.FocusedStyle.Text = elem
 		m.input.FocusedStyle.CursorLine = elem
-		m.input.FocusedStyle.Placeholder = dimStyle.Background(ocElementBg)
+		m.input.FocusedStyle.Placeholder = dimStyle.Background(ocElementBg())
 		m.input.BlurredStyle.Text = elem
-		m.input.BlurredStyle.Placeholder = dimStyle.Background(ocElementBg)
+		m.input.BlurredStyle.Placeholder = dimStyle.Background(ocElementBg())
 	} else {
 		m.uiMode = ""
 		ocActive = false

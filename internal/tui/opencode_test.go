@@ -36,6 +36,31 @@ func TestPaletteChrome(t *testing.T) {
 	}
 }
 
+func TestOcPick(t *testing.T) {
+	mdMu.Lock()
+	sl, sk := mdLight, mdKnown
+	mdMu.Unlock()
+	t.Cleanup(func() { mdMu.Lock(); mdLight, mdKnown = sl, sk; mdMu.Unlock() })
+
+	set := func(light, known bool) { mdMu.Lock(); mdLight, mdKnown = light, known; mdMu.Unlock() }
+
+	set(false, true) // known dark
+	if got := ocPick("#111", "#eee", "8"); got != lipgloss.Color("#111") {
+		t.Fatalf("dark = %v", got)
+	}
+	set(true, true) // known light
+	if got := ocPick("#111", "#eee", "8"); got != lipgloss.Color("#eee") {
+		t.Fatalf("light = %v", got)
+	}
+	set(false, false) // unknown -> neutral
+	if got := ocPick("#111", "#eee", "8"); got != lipgloss.Color("8") {
+		t.Fatalf("unknown neutral = %v", got)
+	}
+	if got := ocPick("#111", "#eee", ""); got != (lipgloss.NoColor{}) { // unknown, no neutral -> transparent
+		t.Fatalf("unknown transparent = %v", got)
+	}
+}
+
 func TestOpencodeMDStyle(t *testing.T) {
 	dark := opencodeMDStyle(false)
 	if dark.Document.Color == nil || *dark.Document.Color != "#eeeeee" {
