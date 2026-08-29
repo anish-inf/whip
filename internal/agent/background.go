@@ -88,6 +88,16 @@ func (j *taskJournal) append(kind int, s, s2 string) {
 		j.events = j.events[1:]
 		j.Truncated = true
 	}
+	// A pure-text stream (no interleaving tool calls) coalesces into ONE
+	// entry, which the front-drop loop above can't touch (it keeps len>=1) —
+	// without this tail cap the "bounded at 128KB" guarantee is false for the
+	// one case a long uninterrupted answer hits.
+	if len(j.events) == 1 && len(j.events[0].S) > journalBudget {
+		drop := len(j.events[0].S) - journalBudget
+		j.events[0].S = j.events[0].S[drop:]
+		j.bytes -= drop
+		j.Truncated = true
+	}
 }
 
 // taskRegistry tracks background subagents for one parent agent. It is the
@@ -363,6 +373,8 @@ func (r *taskRegistry) SubscribeWithJournal(id string, ev Events) (events []Jour
 // callbacks run on the worker goroutine, so they must be cheap and
 // non-blocking. Tool calls stream in as args deltas (OnToolCall); only the
 // start (kind 1) and end (kind 2) are journaled — the deltas would fill the
+// journal with partial JSON.
+//
 // emitLocked folds the journal append and the subscriber snapshot into a
 // single registry lock hold so an event can never be both replayed from the
 // journal AND delivered live to the same view: a SubscribeWithJournal that

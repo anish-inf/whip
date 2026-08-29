@@ -79,12 +79,15 @@ func TestJournalOverflowDropsOldest(t *testing.T) {
 	if len(j.events) == 0 || len(j.events) >= 6 {
 		t.Fatalf("truncation should keep a bounded tail, kept %d of 6", len(j.events))
 	}
-	// Text coalescing must not defeat truncation: one giant delta still fits
-	// the budget accounting.
+	// Text coalescing must not defeat truncation: one giant delta is tail-capped
+	// to the budget, marked truncated.
 	k := &taskJournal{}
 	k.append(0, strings.Repeat("y", journalBudget*2), "")
-	if k.bytes != journalBudget*2 {
-		t.Fatalf("single oversized event: bytes = %d", k.bytes)
+	if k.bytes > journalBudget {
+		t.Fatalf("single oversized event: bytes = %d, want <= %d", k.bytes, journalBudget)
+	}
+	if !k.Truncated {
+		t.Fatal("oversized single entry should mark the journal truncated")
 	}
 }
 
