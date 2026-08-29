@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -426,6 +427,28 @@ func TestNormalizeSchema(t *testing.T) {
 	}
 	if m["type"] != "object" || m["properties"] == nil || m["title"] != "x" {
 		t.Errorf("coerced schema = %v", m)
+	}
+}
+
+// normalizeSchema must not mutate its input: d.InputSchema is shared across
+// every Manager.Tools() call, and concurrent writes to it crashed the race
+// detector (fatal error: concurrent map writes). Hammering a shared map from
+// many goroutines proves it stays read-only.
+func TestNormalizeSchemaDoesNotMutateSharedInput(t *testing.T) {
+	shared := map[string]any{"title": "tool", "properties": map[string]any{"a": 1}}
+	// A sentinel key the normalizer must never add to the input: its own
+	// mutation (type:"object") would be detectable here.
+	var wg sync.WaitGroup
+	for range 32 {
+		wg.Go(func() {
+			for range 200 {
+				_ = normalizeSchema(shared)
+			}
+		})
+	}
+	wg.Wait()
+	if _, mutated := shared["type"]; mutated {
+		t.Fatalf("normalizeSchema mutated the shared input map: %v", shared)
 	}
 }
 

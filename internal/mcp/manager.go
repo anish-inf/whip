@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http"
 	"os"
 	"os/exec"
@@ -597,11 +598,18 @@ func flattenResult(res *sdkmcp.CallToolResult) string {
 // normalizeSchema passes the server's input schema through as a JSON string,
 // coercing it into the object shape providers require (opencode forces
 // type:object + properties:{} + additionalProperties:false).
+// normalizeSchema renders an MCP tool's input schema as a JSON object with
+// type:"object" and a properties key (some servers omit one or both). The
+// input map is COPIED, never mutated: d.InputSchema is shared across every
+// Manager.Tools() call, and the race detector caught concurrent writes to it
+// (fatal error: concurrent map writes) when two settles interleaved.
 func normalizeSchema(schema any) string {
-	m, ok := schema.(map[string]any)
-	if !ok || m == nil {
+	src, ok := schema.(map[string]any)
+	if !ok || src == nil {
 		return `{"type":"object","properties":{}}`
 	}
+	m := make(map[string]any, len(src)+2)
+	maps.Copy(m, src)
 	m["type"] = "object"
 	if _, ok := m["properties"]; !ok {
 		m["properties"] = map[string]any{}
