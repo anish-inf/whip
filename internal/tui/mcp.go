@@ -84,6 +84,25 @@ func (m *model) mcpSetEnabled(name string, enabled bool) {
 	m.append(m.mcpStatusView())
 }
 
+// mcpOnChange returns the manager's OnChange callback — the single
+// implementation shared by Run (startup) and mcpSetImport (lazy manager). It
+// pushes the current tool set into the current agent, then notifies the UI.
+//
+// The Send MUST be detached (go …): fireOnChange also runs synchronously on
+// the UI goroutine when a palette toggle (mcpSetImport/mcpSetEnabled) adds or
+// removes servers from inside Update, and prog.Send blocks on the eventLoop's
+// unbuffered msgs channel — called from the event loop itself it deadlocks
+// the TUI (the frozen-ctrl-p bug). A stale message is harmless: Update is
+// idempotent on mcpStatusMsg.
+func (m *model) mcpOnChange() func() {
+	return func() {
+		m.agent.SetMCPTools(m.mcpMgr.Tools())
+		if m.prog != nil { // nil in headless tests
+			go m.prog.Send(mcpStatusMsg{})
+		}
+	}
+}
+
 // buildMCPRows assembles the MCPs palette panel: the two import-source
 // toggles first (state from cfg.MCPImport — always shown, even with no
 // servers configured, so imports can be switched on from the palette), then
@@ -190,12 +209,7 @@ func (m *model) mcpSetImport(source string, enabled bool) {
 	// current agent and redraws the status badge.
 	if m.mcpMgr == nil {
 		m.mcpMgr = mcp.NewManager(nil)
-		m.mcpMgr.SetOnChange(func() {
-			m.agent.SetMCPTools(m.mcpMgr.Tools())
-			if m.prog != nil { // nil in headless tests
-				m.prog.Send(mcpStatusMsg{})
-			}
-		})
+		m.mcpMgr.SetOnChange(m.mcpOnChange()) // same detached-Send contract as Run
 	}
 
 	if !enabled {

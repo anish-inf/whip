@@ -359,17 +359,7 @@ func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string, ca
 		if len(merged) > 0 || len(disc.Blocked) > 0 || len(mcpErrs) > 0 {
 			m.mcpMgr = mcp.NewManager(merged)
 			m.mcpMgr.SetBlocked(disc.Blocked)
-			// MCP connects settle in the background; push each new tool set
-			// into the CURRENT agent (mutex-guarded on the agent side) so
-			// servers that connect after turn 1 show up without a restart.
-			// The closure reads m.agent at call time: resume/model-switch
-			// replace the agent, and wireTasks re-points the manager at it.
-			m.mcpMgr.SetOnChange(func() {
-				m.agent.SetMCPTools(m.mcpMgr.Tools())
-				if m.prog != nil { // nil in headless tests
-					m.prog.Send(mcpStatusMsg{})
-				}
-			})
+			m.mcpMgr.SetOnChange(m.mcpOnChange())
 			m.mcpMgr.Start(context.Background())
 			ag.SetMCPTools(m.mcpMgr.Tools())
 			for src, derr := range mcpErrs {

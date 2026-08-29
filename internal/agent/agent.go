@@ -292,15 +292,31 @@ func (a *Agent) MessagesSnapshot() []llm.Message {
 // SetMCPTools swaps in the current MCP tool set (called by the MCP manager's
 // OnChange whenever a server settles). MCP tools live separately from
 // a.Tools so a settle mid-turn never mutates the slice a Turn is reading.
+// The package-global tools.Suggester is process-wide, shared across agents
+// (model switches swap the agent). It must (a) be installed/written under a
+// lock so two SetMCPTools calls racing don't tear it, and (b) resolve through
+// the LATEST agent, not capture the first — a stale pointer would suggest
+// from a replaced agent's tool list.
+var (
+	suggesterMu      sync.Mutex
+	suggesterCurrent atomic.Pointer[Agent]
+)
+
 // A Suggester is installed on first use so a stale/typo'd mcp__ call gets a
 // "did you mean?" nudge instead of a dead end.
 func (a *Agent) SetMCPTools(ts []tools.Tool) {
 	a.toolsMu.Lock()
 	a.mcpTools = ts
 	a.toolsMu.Unlock()
-	if tools.Suggester == nil {
-		tools.Suggester = func(name string) []string { return a.suggest(name) }
+	suggesterMu.Lock()
+	suggesterCurrent.Store(a)
+	tools.Suggester = func(name string) []string {
+		if cur := suggesterCurrent.Load(); cur != nil {
+			return cur.suggest(name)
+		}
+		return nil
 	}
+	suggesterMu.Unlock()
 }
 
 // suggest lists candidate names for tools.Suggester: built-ins + live MCP
