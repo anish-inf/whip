@@ -121,9 +121,24 @@ func TestOpencodePrompt(t *testing.T) {
 	if got := m.opencodePrompt("in", 4); got != "in" {
 		t.Fatalf("tiny width should pass through, got %q", got)
 	}
+	mdMu.Lock()
+	sl, sk := mdLight, mdKnown
+	mdMu.Unlock()
+	t.Cleanup(func() { mdMu.Lock(); mdLight, mdKnown = sl, sk; mdMu.Unlock() })
+
+	mdMu.Lock()
+	mdLight, mdKnown = false, true // known dark: full chrome with ▀ shadow
+	mdMu.Unlock()
 	got := m.opencodePrompt("type here", 40)
 	if !strings.Contains(got, "┃") || !strings.Contains(got, "╹") || !strings.Contains(got, "▀") {
 		t.Fatal("prompt chrome missing ┃/╹/▀")
+	}
+
+	mdMu.Lock()
+	mdKnown = false // unknown bg: the ▀ shadow must be skipped (it would render as a black bar on a light terminal)
+	mdMu.Unlock()
+	if unk := m.opencodePrompt("type here", 40); strings.Contains(unk, "▀") || !strings.Contains(unk, "╹") {
+		t.Fatalf("unknown-theme prompt should keep ╹ but drop ▀: %q", unk)
 	}
 	if !strings.Contains(got, "kimi") && !strings.Contains(got, "Off") {
 		// meta row present (mode label at minimum)

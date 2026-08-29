@@ -55,6 +55,16 @@ func ocPick(dark, light, neutral string) lipgloss.TerminalColor {
 	}
 }
 
+// ocThemeKnown reports whether whip resolved the terminal background — glyph
+// art that depends on a bg-matched color (the prompt's ▀ shadow) must skip
+// rendering when it's unknown, or it draws in the default fg (a black bar on a
+// light terminal).
+func ocThemeKnown() bool {
+	mdMu.Lock()
+	defer mdMu.Unlock()
+	return mdKnown
+}
+
 func ocPanelBg() lipgloss.TerminalColor    { return ocPick("#141414", "#fafafa", "") }  // cards, sidebar (no fill if unknown)
 func ocElementBg() lipgloss.TerminalColor  { return ocPick("#1e1e1e", "#f5f5f5", "") }  // prompt box
 func ocAgentCol() lipgloss.TerminalColor   { return ocPick("#5c9cf5", "#7b5bb6", "4") } // bars, ▣
@@ -237,9 +247,15 @@ func (m *model) opencodePrompt(inner string, width int) string {
 	meta := agent.Render(m.ocModeLabel()) + muted.Render(" · ") + txt.Render(m.modelName) + muted.Render("  "+m.provName)
 	b.WriteString(row(bar+elem.Render("  ")+meta) + "\n")
 	// Soft bottom edge: a ╹ tail then a ▀ line the SAME color as the box fill, so
-	// it reads as the box's rounded bottom rather than a bright bar.
-	shadow := lipgloss.NewStyle().Foreground(ocElementBg())
-	b.WriteString(lipgloss.NewStyle().Foreground(ocAgentCol()).Render("╹") + shadow.Render(strings.Repeat("▀", max(width-1, 0))))
+	// it reads as the box's rounded bottom rather than a bright bar. When the
+	// terminal background is unknown there is no box fill to match — skip the ▀
+	// glyphs (they'd render in the default fg: a solid black bar on a light
+	// terminal) and keep just the bar tail so the row count stays stable.
+	b.WriteString(lipgloss.NewStyle().Foreground(ocAgentCol()).Render("╹"))
+	if ocThemeKnown() {
+		shadow := lipgloss.NewStyle().Foreground(ocElementBg())
+		b.WriteString(shadow.Render(strings.Repeat("▀", max(width-1, 0))))
+	}
 	return b.String()
 }
 
