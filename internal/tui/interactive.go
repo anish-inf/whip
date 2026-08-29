@@ -69,15 +69,15 @@ func (r *interactiveRunner) Run(ctx context.Context, command string, timeout tim
 	r.mu.Lock()
 	r.keys = keys
 	r.mu.Unlock()
-	r.prog.Send(interactiveStartMsg{keys: keys})
+	r.prog.Send(interactiveStartMsg{keys: keys}) //nolint:uilock // background: the interactive bash tool goroutine
 
 	res := bashrun.Run(ctx, bashrun.Options{
 		Command:           command,
 		Timeout:           timeout,
 		Interactive:       true,
 		InactivityTimeout: 15 * time.Second,
-		OnOutput:          func(chunk string) { r.prog.Send(interactiveOutMsg{chunk}) },
-		OnAwaitInput:      func(s int) { r.prog.Send(interactiveAwaitMsg{secsLeft: s}) },
+		OnOutput:          func(chunk string) { r.prog.Send(interactiveOutMsg{chunk}) },  //nolint:uilock // background: bashrun's PTY reader goroutine
+		OnAwaitInput:      func(s int) { r.prog.Send(interactiveAwaitMsg{secsLeft: s}) }, //nolint:uilock // background: bashrun's PTY goroutine
 		Keys:              keys,
 	})
 
@@ -85,7 +85,7 @@ func (r *interactiveRunner) Run(ctx context.Context, command string, timeout tim
 	r.keys = nil
 	r.mu.Unlock()
 
-	r.prog.Send(interactiveDoneMsg{output: res.Output, exit: res.Exit})
+	r.prog.Send(interactiveDoneMsg{output: res.Output, exit: res.Exit}) //nolint:uilock // background: the interactive bash tool goroutine
 
 	return interactiveOutput(res)
 }

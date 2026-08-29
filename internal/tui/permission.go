@@ -88,8 +88,8 @@ func (m *model) installPermGate() {
 			return tools.GateAllowOnce, "" // headless: no one to ask
 		}
 		reply := make(chan permAnswer, 1)
-		m.prog.Send(permRequest{req: req, reply: reply})
-		ans := <-reply // block the tool goroutine until the user answers
+		m.prog.Send(permRequest{req: req, reply: reply}) //nolint:uilock // background: the calling tool goroutine, which blocks on reply — never the event loop
+		ans := <-reply                                   // block the tool goroutine until the user answers
 		return ans.decision, ans.redirect
 	}
 }

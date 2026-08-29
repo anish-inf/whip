@@ -638,7 +638,7 @@ func refreshCatalogs(cfg *config.Config, force bool) map[string]config.Catalog {
 func (m *model) fetchCatalogs(force bool) {
 	cats := refreshCatalogs(m.cfg, force)
 	if m.prog != nil { // nil in tests that drive the command dispatch directly
-		m.prog.Send(catalogsMsg(cats))
+		m.prog.Send(catalogsMsg(cats)) //nolint:uilock // background: fetchCatalogs is always `go`-launched
 	}
 }
 
@@ -3373,7 +3373,7 @@ func (m *model) submitTurn(text string, authored bool) (tea.Model, tea.Cmd) {
 	// callbacks drop their messages instead of panicking on a nil program
 	send := func(msg tea.Msg) {
 		if p != nil {
-			p.Send(msg)
+			p.Send(msg) //nolint:uilock // background: send runs on the agent Turn goroutine (go func at the caller)
 		}
 	}
 
