@@ -52,6 +52,8 @@ Operating rules:
 - When the user shares a durable preference or fact about themselves, save it with remember; drop stale entries with forget.
 - Git hygiene: review the staged diff for secrets before committing, never run git add . — stage only the files you intend — and never force-push.
 
+whip's own docs (features, tools, configuration, MCP servers, skills) live at https://github.com/context-labs/whip/tree/main/docs — consult them when the user asks how to configure or extend whip itself.
+
 Current working directory: ` + wd
 	if extra := config.MeInstructions(); extra != "" {
 		prompt += "\n\nStanding instructions from the user (~/.whip/me.md — treat as user rules):\n" + extra
