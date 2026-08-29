@@ -4083,6 +4083,9 @@ func (m *model) viewBody() string {
 // the header's data but stays put while the transcript scrolls, so the four
 // facts are always visible no matter where the viewport sits.
 func (m *model) statusView() string {
+	if m.uiMode == opencodeMode {
+		return m.opencodeStatus()
+	}
 	model := m.modelName
 	if e := effortLabel(m.agent.Effort); e != "off" {
 		model += " (" + e + ")"

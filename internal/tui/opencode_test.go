@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/context-labs/whip/internal/agent"
 	"github.com/context-labs/whip/internal/config"
+	"github.com/context-labs/whip/internal/llm"
 	"github.com/context-labs/whip/internal/lsp"
 )
 
@@ -121,6 +122,30 @@ func TestBlockOCMetaRendersVerbatim(t *testing.T) {
 	b := block{kind: blockOCMeta, text: "   + Thought: 1s"}
 	if got := b.render(80); got != "   + Thought: 1s" {
 		t.Fatalf("blockOCMeta = %q, want verbatim (indent preserved)", got)
+	}
+}
+
+func TestOpencodeStatus(t *testing.T) {
+	// no usage: just cwd + ctrl+p commands
+	m := &model{agent: &agent.Agent{}, width: 80}
+	out := m.opencodeStatus()
+	if !strings.Contains(out, "ctrl+p commands") {
+		t.Fatalf("status missing commands hint: %q", out)
+	}
+	// with usage + context window: tokens and pct shown, uppercased
+	m2 := &model{
+		agent: &agent.Agent{ContextLimit: 1000},
+		width: 80,
+	}
+	m2.agent.AddUsage(llm.Usage{PromptTokens: 15800})
+	out2 := m2.opencodeStatus()
+	if !strings.Contains(out2, "ctrl+p commands") {
+		t.Fatalf("status2 missing commands: %q", out2)
+	}
+	// narrow width path: cwd gets truncated but the right side survives
+	m.width = 20
+	if narrow := m.opencodeStatus(); !strings.Contains(narrow, "ctrl+p commands") {
+		t.Fatalf("narrow status dropped commands: %q", narrow)
 	}
 }
 

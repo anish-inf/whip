@@ -214,6 +214,30 @@ func opencodeUserCard(text string, width int) string {
 	return b.String()
 }
 
+// opencodeStatus renders opencode's session footer: the working directory on
+// the left, and "{tokens} ({pct%})  ctrl+p commands" on the right. Themed with
+// whip's dim style; the +2 main-column margin is applied by View().
+func (m *model) opencodeStatus() string {
+	u := m.agent.Usage()
+	right := ""
+	if tok := u.PromptTokens + u.CompletionTokens; tok > 0 {
+		right = strings.ToUpper(fmtTok(tok)) // opencode uses uppercase (15.8K)
+		if m.agent.ContextLimit > 0 {
+			right += fmt.Sprintf(" (%d%%)", agent.EstimateTokens(m.agent.Messages)*100/m.agent.ContextLimit)
+		}
+		right += "  "
+	}
+	right += "ctrl+p commands"
+	left := cwd()
+	w := max(m.width, 0)
+	pad := max(w-lipgloss.Width(left)-lipgloss.Width(right)-1, 1)
+	if lipgloss.Width(left)+pad+lipgloss.Width(right)+1 > w { // no room: keep the right side
+		left = truncLine(left, max(w-lipgloss.Width(right)-2, 0))
+		pad = max(w-lipgloss.Width(left)-lipgloss.Width(right)-1, 1)
+	}
+	return dimStyle.Render(" " + left + strings.Repeat(" ", pad) + right)
+}
+
 // opencodeThought renders opencode's collapsed reasoning line, "+ Thought:
 // {duration}", indented 3 to sit under the assistant column.
 func (m *model) opencodeThought(d time.Duration) string {
