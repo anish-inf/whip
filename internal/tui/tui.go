@@ -92,6 +92,7 @@ type (
 	usageMsg      llm.Usage                 // one request's token usage
 	quitArmMsg    struct{}                  // the idle ctrl+c arm window expired
 	taskUpdateMsg struct{}                  // a background subagent started/settled — redraw
+	orphanSteerMsg string                   // a steer orphaned at turn teardown — submit as a machine turn
 	mcpStatusMsg  struct{}                  // an MCP server changed state — redraw
 	thinkMsg      string                    // streamed reasoning tokens
 	imageMsg      struct {                  // ctrl+v clipboard image result
@@ -2109,6 +2110,17 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case orphanSteerMsg:
+		// A user steer arrived after the drain snapshot at turn teardown and
+		// was orphaned when the wait wake fired. The agent can't message the
+		// TUI itself (same seam as waitWakeFunc) — it surfaced the steer
+		// through OnOrphanedSteer; run it as a machine turn so the steer is
+		// never lost.
+		if !m.busy {
+			return m.submitTurn(string(msg), true)
+		}
+		return m, nil
+
 	case mcpStatusMsg:
 		// An MCP server changed state. Announce each server's FIRST settle in
 		// the transcript (one line, once per session per server) so arrivals
@@ -2832,6 +2844,11 @@ func (m *model) wireTasks() {
 	m.agent.SetSessionID(m.sessionID)
 	if m.prog == nil {
 		return // headless (tests)
+	}
+	m.agent.OnOrphanedSteer = func(text string) {
+		// Detached: runs on the wait-poller goroutine; a backed-up UI queue
+		// must never stall the agent (same posture as OnChange below).
+		go m.prog.Send(orphanSteerMsg(text))
 	}
 	m.agent.Tasks().OnChange = func(*agent.BackgroundTask) {
 		// Detached: OnChange runs on the subagent worker goroutine, and a

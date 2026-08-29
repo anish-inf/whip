@@ -12,24 +12,24 @@ import (
 	"github.com/context-labs/whip/internal/llm"
 )
 
-// In-flight counts rise while a tool runs and drain when it finishes. Driving
-// a registry emitter directly keeps the window deterministic (an httptest
-// tool call returns too fast to observe).
+// In-flight counts rise while a tool runs and drain when it finishes, split
+// by kind (subagent vs other).
 func TestInFlightToolsTracking(t *testing.T) {
 	ag := New(llm.New("http://unused", "k"), "m", 100, "sys")
-	ag.trackTool("read", 1)
+	ag.trackTool("subagent", 1)
 	ag.trackTool("read", 1)
 	ag.trackTool("bash", 1)
-	if got := ag.InFlightTools(); len(got) != 2 {
-		t.Fatalf("in-flight names = %v, want 2 distinct tools", got)
+	if ag.subagentInflight.Load() != 1 || ag.otherInflight.Load() != 2 {
+		t.Fatalf("counts = %d subagent / %d other, want 1/2", ag.subagentInflight.Load(), ag.otherInflight.Load())
 	}
-	ag.trackTool("read", -2)
-	if got := ag.InFlightTools(); len(got) != 1 || got[0] != "bash" {
-		t.Fatalf("after reads finish, in-flight = %v, want [bash]", got)
-	}
+	ag.trackTool("read", -1)
 	ag.trackTool("bash", -1)
-	if got := ag.InFlightTools(); len(got) != 0 {
-		t.Fatalf("in-flight set should drain, got %v", got)
+	if ag.otherInflight.Load() != 0 {
+		t.Fatalf("other should drain, got %d", ag.otherInflight.Load())
+	}
+	ag.trackTool("subagent", -1)
+	if ag.subagentInflight.Load() != 0 {
+		t.Fatalf("subagent should drain, got %d", ag.subagentInflight.Load())
 	}
 }
 
@@ -111,5 +111,31 @@ func TestWaitingOnSubagentsDuringForegroundSubagent(t *testing.T) {
 	}
 	if ag.WaitingOnSubagents() {
 		t.Fatal("turn finished → no longer waiting")
+	}
+}
+
+// A steer queued before teardown is handed to OnOrphanedSteer (not dropped)
+// and drained out of pending; with no hook installed it stays put so a
+// headless caller can still drain it itself.
+func TestDrainOrphanedSteers(t *testing.T) {
+	ag := New(llm.New("http://unused", "k"), "m", 100, "sys")
+
+	// No hook: drainOrphanedSteers is a no-op, pending survives.
+	ag.Steer("keep me")
+	ag.drainOrphanedSteers()
+	if got := ag.drainPending(); len(got) != 1 || got[0].text != "keep me" {
+		t.Fatalf("no hook: pending should survive, got %+v", got)
+	}
+
+	var surfaced []string
+	ag.OnOrphanedSteer = func(text string) { surfaced = append(surfaced, text) }
+	ag.Steer("one")
+	ag.Steer("two")
+	ag.drainOrphanedSteers()
+	if len(surfaced) != 2 || surfaced[0] != "one" || surfaced[1] != "two" {
+		t.Fatalf("hook should receive both steers in order, got %v", surfaced)
+	}
+	if got := ag.drainPending(); len(got) != 0 {
+		t.Fatalf("orphaned steers must be drained, got %+v", got)
 	}
 }

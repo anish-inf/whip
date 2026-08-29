@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -109,12 +108,12 @@ type Agent struct {
 	files *fileLocks // per-path mutation locks for parallel tool calls
 	bg    *taskRegistry
 
-	// inflightTools counts currently-executing tool calls by name (incremented
-	// in runTools after the mutation lock is acquired, decremented at tool
-	// end). Read by WaitingOnSubagents to let the TUI steer the user's typed
-	// input into a turn that is only blocked on subagents, rather than
-	// queueing it behind the whole turn.
-	inflightTools sync.Map // map[string]*atomic.Int64
+	// subagentInflight / otherInflight count in-flight tool calls by kind
+	// (incremented in runTools after the mutation lock, decremented at tool
+	// end). WaitingOnSubagents reads them to let the TUI steer typed input
+	// into a turn that's only blocked on subagents, not queue it.
+	subagentInflight atomic.Int64
+	otherInflight    atomic.Int64
 
 	// Todos is the todowrite plan, rewritten in full by the model and
 	// injected per round. Like Messages, it is only mutated by the turn
@@ -141,6 +140,13 @@ type Agent struct {
 	// ComputerDisabled, when true, keeps computer_exec out of the tool set
 	// (config computer.enabled=false).
 	ComputerDisabled bool
+
+	// OnOrphanedSteer, when set by the TUI, receives steered messages that lost
+	// the race against a turn's final loop boundary (a Steer landing after the
+	// last drainPending but before the turn returned). The TUI submits each as
+	// a machine turn so a mid-turn message is never silently dropped. Same
+	// shape as the wait tool's OnWake; the two unify when both branches land.
+	OnOrphanedSteer func(text string)
 
 	usageMu sync.Mutex
 	usage   llm.Usage // session totals across every API call (PromptTokens = input)
@@ -350,7 +356,10 @@ func (a *Agent) turn(ctx context.Context, input string, parts []llm.ContentPart,
 		ev.OnDecay(n)
 	}
 	a.running.Store(true)
-	defer a.running.Store(false)
+	defer func() {
+		a.running.Store(false)
+		a.drainOrphanedSteers() // catch steers that lost the race to teardown
+	}()
 	msg := llm.Message{Role: "user", Content: input, Parts: parts, Authored: authored}
 	if authored {
 		now := time.Now()
@@ -455,43 +464,37 @@ func (a *Agent) turn(ctx context.Context, input string, parts []llm.ContentPart,
 	}
 }
 
-// trackTool adjusts the in-flight count for a tool name.
-func (a *Agent) trackTool(name string, delta int64) {
-	v, _ := a.inflightTools.LoadOrStore(name, &atomic.Int64{})
-	v.(*atomic.Int64).Add(delta)
+// drainOrphanedSteers re-drains any steered messages that lost the race
+// against a turn's final loop boundary: a Steer landing after the last
+// drainPending but before running flips false would otherwise sit in pending
+// forever (a user's mid-turn message while waiting on subagents, the wait
+// registry's busy delivery). The deferred teardown hands each survivor to
+// OnOrphanedSteer, which the TUI installs to submit it as a machine turn.
+func (a *Agent) drainOrphanedSteers() {
+	if a.OnOrphanedSteer == nil {
+		return
+	}
+	for _, s := range a.drainPending() {
+		a.OnOrphanedSteer(s.text)
+	}
 }
 
-// InFlightTools returns the sorted names of tools currently executing.
-func (a *Agent) InFlightTools() []string {
-	var out []string
-	a.inflightTools.Range(func(k, v any) bool {
-		if v.(*atomic.Int64).Load() > 0 {
-			out = append(out, k.(string))
-		}
-		return true
-	})
-	slices.Sort(out)
-	return out
+// trackTool adjusts the in-flight counts by tool kind.
+func (a *Agent) trackTool(name string, delta int64) {
+	if name == "subagent" {
+		a.subagentInflight.Add(delta)
+	} else {
+		a.otherInflight.Add(delta)
+	}
 }
 
 // WaitingOnSubagents reports whether a turn is running and its only in-flight
 // work is subagent calls — the model is blocked waiting on them, so a user
 // message can be steered in as a mid-turn correction instead of queued behind
 // the whole turn (it isn't an interruption if the agent is just waiting).
+// Empty in-flight means mid-generation, which keeps the queue behavior.
 func (a *Agent) WaitingOnSubagents() bool {
-	if !a.TurnRunning() {
-		return false
-	}
-	names := a.InFlightTools()
-	if len(names) == 0 {
-		return false // mid-generation, no tools yet — not "waiting on subagents"
-	}
-	for _, n := range names {
-		if n != "subagent" {
-			return false
-		}
-	}
-	return true
+	return a.TurnRunning() && a.subagentInflight.Load() > 0 && a.otherInflight.Load() == 0
 }
 
 // runTools executes a batch of tool calls concurrently, returning one result
