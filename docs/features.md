@@ -173,6 +173,20 @@ as a **steered message**, so the model sees it on the next loop boundary.
   The dock itself shows running tasks plus ones settled within a one-minute
   grace window (`dockSettledGrace`) — long enough to notice the ✓, then the
   strip cleans itself.
+- **Full transcript persisted.** When a background subagent settles, its whole
+  conversation is saved as its own attributed session
+  (`Store.SaveSubagentTranscript`, id `task-<parentID>-<taskID>` — the
+  `task-` prefix avoids a prefix-collision with the parent id in `Load`),
+  with `forked_from` = the parent session and `task_id` = the task. A
+  follow-up turn on the settled subagent re-saves the transcript
+  (`refreshTranscript` after `FollowupTask`). On resume, opening a restored
+  task replays the persisted transcript read-only (`renderTranscript`) instead
+  of showing only the bare report — a crashed process no longer loses the
+  completed work. Tests: `session_test.go`
+  `TestSubagentTranscriptRoundTrip` (attribution + follow-up re-save + no-op
+  without a parent), `tasks_test.go`
+  `TestRestoredTaskReplaysPersistedTranscript` (kill → resume → open shows the
+  full transcript).
 
 Background tasks use a context **not** tied to the current turn — they outlive
 it by design. Cancelling a task cancels its subagent's turn. `settle()`

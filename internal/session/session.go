@@ -98,6 +98,7 @@ var extraColumns = []struct{ name, def string }{
 	{"usage_cached", "usage_cached INTEGER NOT NULL DEFAULT 0"}, // of usage_in, tokens served from the prompt cache
 	{"usage_out", "usage_out INTEGER NOT NULL DEFAULT 0"},       // cumulative output tokens
 	{"todos", "todos TEXT NOT NULL DEFAULT ''"},                 // todowrite plan JSON ([]agent.Todo)
+	{"task_id", "task_id TEXT NOT NULL DEFAULT ''"},             // non-empty = this session is a subagent's transcript; the value is the task id
 }
 
 // Meta is a session's bookkeeping row.
@@ -117,6 +118,10 @@ type Meta struct {
 	UsageCached int      // of UsageIn, tokens served from the provider's prompt cache
 	UsageOut    int      // cumulative output tokens
 	UpdatedAt   time.Time
+	// TaskID is non-empty when this session is a subagent's persisted
+	// transcript (the value is the task id, e.g. "survey-context-3"); the
+	// parent session id is ForkedFrom. Empty for ordinary sessions.
+	TaskID string
 }
 
 type Store struct{ db *sql.DB }
@@ -245,6 +250,57 @@ func (s *Store) Close() error { return s.db.Close() }
 
 func now() string { return time.Now().UTC().Format(time.RFC3339) }
 
+// SaveSubagentTranscript persists a background subagent's conversation as its
+// own attributed session row: id "task-<parentID>-<taskID>" (prefixed so it
+// never prefix-collides with the parent session's id in Load), forked_from
+// set to the parent session, task_id set to the task. Idempotent — re-saving
+// after a follow-up turn replaces the same row and rewrites the messages from
+// seq 0. Returns the session id, or "" when there's no parent to attribute to
+// (a headless run with no store never calls this).
+func (s *Store) SaveSubagentTranscript(parentID, taskID string, msgs []llm.Message, model, provider string) (string, error) {
+	if parentID == "" || taskID == "" {
+		return "", nil
+	}
+	id := subagentSessionID(parentID, taskID)
+	if _, err := s.db.ExecContext(context.Background(), `INSERT INTO sessions
+		(id, created_at, updated_at, cwd, model, provider, title, forked_from, task_id)
+		VALUES (?,?,?,?,?,?,?,?,?)
+		ON CONFLICT(id) DO UPDATE SET updated_at=excluded.updated_at, model=excluded.model, provider=excluded.provider`,
+		id, now(), now(), "", model, provider, "subagent "+taskID, parentID, taskID); err != nil {
+		return "", err
+	}
+	if err := s.Save(id, 0, msgs, model, provider); err != nil {
+		return "", err
+	}
+	// Re-save rewrites rows [0, len(msgs)); a follow-up turn that compacted
+	// the transcript writes FEWER rows than last time, and Save's per-seq
+	// INSERT OR REPLACE never touches the tail — without this sweep the stale
+	// rows at seq >= len(msgs) linger and reload as phantom trailing messages.
+	if _, err := s.db.ExecContext(context.Background(), `DELETE FROM messages WHERE session_id=? AND seq>=?`, id, len(msgs)); err != nil {
+		return "", err
+	}
+	return id, nil
+}
+
+// SubagentTranscript loads a subagent's persisted conversation by parent +
+// task id ("" when never persisted). Loads by exact id (loadMessages), not
+// Load's prefix scan: sibling task ids can share a stem, which would make the
+// prefix form ambiguous.
+func (s *Store) SubagentTranscript(parentID, taskID string) ([]llm.Message, error) {
+	if parentID == "" || taskID == "" {
+		return nil, nil
+	}
+	return s.loadMessages(subagentSessionID(parentID, taskID))
+}
+
+// subagentSessionID builds the attributed session id for a subagent's
+// transcript. The "task-" prefix guarantees it can't prefix-collide with the
+// parent session's hex id in Load's prefix match (a plain "<parent>/…" suffix
+// form would make resume(parentID) ambiguous).
+func subagentSessionID(parentID, taskID string) string {
+	return "task-" + parentID + "-" + taskID
+}
+
 // Create inserts a new session and returns its id.
 func (s *Store) Create(cwd, model, provider string) (string, error) {
 	b := make([]byte, 4)
@@ -295,7 +351,7 @@ func (s *Store) Save(id string, from int, msgs []llm.Message, model, provider st
 
 // Load resolves idOrPrefix to a session and returns its metadata and messages.
 func (s *Store) Load(idOrPrefix string) (Meta, []llm.Message, error) {
-	rows, err := s.db.QueryContext(context.Background(), `SELECT id, title, model, provider, cwd, goal, forked_from, fork_seq, tags, pinned, effort, usage_in, usage_cached, usage_out, updated_at FROM sessions WHERE id LIKE ?||'%' LIMIT 3`, idOrPrefix)
+	rows, err := s.db.QueryContext(context.Background(), `SELECT id, title, model, provider, cwd, goal, forked_from, fork_seq, tags, pinned, effort, usage_in, usage_cached, usage_out, task_id, updated_at FROM sessions WHERE id LIKE ?||'%' LIMIT 3`, idOrPrefix)
 	if err != nil {
 		return Meta{}, nil, err
 	}
@@ -311,30 +367,43 @@ func (s *Store) Load(idOrPrefix string) (Meta, []llm.Message, error) {
 		return Meta{}, nil, fmt.Errorf("session id %q is ambiguous", idOrPrefix)
 	}
 	meta := metas[0]
+	msgs, err := s.loadMessages(meta.ID)
+	if err != nil {
+		return Meta{}, nil, err
+	}
+	return meta, msgs, nil
+}
 
+// loadMessages reads one session's full message log by EXACT id — the read
+// half of Load once the meta row is known. Split out so subagent transcripts
+// (whose ids are built deterministic by subagentSessionID, never typed by the
+// user) load by exact match instead of Load's prefix scan: a prefix query
+// over transcript ids goes "ambiguous" the moment two sibling task ids share
+// a stem (task-<parent>-foo-1 vs task-<parent>-foo-12).
+func (s *Store) loadMessages(id string) ([]llm.Message, error) {
 	// pre-size the slice: a long session is hundreds of rows; the COUNT is
 	// one index scan and avoids O(log n) reallocs while scanning
 	var count int
-	_ = s.db.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM messages WHERE session_id=?`, meta.ID).Scan(&count)
+	_ = s.db.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM messages WHERE session_id=?`, id).Scan(&count)
 
-	mrows, err := s.db.QueryContext(context.Background(), `SELECT content FROM messages WHERE session_id=? ORDER BY seq`, meta.ID)
+	mrows, err := s.db.QueryContext(context.Background(), `SELECT content FROM messages WHERE session_id=? ORDER BY seq`, id)
 	if err != nil {
-		return Meta{}, nil, err
+		return nil, err
 	}
 	defer func() { _ = mrows.Close() }()
 	msgs := make([]llm.Message, 0, count)
 	for mrows.Next() {
 		var data string
 		if err := mrows.Scan(&data); err != nil {
-			return Meta{}, nil, err
+			return nil, err
 		}
 		var m llm.Message
 		if err := json.Unmarshal([]byte(data), &m); err != nil {
-			return Meta{}, nil, err
+			return nil, err
 		}
 		msgs = append(msgs, m)
 	}
-	return meta, answerDanglingToolCalls(applyCompaction(s.db, meta.ID, msgs)), mrows.Err()
+	return answerDanglingToolCalls(applyCompaction(s.db, id, msgs)), mrows.Err()
 }
 
 // applyCompaction derives the compacted view from the raw log: the latest
@@ -424,7 +493,7 @@ func answerDanglingToolCalls(msgs []llm.Message) []llm.Message {
 
 // Recent returns up to n sessions, newest first.
 func (s *Store) Recent(n int) ([]Meta, error) {
-	rows, err := s.db.QueryContext(context.Background(), `SELECT id, title, model, provider, cwd, goal, forked_from, fork_seq, tags, pinned, effort, usage_in, usage_cached, usage_out, updated_at FROM sessions
+	rows, err := s.db.QueryContext(context.Background(), `SELECT id, title, model, provider, cwd, goal, forked_from, fork_seq, tags, pinned, effort, usage_in, usage_cached, usage_out, task_id, updated_at FROM sessions
 		WHERE EXISTS (SELECT 1 FROM messages WHERE session_id = sessions.id)
 		ORDER BY updated_at DESC LIMIT ?`, n)
 	if err != nil {
@@ -738,7 +807,7 @@ func (s *Store) SetPinned(id string, pinned bool) error {
 // ForksOf lists sessions forked from id, newest first — the session tree's
 // children of one node.
 func (s *Store) ForksOf(id string) ([]Meta, error) {
-	rows, err := s.db.QueryContext(context.Background(), `SELECT id, title, model, provider, cwd, goal, forked_from, fork_seq, tags, pinned, effort, usage_in, usage_cached, usage_out, updated_at
+	rows, err := s.db.QueryContext(context.Background(), `SELECT id, title, model, provider, cwd, goal, forked_from, fork_seq, tags, pinned, effort, usage_in, usage_cached, usage_out, task_id, updated_at
 		FROM sessions WHERE forked_from=? ORDER BY updated_at DESC`, id)
 	if err != nil {
 		return nil, err
@@ -802,7 +871,7 @@ func scanMetas(rows *sql.Rows) ([]Meta, error) {
 		var pinned int
 		if err := rows.Scan(&m.ID, &m.Title, &m.Model, &m.Provider, &m.CWD, &m.Goal,
 			&m.ForkedFrom, &m.ForkSeq, &tags, &pinned, &m.Effort,
-			&m.UsageIn, &m.UsageCached, &m.UsageOut, &updated); err != nil {
+			&m.UsageIn, &m.UsageCached, &m.UsageOut, &m.TaskID, &updated); err != nil {
 			return nil, err
 		}
 		if tags != "" {
