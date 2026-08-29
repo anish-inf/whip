@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	acpsdk "github.com/coder/acp-go-sdk"
 
@@ -117,7 +118,7 @@ func acpCLI(args []string) error {
 	factory := func(ctx context.Context, wd string, servers map[string]mcp.ServerConfig) (*agent.Agent, *mcp.Manager, error) {
 		client := llm.New(prov.BaseURL, key)
 		client.MaxRetries = cfg.MaxRetries
-		ag := agent.New(client, apiID, maxOut, systemPrompt(wd))
+		ag := agent.New(client, apiID, maxOut, systemPrompt(wd, time.Now()))
 		ag.ModelName, ag.Provider = modelName, provName
 		ag.ComputerDisabled = true
 		ag.ContextLimit = ctxLimit

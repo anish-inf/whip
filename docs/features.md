@@ -97,6 +97,32 @@ Token bookkeeping: `llm.Usage` (prompt/completion/cached) is read off the
 terminal stream chunk (`stream_options: include_usage`) and folded into session
 totals via `AddUsage`. Compaction and subagent calls count too.
 
+### Provider prompt-prefix caching
+
+To cut time-to-first-token on the many sequential turns of an agent loop,
+whip stamps `prompt_cache_key` on every request (OpenAI `prompt_cache_key`;
+openrouter/xai/azure/mistral honor the same field; providers that don't
+recognize it ignore the unknown top-level field). The key is the **session
+id**: `Agent.SetSessionID` sets `Client.CacheKey`, so a stable session lets
+the provider reuse the cached conversation prefix across turns. Subagents get
+a scoped key (`<sessionID>/<taskID>` in `StartBackground`) so their shorter,
+churning contexts never disturb the parent's cached prefix and two concurrent
+subagents don't collide on the session key. An explicit
+`Request.PromptCacheKey` overrides the client's (that's how the subagent
+scoping is applied); empty omits the field entirely so providers that would
+reject it never see it. The prefix-stability preconditions are already
+maintained elsewhere: the system prompt's per-turn memory block sits at the
+END of the system message (`prepareTurn`), MCP tools are name-sorted
+(`mcp.Manager.Tools`), and the context-decay pass keeps the recent hot window
+byte-stable. Anthropic-style `cache_control: ephemeral` breakpoints are out of
+scope — whip speaks OpenAI chat-completions uniformly and has no
+Anthropic-native consumer for them.
+
+Tests: `internal/llm/cache_test.go` — `TestPromptCacheKeyStampedFromClient`,
+`TestPromptCacheKeyRequestOverridesClient`, `TestConsecutiveRequestsSharePrefix`
+(the prefix-cache contract: turn N's messages are a byte-identical prefix of
+turn N+1's, same key on both).
+
 Commands: `/compact` (compact now), `/compact <model> [provider]` (pick the
 summarizer), `/compact off` (restore the built-in default). The palette's
 "Compaction model" panel lists every configured model behind a
@@ -147,6 +173,20 @@ as a **steered message**, so the model sees it on the next loop boundary.
   The dock itself shows running tasks plus ones settled within a one-minute
   grace window (`dockSettledGrace`) — long enough to notice the ✓, then the
   strip cleans itself.
+- **Full transcript persisted.** When a background subagent settles, its whole
+  conversation is saved as its own attributed session
+  (`Store.SaveSubagentTranscript`, id `task-<parentID>-<taskID>` — the
+  `task-` prefix avoids a prefix-collision with the parent id in `Load`),
+  with `forked_from` = the parent session and `task_id` = the task. A
+  follow-up turn on the settled subagent re-saves the transcript
+  (`refreshTranscript` after `FollowupTask`). On resume, opening a restored
+  task replays the persisted transcript read-only (`renderTranscript`) instead
+  of showing only the bare report — a crashed process no longer loses the
+  completed work. Tests: `session_test.go`
+  `TestSubagentTranscriptRoundTrip` (attribution + follow-up re-save + no-op
+  without a parent), `tasks_test.go`
+  `TestRestoredTaskReplaysPersistedTranscript` (kill → resume → open shows the
+  full transcript).
 
 Background tasks use a context **not** tied to the current turn — they outlive
 it by design. Cancelling a task cancels its subagent's turn. `settle()`
