@@ -105,22 +105,25 @@ func taskTool(parent *Agent) tools.Tool {
 			if a.Worktree != nil {
 				useWorktree = *a.Worktree
 			}
-			wtPath := ""
-			if a.Background && useWorktree {
-				if p, err := provisionSubagentWorktree(ctx, "sub"); err == nil {
-					wtPath = p
-				}
-				// ponytail: on any failure (not a repo, git missing, branch
-				// clash) fall back to the shared cwd rather than failing the
-				// dispatch — isolation is best-effort.
-			}
 			prompt := a.Prompt
-			if wtPath != "" {
-				prompt = "Work entirely inside the git worktree at " + wtPath + " (run `cd " + wtPath + "` first; it is your own branch, isolated from other agents). Commit your changes there.\n\n" + prompt
-			}
 
 			if a.Background {
-				t := parent.StartBackground(desc, prompt, o)
+				// Register the dock row + badge BEFORE the synchronous
+				// worktree provision (git worktree add can take a moment —
+				// spawn lag). The worktree path then goes to the subagent as
+				// its first steered message at launch rather than being baked
+				// into the initial prompt (which OnRecord already persisted).
+				t := parent.RegisterBackground(desc, prompt, o)
+				wtPath := ""
+				if useWorktree {
+					if p, err := provisionSubagentWorktree(ctx, "sub"); err == nil {
+						wtPath = p
+					}
+					// ponytail: on any failure (not a repo, git missing, branch
+					// clash) fall back to the shared cwd rather than failing the
+					// dispatch — isolation is best-effort.
+				}
+				parent.LaunchBackground(t, wtPath)
 				if wtPath != "" {
 					return fmt.Sprintf("Started background subagent %s in worktree %s: %s. Its edits are isolated from your working tree. Do not poll for it.", t.ID, wtPath, desc), nil
 				}
