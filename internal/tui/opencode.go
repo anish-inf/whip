@@ -34,7 +34,6 @@ var ocActive bool
 // both variants, so opencode mode matches opencode pixel-for-pixel while still
 // honoring whip's light/dark/auto — dark terminal → opencode dark, light → light.
 var (
-	ocColBg      = lipgloss.AdaptiveColor{Light: "#ffffff", Dark: "#0a0a0a"} // background
 	ocPanelBg    = lipgloss.AdaptiveColor{Light: "#fafafa", Dark: "#141414"} // backgroundPanel: cards, sidebar
 	ocElementBg  = lipgloss.AdaptiveColor{Light: "#f5f5f5", Dark: "#1e1e1e"} // backgroundElement: prompt box
 	ocAgentCol   = lipgloss.AdaptiveColor{Light: "#7b5bb6", Dark: "#5c9cf5"} // secondary: agent color (bars, ▣)
@@ -206,11 +205,11 @@ func (m *model) opencodePrompt(inner string, width int) string {
 	bar := lipgloss.NewStyle().Foreground(ocAgentCol).Background(ocElementBg).Render("┃")
 	row := func(content string) string { return elem.Width(width).Render(content) }
 	var b strings.Builder
-	b.WriteString(row("") + "\n") // paddingTop
+	b.WriteString(row(bar) + "\n") // paddingTop (bar continues down the whole box)
 	for _, ln := range strings.Split(inner, "\n") {
 		b.WriteString(row(bar+elem.Render("  "+ln)) + "\n")
 	}
-	b.WriteString(row("") + "\n") // padding below the input, above the meta row
+	b.WriteString(row(bar) + "\n") // padding below the input, above the meta row
 	// model/mode row: mode in the agent color, model in text, provider muted.
 	agent := lipgloss.NewStyle().Foreground(ocAgentCol).Background(ocElementBg)
 	txt := lipgloss.NewStyle().Foreground(ocTextCol).Background(ocElementBg)
@@ -243,7 +242,7 @@ func opencodeUserCard(text string, width int) string {
 		if i > 0 {
 			b.WriteByte('\n')
 		}
-		content := ""
+		content := bar // opencode draws the left bar on every card row, padding rows included
 		if ln != "" {
 			content = bar + txt.Render("  "+ln) // two spaces after the bar
 		}
@@ -256,8 +255,8 @@ func opencodeUserCard(text string, width int) string {
 // the left, and "{tokens} ({pct%})  ctrl+p commands" on the right. Themed with
 // whip's dim style; the +2 main-column margin is applied by View().
 func (m *model) opencodeStatus() string {
-	muted := lipgloss.NewStyle().Foreground(ocMutedCol).Background(ocColBg)
-	txt := lipgloss.NewStyle().Foreground(ocTextCol).Background(ocColBg)
+	muted := lipgloss.NewStyle().Foreground(ocMutedCol)
+	txt := lipgloss.NewStyle().Foreground(ocTextCol)
 	// right side: "{tokens} ({pct})  " muted, then "ctrl+p" in text, " commands" muted.
 	rightRaw := ""
 	if u := m.agent.Usage(); u.PromptTokens+u.CompletionTokens > 0 {
@@ -282,17 +281,17 @@ func (m *model) opencodeStatus() string {
 // opencodeThought renders opencode's collapsed reasoning line, "+ Thought:
 // {duration}", indented 3 to sit under the assistant column.
 func (m *model) opencodeThought(d time.Duration) string {
-	warn := lipgloss.NewStyle().Foreground(ocWarnCol).Background(ocColBg)
-	return warn.Render("   + Thought: " + fmtShortDur(d)) // 3-space indent to sit under the assistant column
+	warn := lipgloss.NewStyle().Foreground(ocWarnCol)
+	return "   " + warn.Render("+ Thought: "+fmtShortDur(d)) // 3-space indent to sit under the assistant column
 }
 
 // opencodeAttribution renders opencode's per-response attribution line:
 // "▣  {mode} · {model} · {duration}", indented 3 to sit under the assistant body.
 func (m *model) opencodeAttribution(d time.Duration) string {
-	agent := lipgloss.NewStyle().Foreground(ocAgentCol).Background(ocColBg)
-	txt := lipgloss.NewStyle().Foreground(ocTextCol).Background(ocColBg)
-	muted := lipgloss.NewStyle().Foreground(ocMutedCol).Background(ocColBg)
-	return agent.Render("   ▣") + txt.Render("  "+m.ocModeLabel()) + // 3-space indent under the assistant column
+	agent := lipgloss.NewStyle().Foreground(ocAgentCol)
+	txt := lipgloss.NewStyle().Foreground(ocTextCol)
+	muted := lipgloss.NewStyle().Foreground(ocMutedCol)
+	return "   " + agent.Render("▣") + txt.Render("  "+m.ocModeLabel()) + // 3-space indent under the assistant column
 		muted.Render(" · "+m.modelName+" · "+fmtShortDur(d))
 }
 

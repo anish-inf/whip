@@ -3923,13 +3923,10 @@ func (m *model) currentView() string {
 func (m *model) View() string {
 	v := m.viewBody()
 	if m.uiMode == opencodeMode {
-		// paint the main column on opencode's background, with its left margin,
-		// so the whole area matches opencode regardless of the terminal's own bg
-		v = lipgloss.NewStyle().
-			Background(ocColBg).
-			PaddingLeft(opencodeLeftMargin).
-			Width(opencodeLeftMargin + m.width).
-			Render(v)
+		// opencode's main-column left margin only — the main area stays on the
+		// terminal's native background so whip keeps light/dark/auto (no forced
+		// backdrop; only the panels below carry a subtle contrast shade).
+		v = lipgloss.NewStyle().PaddingLeft(opencodeLeftMargin).Render(v)
 	}
 	if m.sidebarVisible() {
 		v = lipgloss.JoinHorizontal(lipgloss.Top, v, m.sidebarView(lipgloss.Height(v)))
