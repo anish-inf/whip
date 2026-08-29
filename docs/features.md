@@ -444,6 +444,21 @@ relay: full device login + key mint, store round-trip, key validation),
 - Queueing (enter while busy), steering (empty enter), history recall (↑/↓),
   `@file` mentions, `$skill` invocation, `/goal` loop, `/resume` session
   picker, `/effort` reasoning levels — see the roadmap for the full list.
+- **Typing steers a turn that's only waiting on subagents.** When a turn is
+  running but its only in-flight tool calls are subagents
+  (`Agent.WaitingOnSubagents` — the agent tracks in-flight tool names in
+  `runTools`), typed input routes to `Agent.Steer` instead of the busy queue:
+  it reaches the model at the next loop boundary as a mid-turn correction
+  rather than queueing behind the whole turn (waiting on a subagent isn't real
+  work the message would interrupt). Any other in-flight tool (a bash, an
+  edit) keeps the queue behavior. The input placeholder reflects the routing
+  live (`syncInputPlaceholder`, consulted in `View`): "waiting on subagents —
+  type to steer this turn" vs "busy — type to queue". Tests:
+  `internal/agent/busysteer_test.go` (`TestInFlightToolsTracking`,
+  `TestWaitingOnSubagentsGating`,
+  `TestWaitingOnSubagentsDuringForegroundSubagent` — a real turn blocked on a
+  live foreground subagent reports waiting, then flips false),
+  `internal/tui/queue_test.go` (`TestBusyPlaceholderReflectsRouting`).
 - **Settings commands run mid-turn.** `/theme`, `/mouse`, `/effort`, `/subagents` (alias `/tasks`),
   `/help`, `/cd`, `/pwd`, and the non-submitting `/goal` forms (bare, `clear`,
   `rounds`) execute immediately while busy instead of queueing — queued text

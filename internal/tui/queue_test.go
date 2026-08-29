@@ -393,3 +393,52 @@ func TestQueueRendersOneLineEach(t *testing.T) {
 		}
 	}
 }
+
+// The input placeholder reflects the busy routing: while busy with ordinary
+// tools the hint says "queue"; a turn blocked only on subagents says "steer".
+func TestBusyPlaceholderReflectsRouting(t *testing.T) {
+	m := busyQueueModel()
+	m.syncInputPlaceholder()
+	if !strings.Contains(m.input.Placeholder, "queue") {
+		t.Fatalf("busy (not waiting on subagents) placeholder = %q", m.input.Placeholder)
+	}
+	m.busy = false
+	m.syncInputPlaceholder()
+	if !strings.HasPrefix(m.input.Placeholder, "Ask whip") {
+		t.Fatalf("idle placeholder should restore the default, got %q", m.input.Placeholder)
+	}
+}
+
+// TestOrphanSteerSubmitsMachineTurn proves the wait-tool teardown seam: a
+// steer orphaned at a turn's final boundary surfaces through OnOrphanedSteer
+// → orphanSteerMsg → a fresh machine turn carrying the steered text. While a
+// turn is busy the message is deferred instead of racing it.
+func TestOrphanSteerSubmitsMachineTurn(t *testing.T) {
+	m := busyQueueModel()
+	m.busy = false // the orphan wake fires after the turn ended
+	m.agent.Client = stubLLM()
+	m.agent.Messages = []llm.Message{{Role: "system", Content: "sys"}}
+
+	tm, _ := m.Update(orphanSteerMsg("steer me home"))
+	m = tm.(*model)
+
+	if !m.busy {
+		t.Fatal("the orphaned steer should submit as a new turn (busy)")
+	}
+	if !hasUserMsg(t, m, "steer me home") {
+		t.Fatalf("the orphaned steer should reach the model, got %+v", m.agent.Messages)
+	}
+}
+
+// While a turn is busy, an orphanSteerMsg must not submit over it — the
+// agent's own drain at loop boundaries will pick the steer up.
+func TestOrphanSteerDeferredWhileBusy(t *testing.T) {
+	m := busyQueueModel()
+
+	tm, _ := m.Update(orphanSteerMsg("wait your turn"))
+	m = tm.(*model)
+
+	if len(m.agent.Messages) != 0 {
+		t.Fatalf("busy: nothing should submit, got %+v", m.agent.Messages)
+	}
+}

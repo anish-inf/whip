@@ -235,12 +235,14 @@ func TestWaitTickerPath(t *testing.T) {
 
 // The lost-wakeup race: a Steer landing after a turn's final drainPending but
 // before running flips false must not be dropped — the turn's teardown
-// re-drain routes it to OnWake. Tested via the drain mechanism directly: the
-// exact interleaving window isn't deterministically forceable in a live turn.
+// re-drain routes it to OnOrphanedSteer (the unified hook; the TUI wires it to
+// the same machine-turn path as OnWake). Tested via the drain mechanism
+// directly: the exact interleaving window isn't deterministically forceable
+// in a live turn.
 func TestTurnTeardownDrainsOrphanedSteers(t *testing.T) {
 	ag := New(llm.New("http://unused", "k"), "m", 100, "sys")
 	var woke []string
-	ag.Waits().OnWake = func(s string) { woke = append(woke, s) }
+	ag.OnOrphanedSteer = func(s string) { woke = append(woke, s) }
 
 	ag.running.Store(true)
 	ag.Steer("orphaned message")

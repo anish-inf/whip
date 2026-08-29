@@ -87,15 +87,16 @@ type turnDoneMsg struct {
 	clean bool   // the turn left the tree clean — snap is worthless, drop it
 }
 type (
-	catalogsMsg   map[string]config.Catalog // background /models fetch result
-	noticeMsg     string                    // dim one-liner appended to the transcript
-	usageMsg      llm.Usage                 // one request's token usage
-	quitArmMsg    struct{}                  // the idle ctrl+c arm window expired
-	taskUpdateMsg struct{}                  // a background subagent started/settled — redraw
-	waitWakeMsg   string                    // an idle wait fired — wake as a machine turn
-	mcpStatusMsg  struct{}                  // an MCP server changed state — redraw
-	thinkMsg      string                    // streamed reasoning tokens
-	imageMsg      struct {                  // ctrl+v clipboard image result
+	catalogsMsg    map[string]config.Catalog // background /models fetch result
+	noticeMsg      string                    // dim one-liner appended to the transcript
+	usageMsg       llm.Usage                 // one request's token usage
+	quitArmMsg     struct{}                  // the idle ctrl+c arm window expired
+	taskUpdateMsg  struct{}                  // a background subagent started/settled — redraw
+	waitWakeMsg    string                    // an idle wait fired — wake as a machine turn
+	orphanSteerMsg string                    // a steer orphaned at turn teardown — submit as a machine turn
+	mcpStatusMsg   struct{}                  // an MCP server changed state — redraw
+	thinkMsg       string                    // streamed reasoning tokens
+	imageMsg       struct {                  // ctrl+v clipboard image result
 		path string // clipboard image saved to disk
 		err  error
 	}
@@ -239,7 +240,7 @@ type picker struct {
 // Newlines come from ctrl+j / shift+enter / alt+enter; plain enter submits.
 func newInput() textarea.Model {
 	ti := textarea.New()
-	ti.Placeholder = "Ask whip anything… (/ for commands, tab completes)"
+	ti.Placeholder = inputPlaceholder
 	ti.Prompt = "┃ "
 	ti.SetHeight(1)
 	ti.MaxHeight = 24 // input grows with content up to this many lines
@@ -2110,6 +2111,16 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case orphanSteerMsg:
+		// A steer arrived after the drain snapshot at turn teardown and was
+		// orphaned. The agent can't message the TUI itself (same seam as
+		// waitWakeMsg) — it surfaced the steer through OnOrphanedSteer; run it
+		// as a machine turn so the steer is never lost.
+		if !m.busy {
+			return m.submitTurn(string(msg), true)
+		}
+		return m, nil
+
 	case waitWakeMsg:
 		// An idle wait fired: wake as a machine-authored turn (the opencode/
 		// exo wake pattern). If a turn started between the wait's TurnRunning
@@ -2582,6 +2593,17 @@ func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.input.Reset()
 				m.menu = nil
 				m.runShell(text)
+			case text != "" && m.agent.WaitingOnSubagents():
+				// The turn is blocked only on subagents — steer the message in
+				// as a mid-turn correction instead of queueing it behind the
+				// whole turn (it isn't an interruption if the agent is just
+				// waiting). Echo it like a steered background-task report.
+				m.hist = append(m.hist, text)
+				m.histIdx = len(m.hist)
+				m.input.Reset()
+				m.menu = nil
+				m.agent.Steer(text)
+				m.append(youStyle.Render("❯ ") + linkifyFilePaths(text, realFileExists) + dimStyle.Render("  (steered)"))
 			case text != "": // codex-style: queue it (multiple allowed)
 				m.queue = append(m.queue, text)
 				m.hist = append(m.hist, text)
@@ -2828,6 +2850,11 @@ func (m *model) wireTasks() {
 	m.wireWaits()
 	if m.prog == nil {
 		return // headless (tests)
+	}
+	m.agent.OnOrphanedSteer = func(text string) {
+		// Detached: runs on the wait-poller goroutine; a backed-up UI queue
+		// must never stall the agent (same posture as OnChange below).
+		go m.prog.Send(orphanSteerMsg(text))
 	}
 	m.agent.Tasks().OnChange = func(*agent.BackgroundTask) {
 		// Detached: OnChange runs on the subagent worker goroutine, and a
@@ -3850,6 +3877,7 @@ func (m *model) currentView() string {
 // viewTop = min(viewTop, height - viewH). A resize resets the sentinel
 // (WindowSizeMsg handler) and the next render re-anchors to the bottom.
 func (m *model) View() string {
+	m.syncInputPlaceholder()
 	v := m.viewBody()
 	if m.height > 0 {
 		m.viewH = lipgloss.Height(v)
@@ -3989,6 +4017,28 @@ func (m *model) viewBody() string {
 	}
 	b.WriteString("\n\n" + m.statusView()) // persistent status line, with a blank line above
 	return b.String()
+}
+
+// inputPlaceholder is the idle input hint; syncInputPlaceholder re-uses it
+// when the busy state clears so the two sites never drift.
+const inputPlaceholder = "Ask whip anything… (/ for commands, tab completes)"
+
+// syncInputPlaceholder reflects the busy state into the input's placeholder:
+// while a turn runs, typing either steers into it (when the agent is only
+// waiting on subagents) or queues behind it. Called from View so it tracks
+// the state every render. headless-safe.
+func (m *model) syncInputPlaceholder() {
+	if m.input.Value() != "" {
+		return // placeholder is hidden once the user is typing
+	}
+	switch {
+	case !m.busy:
+		m.input.Placeholder = inputPlaceholder
+	case m.agent != nil && m.agent.WaitingOnSubagents():
+		m.input.Placeholder = "waiting on subagents — type to steer this turn"
+	default:
+		m.input.Placeholder = "busy — type to queue (sent when the turn ends)"
+	}
 }
 
 // statusView renders the always-on status line below the input: current
