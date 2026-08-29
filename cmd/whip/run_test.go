@@ -406,3 +406,51 @@ func TestRunJSONToolEvents(t *testing.T) {
 		t.Errorf("a failed run should end with an error event, got %q", seen["error"])
 	}
 }
+
+// --format json surfaces provider reasoning tokens as reasoning events, ahead
+// of the reply text, so downstream tools can show thinking activity live.
+func TestRunJSONReasoning(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, `data: {"choices":[{"delta":{"reasoning_content":"let me think"}}]}`+"\n\n")
+		fmt.Fprint(w, `data: {"choices":[{"delta":{"content":"answer"},"finish_reason":"stop"}]}`+"\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	t.Cleanup(srv.Close)
+
+	home := t.TempDir()
+	t.Setenv("WHIP_HOME", home)
+	cfg := fmt.Sprintf(`{
+		"defaultModel": "test",
+		"providers": {"testprov": {"baseUrl": %q, "api": "openai-completions", "apiKey": "k"}},
+		"models": {"test": {"providers": ["testprov"], "maxOut": 100}}
+	}`, srv.URL)
+	if err := os.WriteFile(filepath.Join(home, "config.json"), []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runCapture(t, "", "--format", "json", "go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var reasoning string
+	var sawText bool
+	for line := range strings.SplitSeq(strings.TrimSpace(out), "\n") {
+		var ev map[string]string
+		if err := json.Unmarshal([]byte(line), &ev); err != nil {
+			t.Fatalf("line not JSON: %q: %v", line, err)
+		}
+		switch ev["type"] {
+		case "reasoning":
+			reasoning += ev["delta"]
+		case "text":
+			sawText = true
+		}
+	}
+	if reasoning != "let me think" {
+		t.Fatalf("want reasoning event with thinking tokens, got %q", reasoning)
+	}
+	if !sawText {
+		t.Fatalf("want a text event too, got:\n%s", out)
+	}
+}
