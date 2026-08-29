@@ -3923,7 +3923,13 @@ func (m *model) currentView() string {
 func (m *model) View() string {
 	v := m.viewBody()
 	if m.uiMode == opencodeMode {
-		v = lipgloss.NewStyle().PaddingLeft(opencodeLeftMargin).Render(v) // opencode's main-column left margin
+		// paint the main column on opencode's background, with its left margin,
+		// so the whole area matches opencode regardless of the terminal's own bg
+		v = lipgloss.NewStyle().
+			Background(ocColBg).
+			PaddingLeft(opencodeLeftMargin).
+			Width(opencodeLeftMargin + m.width).
+			Render(v)
 	}
 	if m.sidebarVisible() {
 		v = lipgloss.JoinHorizontal(lipgloss.Top, v, m.sidebarView(lipgloss.Height(v)))

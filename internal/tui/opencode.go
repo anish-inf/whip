@@ -256,8 +256,8 @@ func opencodeUserCard(text string, width int) string {
 // the left, and "{tokens} ({pct%})  ctrl+p commands" on the right. Themed with
 // whip's dim style; the +2 main-column margin is applied by View().
 func (m *model) opencodeStatus() string {
-	muted := lipgloss.NewStyle().Foreground(ocMutedCol)
-	txt := lipgloss.NewStyle().Foreground(ocTextCol)
+	muted := lipgloss.NewStyle().Foreground(ocMutedCol).Background(ocColBg)
+	txt := lipgloss.NewStyle().Foreground(ocTextCol).Background(ocColBg)
 	// right side: "{tokens} ({pct})  " muted, then "ctrl+p" in text, " commands" muted.
 	rightRaw := ""
 	if u := m.agent.Usage(); u.PromptTokens+u.CompletionTokens > 0 {
@@ -276,23 +276,23 @@ func (m *model) opencodeStatus() string {
 		left = truncLine(left, max(w-rightW-2, 0))
 	}
 	pad := max(w-lipgloss.Width(left)-rightW-1, 1)
-	return muted.Render(" "+left) + strings.Repeat(" ", pad) + right
+	return muted.Render(" "+left+strings.Repeat(" ", pad)) + right
 }
 
 // opencodeThought renders opencode's collapsed reasoning line, "+ Thought:
 // {duration}", indented 3 to sit under the assistant column.
 func (m *model) opencodeThought(d time.Duration) string {
-	warn := lipgloss.NewStyle().Foreground(ocWarnCol)
-	return "   " + warn.Render("+ Thought: "+fmtShortDur(d)) // 3-space indent to sit under the assistant column
+	warn := lipgloss.NewStyle().Foreground(ocWarnCol).Background(ocColBg)
+	return warn.Render("   + Thought: " + fmtShortDur(d)) // 3-space indent to sit under the assistant column
 }
 
 // opencodeAttribution renders opencode's per-response attribution line:
 // "▣  {mode} · {model} · {duration}", indented 3 to sit under the assistant body.
 func (m *model) opencodeAttribution(d time.Duration) string {
-	agent := lipgloss.NewStyle().Foreground(ocAgentCol)
-	txt := lipgloss.NewStyle().Foreground(ocTextCol)
-	muted := lipgloss.NewStyle().Foreground(ocMutedCol)
-	return "   " + agent.Render("▣") + "  " + txt.Render(m.ocModeLabel()) + // 3-space indent under the assistant column
+	agent := lipgloss.NewStyle().Foreground(ocAgentCol).Background(ocColBg)
+	txt := lipgloss.NewStyle().Foreground(ocTextCol).Background(ocColBg)
+	muted := lipgloss.NewStyle().Foreground(ocMutedCol).Background(ocColBg)
+	return agent.Render("   ▣") + txt.Render("  "+m.ocModeLabel()) + // 3-space indent under the assistant column
 		muted.Render(" · "+m.modelName+" · "+fmtShortDur(d))
 }
 

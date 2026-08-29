@@ -225,8 +225,9 @@ func opencodeMDStyle(light bool) glamouransi.StyleConfig {
 	if light {
 		st = styles.LightStyleConfig
 	}
-	st.Document.Color = pick("#eeeeee", "#1a1a1a") // markdownText
-	st.Heading.Color = pick("#9d7cd8", "#d68c27")  // markdownHeading (accent)
+	st.Document.Color = pick("#eeeeee", "#1a1a1a")           // markdownText
+	st.Document.BackgroundColor = pick("#0a0a0a", "#ffffff") // main bg, so assistant text has no holes when the screen is painted
+	st.Heading.Color = pick("#9d7cd8", "#d68c27")            // markdownHeading (accent)
 	st.H1.Color = pick("#9d7cd8", "#d68c27")
 	st.H1.BackgroundColor = nil
 	st.Code.Color = pick("#7fd88f", "#3d9a57") // markdownCode (green)
