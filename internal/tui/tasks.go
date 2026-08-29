@@ -101,14 +101,10 @@ type taskView struct {
 // occupies (hint row + task rows); the strip scrolls if there are more tasks.
 const tasksDockHeight = 6
 
-// dockSettledGrace is how long a settled task stays in the dock after
-// finishing — long enough to notice the ✓ and open the report, then the
-// strip cleans itself. Restored tasks (--resume history) never show: their
-// subagents died with the previous process. /tasks lists everything.
-const dockSettledGrace = time.Minute
-
-// dockTasks returns the dock's tasks — running ones plus those settled
-// within dockSettledGrace, never restored ones — newest first. Bare test
+// dockTasks returns the dock's tasks — running ones plus settled ones,
+// never restored ones — newest first. Settled tasks stay in the dock until
+// the user sends a new message (submitTurn sweeps them then), so the user
+// can review a finished subagent's transcript before moving on. Bare test
 // models have no agent; the dock is simply empty.
 func (m *model) dockTasks() []agent.BackgroundTask {
 	if m.agent == nil {
@@ -119,10 +115,7 @@ func (m *model) dockTasks() []agent.BackgroundTask {
 		if t.Restored {
 			continue // resume history belongs in /tasks, not the dock
 		}
-		// running always shows; zero EndedAt (never settled) sorts with them
-		if t.Status == agent.TaskRunning || time.Since(t.EndedAt) < dockSettledGrace {
-			out = append(out, t)
-		}
+		out = append(out, t)
 	}
 	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
 		out[i], out[j] = out[j], out[i]
