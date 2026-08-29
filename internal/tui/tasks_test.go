@@ -869,3 +869,26 @@ func TestRestoredTaskReplaysPersistedTranscript(t *testing.T) {
 		}
 	}
 }
+
+// A steered message in the subagent view renders as a user message — the
+// steering main agent (or the human in the task chat) is the subagent's
+// orchestrator, acting as its user. The transcript should read like a normal
+// user turn, not a system note.
+func TestSteeredMessageRendersAsUser(t *testing.T) {
+	srv := sseTextServer(t, "ok")
+	defer srv.Close()
+	m := tasksModel(srv.URL)
+	task := m.agent.StartBackground("probe", "p", agent.SubModel{})
+	defer m.agent.Tasks().Cancel(task.ID)
+	m.openTask(task.ID)
+
+	// live path: a steer event renders with the "you:" label
+	m.Update(taskEventMsg{id: task.ID, kind: 3, s: "check the other file too"})
+	view := stripAll(m.taskViewView())
+	if !strings.Contains(view, "you: check the other file too") {
+		t.Fatalf("steered message should render as a user turn, got:\n%s", view)
+	}
+	if strings.Contains(view, "steered:") || strings.Contains(view, "you (steer)") {
+		t.Fatalf("steered message must not carry a 'steered' label, got:\n%s", view)
+	}
+}
