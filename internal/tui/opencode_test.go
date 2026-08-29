@@ -1,44 +1,15 @@
 package tui
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
-	"github.com/charmbracelet/lipgloss"
+	"github.com/context-labs/whip/internal/agent"
 	"github.com/context-labs/whip/internal/config"
+	"github.com/context-labs/whip/internal/lsp"
 )
-
-// snapshotStyles saves the package-global style vars and glyphs and restores
-// them when the test ends, so mode-swapping tests don't bleed into others.
-func snapshotStyles(t *testing.T) {
-	t.Helper()
-	y, b, tl, d, e, g, th := youStyle, botStyle, toolStyle, dimStyle, errStyle, growStyle, thinkingStyle
-	gu, ga := glyphUser, glyphAssistant
-	t.Cleanup(func() {
-		youStyle, botStyle, toolStyle, dimStyle, errStyle, growStyle, thinkingStyle = y, b, tl, d, e, g, th
-		glyphUser, glyphAssistant = gu, ga
-	})
-}
-
-func TestApplyOpencodeStylesSwapsGlyphs(t *testing.T) {
-	snapshotStyles(t)
-	applyDefaultTheme()
-	if glyphUser != "❯ " || glyphAssistant != "● " {
-		t.Fatalf("default glyphs = %q/%q", glyphUser, glyphAssistant)
-	}
-	applyOpencodeStyles()
-	if glyphUser != "┃ " || glyphAssistant != "▣ " {
-		t.Fatalf("opencode glyphs = %q/%q, want ┃ / ▣", glyphUser, glyphAssistant)
-	}
-	// opencode uses fixed hex, not whip's AdaptiveColor.
-	if got := toolStyle.GetForeground(); got != lipgloss.Color(ocPrimary) {
-		t.Fatalf("toolStyle fg = %v, want opencode primary", got)
-	}
-	applyDefaultTheme()
-	if glyphUser != "❯ " || glyphAssistant != "● " {
-		t.Fatalf("revert failed: %q/%q", glyphUser, glyphAssistant)
-	}
-}
 
 func TestOpencodeLogo(t *testing.T) {
 	logo := opencodeLogo()
@@ -46,7 +17,6 @@ func TestOpencodeLogo(t *testing.T) {
 	if len(lines) != 4 {
 		t.Fatalf("logo has %d lines, want 4", len(lines))
 	}
-	// Block-glyph wordmark must contain the upper/lower half blocks.
 	if !strings.Contains(logo, "█") || !strings.Contains(logo, "▀") {
 		t.Fatal("logo missing block glyphs")
 	}
@@ -61,25 +31,99 @@ func TestUIModeLabel(t *testing.T) {
 	}
 }
 
-func TestStyleInputPlaceholder(t *testing.T) {
-	snapshotStyles(t)
-	m := &model{input: newInput()}
-	m.uiMode = opencodeMode
-	m.styleInput()
-	if m.input.Placeholder != ocPlaceholder {
-		t.Fatalf("opencode placeholder = %q", m.input.Placeholder)
+func TestApplyUIMode(t *testing.T) {
+	m := &model{}
+	m.applyUIMode(opencodeMode)
+	if m.uiMode != opencodeMode {
+		t.Fatalf("uiMode = %q, want opencode", m.uiMode)
 	}
-	m.uiMode = ""
-	m.styleInput()
-	if m.input.Placeholder != whipPlaceholder {
-		t.Fatalf("default placeholder = %q", m.input.Placeholder)
+	m.applyUIMode("bogus")
+	if m.uiMode != "" {
+		t.Fatalf("uiMode = %q, want default", m.uiMode)
+	}
+}
+
+func TestSidebarVisible(t *testing.T) {
+	m := &model{uiMode: opencodeMode}
+	m.termWidth = sidebarMinWidth - 1
+	if m.sidebarVisible() {
+		t.Fatal("narrow terminal should hide the sidebar")
+	}
+	m.termWidth = sidebarMinWidth
+	if !m.sidebarVisible() {
+		t.Fatal("wide terminal should show the sidebar")
+	}
+	m.uiMode = "" // off in default mode regardless of width
+	if m.sidebarVisible() {
+		t.Fatal("default mode should never show the sidebar")
+	}
+}
+
+func TestLspSummary(t *testing.T) {
+	m := &model{}
+	if got := m.lspSummary(); got != "LSPs are disabled" {
+		t.Fatalf("no manager = %q", got)
+	}
+	if got := lspSummaryLine(nil); got != "no servers" {
+		t.Fatalf("empty = %q", got)
+	}
+	got := lspSummaryLine([]lsp.Status{{State: "connected"}, {State: "failed"}})
+	if got != "1/2 connected" {
+		t.Fatalf("count = %q, want 1/2 connected", got)
+	}
+	// non-nil manager path (no specs -> no servers)
+	m2 := &model{lspMgr: lsp.NewManager(nil)}
+	if got := m2.lspSummary(); got != "no servers" {
+		t.Fatalf("empty manager = %q", got)
+	}
+}
+
+func TestSetUIModeSaveError(t *testing.T) {
+	// Point HOME at a regular file so the config directory can't be created and
+	// cfg.Save() fails; setUIMode must surface the error, not panic.
+	f := filepath.Join(t.TempDir(), "home-is-a-file")
+	if err := os.WriteFile(f, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// WHIP_HOME (pinned by TestMain) wins over HOME; point it under a regular
+	// file so MkdirAll fails and Save() returns an error.
+	t.Setenv("WHIP_HOME", filepath.Join(f, "cfg"))
+	m := &model{cfg: &config.Config{}, agent: &agent.Agent{}}
+	m.setUIMode(opencodeMode) // must not panic even though Save fails
+	if m.uiMode != opencodeMode {
+		t.Fatalf("uiMode = %q, want opencode", m.uiMode)
+	}
+}
+
+func TestSidebarView(t *testing.T) {
+	// Plain model: no pricing, no context limit -> the fallback branches.
+	m := &model{agent: &agent.Agent{}, termWidth: sidebarMinWidth}
+	out := m.sidebarView(20)
+	if !strings.Contains(out, "Context") || !strings.Contains(out, "LSP") {
+		t.Fatal("sidebar missing Context/LSP sections")
+	}
+	// clip path: request fewer rows than the content produces
+	if out := m.sidebarView(1); out == "" {
+		t.Fatal("clipped sidebar should still render")
+	}
+
+	// Priced model with a context window -> the ctx% and spend branches.
+	m2 := &model{
+		agent:    &agent.Agent{Model: "m", ContextLimit: 1000},
+		provName: "p",
+		catalogs: map[string]config.Catalog{
+			"p": {Models: []config.ModelInfoLite{{ID: "m", InPrice: 1, OutPrice: 1}}},
+		},
+		termWidth: sidebarMinWidth,
+	}
+	if out := m2.sidebarView(20); !strings.Contains(out, "% used") || !strings.Contains(out, "spent") {
+		t.Fatalf("priced sidebar missing ctx%%/spend: %q", out)
 	}
 }
 
 func TestSetUIModeRoundTrip(t *testing.T) {
-	snapshotStyles(t)
 	t.Setenv("HOME", t.TempDir()) // keep cfg.Save() off the real config
-	m := &model{cfg: &config.Config{}, input: newInput()}
+	m := &model{cfg: &config.Config{}, agent: &agent.Agent{}}
 
 	m.setUIMode(opencodeMode)
 	if m.uiMode != opencodeMode || m.cfg.UIMode != opencodeMode {
@@ -88,9 +132,6 @@ func TestSetUIModeRoundTrip(t *testing.T) {
 	if m.cfgExtra["uiMode"] != opencodeMode {
 		t.Fatalf("cfgExtra not pinned: %v", m.cfgExtra)
 	}
-	if glyphAssistant != "▣ " {
-		t.Fatalf("glyph not swapped: %q", glyphAssistant)
-	}
 
 	m.setUIMode("bogus") // anything not "opencode" reverts to default
 	if m.uiMode != "" || m.cfg.UIMode != "" {
@@ -98,8 +139,5 @@ func TestSetUIModeRoundTrip(t *testing.T) {
 	}
 	if _, ok := m.cfgExtra["uiMode"]; ok {
 		t.Fatalf("cfgExtra still pinned: %v", m.cfgExtra)
-	}
-	if glyphUser != "❯ " {
-		t.Fatalf("glyph not reverted: %q", glyphUser)
 	}
 }

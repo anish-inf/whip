@@ -141,8 +141,9 @@ type model struct {
 	// rewind live-scroll uses it to jump to a message's transcript position.
 	msgBlock []int
 	follow   bool // auto-scroll to bottom on new content
-	width    int
-	height   int
+	width     int // content width: full terminal width, minus the opencode sidebar when it shows
+	height    int
+	termWidth int // full terminal width (opencode mode places the sidebar in the reserved columns)
 
 	busy    bool
 	current string // in-flight partial assistant line
@@ -443,7 +444,7 @@ func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string, ca
 	// keep how detection resolved so /report can name the source
 	m.themeHow = m.applyTheme(cfg.Theme)
 	if cfg.UIMode == opencodeMode {
-		m.applyUIMode(opencodeMode) // opencode render mode: swap palette/glyphs/spinner/input
+		m.applyUIMode(opencodeMode) // opencode render mode: structural layout (sidebar), keeps whip's theme
 	}
 	if m.cfgExtra == nil {
 		m.cfgExtra = map[string]string{}
@@ -814,7 +815,7 @@ func (m *model) seedTranscript(msgs []llm.Message, base int) {
 		switch msg.Role {
 		case "user":
 			bi = len(m.blocks)
-			m.blocks = append(m.blocks, block{kind: blockText, text: youStyle.Render(glyphUser) + linkifyFilePaths(msg.TextContent(), realFileExists)})
+			m.blocks = append(m.blocks, block{kind: blockUser, text: linkifyFilePaths(msg.TextContent(), realFileExists)})
 		case "assistant":
 			if strings.TrimSpace(msg.TextContent()) != "" {
 				bi = len(m.blocks)
@@ -1080,6 +1081,7 @@ const (
 	blockTool                        // raw tool result: collapsed preview, expandable
 	blockToolRun                     // a running tool call: verb line, collapses on completion
 	blockToolQueued                  // a tool call still streaming from the model; replaced by blockToolRun on start
+	blockUser                        // a user turn: opencode mode renders a bordered card, else the "❯ " prefix
 )
 
 // toolPreviewLines is how many lines of a tool result show when collapsed.
@@ -1139,6 +1141,8 @@ func (b *block) renderAt(width int) string {
 // blocks get their marker + indent here so a resize re-renders everything).
 func (b block) render(width int) string {
 	switch b.kind {
+	case blockUser:
+		return wrap(youStyle.Render(glyphUser)+b.text, width)
 	case blockAssistant:
 		w := width - 2 // body indents under the "● " marker
 		if w <= 0 {
@@ -1627,13 +1631,18 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.WindowSizeMsg:
-		resized := msg.Width != m.width // width change → re-wrap the whole transcript
-		m.width, m.height = msg.Width, msg.Height
+		m.termWidth = msg.Width
+		w := msg.Width
+		if m.uiMode == opencodeMode && msg.Width >= sidebarMinWidth {
+			w -= sidebarWidth // reserve columns for the right sidebar
+		}
+		resized := w != m.width // width change → re-wrap the whole transcript
+		m.width, m.height = w, msg.Height
 		// re-anchor the view position: after a resize (and on the first size
 		// at startup) assume the view sits at the bottom — the next View()
 		// computes viewTop = height - viewH from this sentinel.
 		m.viewTop = 1 << 30
-		m.input.SetWidth(msg.Width - 2)
+		m.input.SetWidth(w - 2)
 		if resized {
 			m.refreshVP() // every block re-renders at the new width (floored at minRenderWidth)
 		}
@@ -3432,7 +3441,7 @@ func (m *model) submitTurn(text string, authored bool) (tea.Model, tea.Cmd) {
 		}
 		send(turnDoneMsg{final: final, err: err, at: userMsgIdx, snap: preSnap, clean: workspaceClean()})
 	}()
-	m.append(youStyle.Render(glyphUser) + linkifyFilePaths(text, realFileExists))
+	m.appendRaw(blockUser, linkifyFilePaths(text, realFileExists))
 	if authored {
 		// map the message index to its block for rewind live-scroll
 		for len(m.msgBlock) <= userMsgIdx {
@@ -3856,6 +3865,9 @@ func (m *model) currentView() string {
 // (WindowSizeMsg handler) and the next render re-anchors to the bottom.
 func (m *model) View() string {
 	v := m.viewBody()
+	if m.sidebarVisible() {
+		v = lipgloss.JoinHorizontal(lipgloss.Top, v, m.sidebarView(lipgloss.Height(v)))
+	}
 	if m.height > 0 {
 		m.viewH = lipgloss.Height(v)
 		m.viewTop = max(min(m.viewTop, m.height-m.viewH), 0)
