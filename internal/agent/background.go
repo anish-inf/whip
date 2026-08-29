@@ -262,6 +262,12 @@ func (a *Agent) StartBackground(description, prompt string, o SubModel) *Backgro
 	id := taskSlug(description, taskIDCounter.Add(1))
 	taskCtx, cancel := context.WithCancel(context.Background())
 	sub := a.newSub(o)
+	// Scope the subagent's prompt-cache key to the task so its shorter,
+	// churning context never disturbs the parent's cached prefix (and two
+	// concurrent subagents don't collide on the session key).
+	if sid := a.SessionIDValue(); sid != "" {
+		sub.Client.CacheKey = sid + "/" + id
+	}
 	t := &BackgroundTask{
 		ID: id, Description: description, Prompt: prompt,
 		Status: TaskRunning, StartedAt: time.Now(),

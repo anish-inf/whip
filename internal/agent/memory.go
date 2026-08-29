@@ -12,15 +12,32 @@ import (
 )
 
 // SessionID scopes the memory tools' per-session file. Set by the TUI once a
-// session exists; "" leaves only the installation scope.
-func (a *Agent) SetSessionID(id string) { a.sessionID = id }
+// session exists; "" leaves only the installation scope. It also keys the
+// provider prompt cache (Client.CacheKey): a stable session id lets the
+// provider reuse the cached conversation prefix across turns. The id is
+// stored atomically — the TUI sets it on the UI goroutine while the subagent
+// tool reads it on a worker goroutine.
+func (a *Agent) SetSessionID(id string) {
+	a.sessionID.Store(&id)
+	if a.Client != nil {
+		a.Client.CacheKey = id
+	}
+}
+
+// SessionIDValue returns the current session id ("" when none).
+func (a *Agent) SessionIDValue() string {
+	if p := a.sessionID.Load(); p != nil {
+		return *p
+	}
+	return ""
+}
 
 // memoryTools registers remember/forget. Both scopes are plain markdown files
 // the user can edit by hand; forget strikes an entry ("- [x]") instead of
 // deleting so the file keeps an audit trail.
 func memoryTools(a *Agent) []tools.Tool {
 	scopes := func() (installation, session memory.Scope) {
-		return memory.Installation(), memory.Session(a.sessionID)
+		return memory.Installation(), memory.Session(a.SessionIDValue())
 	}
 	resolve := func(name string) (memory.Scope, error) {
 		inst, sess := scopes()
