@@ -119,7 +119,7 @@ type Agent struct {
 	todosMu sync.Mutex
 	onTodos func(items []Todo)
 
-	sessionID string // scopes the per-session memory file (SetSessionID)
+	sessionID atomic.Pointer[string] // scopes the per-session memory file + keys the prompt cache (SetSessionID)
 
 	// toolsMu guards mcpTools: the MCP manager's OnChange can fire (server
 	// settled) while a Turn is streaming, and Turn reads the tool set per

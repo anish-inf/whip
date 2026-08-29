@@ -82,3 +82,38 @@ func TestStartBackgroundSlugID(t *testing.T) {
 		t.Fatalf("task id should be a description slug, got %q", task.ID)
 	}
 }
+
+// StartBackground attributes the transcript to the SUBAGENT's model, not the
+// parent's: a TaskDefault or per-task override routes the sub to a different
+// model, and t.SubModel must record that resolved id so the persisted
+// transcript isn't mislabeled with the parent's model.
+func TestStartBackgroundCapturesSubModel(t *testing.T) {
+	srv, _ := modelRecorder(t, "ok")
+	defer srv.Close()
+
+	// Parent on "parent-m"; TaskDefault routes subs to "sub-default-m".
+	parent := New(llm.New(srv.URL, "k"), "parent-m", 100, "sys")
+	parent.TaskDefault = SubModel{Client: llm.New(srv.URL, "k"), Model: "sub-default-m"}
+
+	// Default route → the sub runs the TaskDefault model.
+	def := parent.StartBackground("uses default", "p", SubModel{})
+	<-def.Done
+	if def.SubModel != "sub-default-m" {
+		t.Fatalf("default route: SubModel = %q, want sub-default-m", def.SubModel)
+	}
+
+	// Per-task override → the sub runs the override model.
+	ov := parent.StartBackground("uses override", "p", SubModel{Client: llm.New(srv.URL, "k"), Model: "sub-override-m"})
+	<-ov.Done
+	if ov.SubModel != "sub-override-m" {
+		t.Fatalf("override route: SubModel = %q, want sub-override-m", ov.SubModel)
+	}
+
+	// No TaskDefault and no override → falls through to the parent's model.
+	bare := New(llm.New(srv.URL, "k"), "parent-m", 100, "sys")
+	own := bare.StartBackground("uses parent", "p", SubModel{})
+	<-own.Done
+	if own.SubModel != "parent-m" {
+		t.Fatalf("parent route: SubModel = %q, want parent-m", own.SubModel)
+	}
+}

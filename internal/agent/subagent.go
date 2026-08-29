@@ -211,5 +211,9 @@ func (a *Agent) FollowupTask(ctx context.Context, id, text string, ev Events) (s
 	if t.sub == nil {
 		return "", fmt.Errorf("subagent %s is not live (restored from a previous session)", id)
 	}
-	return t.sub.Turn(ctx, text, FanIn(ev, Events{OnUsage: a.AddUsage}))
+	out, err := t.sub.Turn(ctx, text, FanIn(ev, Events{OnUsage: a.AddUsage}))
+	// The follow-up grew the sub's conversation; refresh the persisted
+	// transcript so a resume sees it (no-op without a store).
+	r.refreshTranscript(id, t.sub)
+	return out, err
 }

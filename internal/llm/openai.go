@@ -326,6 +326,11 @@ type Client struct {
 	// OnRetry, when set, is invoked before each retry of a transient request
 	// failure. Optional — nil means silent retries.
 	OnRetry func(RetryEvent)
+	// CacheKey is stamped as prompt_cache_key on every request (see
+	// Request.PromptCacheKey). Set once per session by the caller; subagents
+	// get their own key so their shorter contexts don't churn the parent's
+	// cached prefix. Empty disables the field.
+	CacheKey string
 }
 
 // attempts returns the total try count (initial + retries) for this client.
@@ -354,10 +359,17 @@ type Request struct {
 	// Temperature and TopP are optional per-model sampling knobs. Pointers so
 	// 0.0 (a legitimate value) is distinguishable from unset; nil omits the
 	// field from the request, preserving provider defaults.
-	Temperature   *float64 `json:"temperature,omitempty"`
-	TopP          *float64 `json:"top_p,omitempty"`
-	Stream        bool     `json:"stream"`
-	StreamOptions *struct {
+	Temperature *float64 `json:"temperature,omitempty"`
+	TopP        *float64 `json:"top_p,omitempty"`
+	Stream      bool     `json:"stream"`
+	// PromptCacheKey keys the provider's automatic prompt-prefix cache
+	// (OpenAI prompt_cache_key; openrouter/xai/azure/mistral honor the same
+	// field). A stable per-session key lets the provider reuse the cached
+	// conversation prefix across turns, so intra-turn tool round-trips hit
+	// cache instead of reprocessing the whole prompt. Empty omits the field.
+	// Providers that don't recognize it ignore unknown top-level fields.
+	PromptCacheKey string `json:"prompt_cache_key,omitempty"`
+	StreamOptions  *struct {
 		IncludeUsage bool `json:"include_usage"`
 	} `json:"stream_options,omitempty"`
 }
@@ -626,6 +638,9 @@ func (c *Client) Stream(ctx context.Context, req Request, onText, onThink func(s
 		IncludeUsage bool `json:"include_usage"`
 	}{IncludeUsage: true}
 	req.Messages = repairToolHistory(stripAuthored(req.Messages))
+	if req.PromptCacheKey == "" {
+		req.PromptCacheKey = c.CacheKey
+	}
 	body, err := json.Marshal(req)
 	if err != nil {
 		return Message{}, Usage{}, err

@@ -751,3 +751,44 @@ func TestSendTaskMsgNeverBlocksWorker(t *testing.T) {
 		t.Fatal("sendTaskMsg blocked on an undrained program — it must detach the Send")
 	}
 }
+
+// A settled subagent's transcript persists as an attributed session; after a
+// fresh process resumes the parent, opening the restored task replays the full
+// transcript (read-only) instead of just the bare report.
+func TestRestoredTaskReplaysPersistedTranscript(t *testing.T) {
+	srv := sseTextServer(t, "exploration findings here")
+	defer srv.Close()
+	m := tasksModelStore(t, srv.URL)
+	m.wireTasks()
+
+	id, err := m.store.Create("/tmp", "m", "p")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.sessionID = id
+	m.agent.Tasks().SetSessionID(id)
+
+	task := m.agent.StartBackground("probe the tree", "find the files", agent.SubModel{})
+	waitSettled(t, task)
+
+	// The settle persisted the transcript as an attributed session row.
+	if _, err := m.store.SubagentTranscript(id, task.ID); err != nil {
+		t.Fatalf("transcript should persist on settle: %v", err)
+	}
+
+	// Fresh process: new agent, resume the parent session.
+	m.agent = agent.New(llm.New(srv.URL, "k"), "m", 100, "sys")
+	if err := m.resume(id); err != nil {
+		t.Fatal(err)
+	}
+	m.openTask(task.ID)
+	if m.taskVP.live {
+		t.Fatal("a restored task has no live stream")
+	}
+	view := stripAll(m.taskViewView())
+	for _, want := range []string{"find the files", "exploration findings here"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("restored task view should replay the persisted transcript, missing %q:\n%s", want, view)
+		}
+	}
+}
