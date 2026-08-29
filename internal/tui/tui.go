@@ -181,15 +181,22 @@ type model struct {
 
 	pendingForkID string // busy-forked copy awaiting the turn's end to switch into ("" = none)
 
-	mouseOn      bool       // runtime mouse-capture state (toggle with /mouse)
-	sel          *selection // in-flight/last drag selection over the transcript
-	selDragX     int        // last drag pointer position (edge auto-scroll re-checks it)
-	selDragY     int
-	vpLead       int    // top blank rows viewportView last dropped (selection row mapping)
-	viewTop      int    // screen row of the view's first line (View tracks it; mouse Y is absolute)
-	viewH        int    // height of the last rendered view
-	themeHow     string // how auto theme detection resolved (env var, OSC query, …) — captured at startup/theme change for /report; never re-queried
-	compactModel string // config model name for compaction summaries; "" = the built-in default
+	mouseOn  bool       // runtime mouse-capture state (toggle with /mouse)
+	sel      *selection // in-flight/last drag selection over the transcript
+	selDragX int        // last drag pointer position (edge auto-scroll re-checks it)
+	selDragY int
+	// Input box selection tracking: View records the input's absolute screen
+	// rows so drag-select can hit-test/extract/highlight it. inputBodyOff is
+	// the line offset within viewBody where the input starts; inputTop is the
+	// absolute screen row (viewTop + inputBodyOff), -1 when hidden.
+	inputBodyOff int
+	inputTop     int
+	inputLines   []string // the input box's rendered lines, ANSI-stripped
+	vpLead       int      // top blank rows viewportView last dropped (selection row mapping)
+	viewTop      int      // screen row of the view's first line (View tracks it; mouse Y is absolute)
+	viewH        int      // height of the last rendered view
+	themeHow     string   // how auto theme detection resolved (env var, OSC query, …) — captured at startup/theme change for /report; never re-queried
+	compactModel string   // config model name for compaction summaries; "" = the built-in default
 	compactProv  string
 	// updateLatest is a pending newer release tag ("" when none), picked up
 	// from update.Pending at startup; the notice it renders is durable, so a
@@ -3903,6 +3910,23 @@ func (m *model) View() string {
 		m.viewH = lipgloss.Height(v)
 		m.viewTop = max(min(m.viewTop, m.height-m.viewH), 0)
 	}
+	// Record the input box's absolute screen rows for drag-select. The input is
+	// hidden during interactive bash (iactive), so there's nothing to select.
+	if m.iactive != nil || m.height == 0 {
+		m.inputTop = -1
+		m.inputLines = nil
+	} else {
+		m.inputTop = m.viewTop + m.inputBodyOff
+		iv := m.input.View()
+		if m.namePrompt != nil && m.namePrompt.mask {
+			iv = m.namePrompt.label + " ┃ " + m.namePrompt.maskedValue(m.input.Value())
+		}
+		raw := strings.Split(iv, "\n")
+		m.inputLines = make([]string, len(raw))
+		for i, ln := range raw {
+			m.inputLines[i] = strings.TrimRight(ansi.Strip(ln), " \t")
+		}
+	}
 	return v
 }
 
@@ -4003,6 +4027,9 @@ func (m *model) viewBody() string {
 	if m.rew != nil {
 		b.WriteString(m.rewindView() + "\n\n")
 	}
+	// Record where the input box starts (line offset within this viewBody) so
+	// View can convert it to an absolute screen row for drag-select hit-testing.
+	m.inputBodyOff = strings.Count(b.String(), "\n")
 	if m.iactive == nil {
 		if m.namePrompt != nil {
 			b.WriteString(m.namePrompt.label + " ")
@@ -4010,12 +4037,12 @@ func (m *model) viewBody() string {
 				// Secrets never echo: render the mask instead of the input's
 				// live view (which would show the key in the clear). The "┃ "
 				// prompt matches how the textarea renders its own first line.
-				b.WriteString("┃ " + m.namePrompt.maskedValue(m.input.Value()))
+				b.WriteString(m.highlightInput("┃ " + m.namePrompt.maskedValue(m.input.Value())))
 			} else {
-				b.WriteString(m.input.View())
+				b.WriteString(m.highlightInput(m.input.View()))
 			}
 		} else {
-			b.WriteString(m.input.View())
+			b.WriteString(m.highlightInput(m.input.View()))
 		}
 	}
 	if m.quit1 {
