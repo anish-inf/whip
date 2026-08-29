@@ -56,6 +56,12 @@ jobs:
       - name: go vet
         run: go vet ./...
 
+      # Custom analyzer: catches a synchronous tea.Program.Send reachable from
+      # the TUI event loop (the frozen-ctrl+p deadlock). No off-the-shelf
+      # linter covers it; it lives in ./cmd/whipvet.
+      - name: whipvet (TUI deadlock analyzer)
+        run: go run ./cmd/whipvet ./...
+
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v9
         with:

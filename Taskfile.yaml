@@ -56,6 +56,7 @@ tasks:
           echo "needs gofmt -s:"; echo "$unformatted"; exit 1
         fi
       - go vet ./...
+      - go run ./cmd/whipvet ./...
       - go test ./...
 
   lint:
@@ -95,9 +96,10 @@ tasks:
       - gofmt -s -w .
 
   vet:
-    desc: Vet code
+    desc: Vet code (go vet + whipvet, the TUI event-loop deadlock analyzer)
     cmds:
       - go vet ./...
+      - go run ./cmd/whipvet ./...
 
   tidy:
     desc: Tidy go.mod

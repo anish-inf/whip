@@ -2,6 +2,7 @@
 package tui
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -278,15 +279,31 @@ var (
 )
 
 // Run starts the interactive session. It returns the id of the session that
-// was active on exit ("" if nothing was said).
-func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string, cautious bool) (string, error) {
+// was active on exit ("" if nothing was said). firstRun reports the config
+// file did not exist at startup (the caller checks config.Exists before
+// config.Load creates it) and triggers the one-time setup wizard.
+func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string, cautious, firstRun bool) (string, error) {
+	// One shared stdin reader for the pre-TUI prompts: a bufio.Reader reads
+	// ahead, so separate readers for the trust gate and the setup wizard would
+	// lose buffered answers (a pasted "y\n2\n…\n" answers both).
+	stdinR := bufio.NewReader(os.Stdin)
+
 	// Trust gate first: before whip reads a single file, ask whether this
 	// folder's contents may steer the model. Persisted per absolute path in
 	// ~/.whip/trusted.json (claude-code's per-project trust dialog).
-	if ok, err := checkTrust(); err != nil {
+	if ok, err := checkTrust(stdinR); err != nil {
 		return "", err
 	} else if !ok {
 		return "", errors.New("folder not trusted")
+	}
+
+	// First run only: the setup wizard (provider, thinking display, MCP
+	// imports) before the TUI takes the terminal. Skipped silently when stdin
+	// isn't a terminal — headless launches keep the defaults.
+	if firstRun {
+		if err := setupWizard(cfg, stdinR); err != nil {
+			return "", err
+		}
 	}
 
 	ag, mn, pn, err := buildAgentWithRefresh(cfg, modelName, provName, sysPrompt)
@@ -342,17 +359,7 @@ func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string, ca
 		if len(merged) > 0 || len(disc.Blocked) > 0 || len(mcpErrs) > 0 {
 			m.mcpMgr = mcp.NewManager(merged)
 			m.mcpMgr.SetBlocked(disc.Blocked)
-			// MCP connects settle in the background; push each new tool set
-			// into the CURRENT agent (mutex-guarded on the agent side) so
-			// servers that connect after turn 1 show up without a restart.
-			// The closure reads m.agent at call time: resume/model-switch
-			// replace the agent, and wireTasks re-points the manager at it.
-			m.mcpMgr.SetOnChange(func() {
-				m.agent.SetMCPTools(m.mcpMgr.Tools())
-				if m.prog != nil { // nil in headless tests
-					m.prog.Send(mcpStatusMsg{})
-				}
-			})
+			m.mcpMgr.SetOnChange(m.mcpOnChange())
 			m.mcpMgr.Start(context.Background())
 			ag.SetMCPTools(m.mcpMgr.Tools())
 			for src, derr := range mcpErrs {
@@ -631,7 +638,7 @@ func refreshCatalogs(cfg *config.Config, force bool) map[string]config.Catalog {
 func (m *model) fetchCatalogs(force bool) {
 	cats := refreshCatalogs(m.cfg, force)
 	if m.prog != nil { // nil in tests that drive the command dispatch directly
-		m.prog.Send(catalogsMsg(cats))
+		m.prog.Send(catalogsMsg(cats)) //nolint:uilock // background: fetchCatalogs is always `go`-launched
 	}
 }
 
@@ -2137,8 +2144,18 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// An MCP server changed state. Announce each server's FIRST settle in
 		// the transcript (one line, once per session per server) so arrivals
 		// and failures are visible without typing /mcp — later transitions
-		// (auto-reconnect, toggles) stay quiet to avoid flapping noise.
+		// (auto-reconnect, toggles) stay quiet to avoid flapping noise. An open
+		// MCPs palette panel rebuilds its rows so a background settle ("◌
+		// connecting…" → "● N tools") shows without the user re-opening it.
 		if m.mcpMgr != nil {
+			if m.palette != nil {
+				if pp := m.palette.top(); pp != nil && pp.kind == panelMCP {
+					pp.mcps = m.buildMCPRows()
+					if pp.midx >= len(pp.mcps) {
+						pp.midx = len(pp.mcps) - 1
+					}
+				}
+			}
 			if m.mcpSeen == nil {
 				m.mcpSeen = map[string]bool{}
 			}
@@ -3356,7 +3373,7 @@ func (m *model) submitTurn(text string, authored bool) (tea.Model, tea.Cmd) {
 	// callbacks drop their messages instead of panicking on a nil program
 	send := func(msg tea.Msg) {
 		if p != nil {
-			p.Send(msg)
+			p.Send(msg) //nolint:uilock // background: send runs on the agent Turn goroutine (go func at the caller)
 		}
 	}
 

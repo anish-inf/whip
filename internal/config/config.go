@@ -303,6 +303,52 @@ func path() (string, error) {
 	return filepath.Join(dir, "config.json"), nil
 }
 
+// Exists reports whether the config file is already on disk. Load creates it
+// when missing, so callers that want to detect a first run (the setup wizard)
+// must check Exists before Load.
+func Exists() bool {
+	p, err := path()
+	if err != nil {
+		return false
+	}
+	_, err = os.Stat(p)
+	return err == nil
+}
+
+// setupDonePath is the marker the first-run wizard leaves when it completes.
+// The wizard triggers on "no config file AND no marker": any whip subcommand
+// (auth/run/mcp/…) that calls Load on a fresh install creates the config
+// without running the wizard, and the marker keeps that from permanently
+// consuming the first run.
+func setupDonePath() (string, error) {
+	dir, err := Dir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "setup.done"), nil
+}
+
+// SetupDone reports whether the first-run wizard has completed (or a previous
+// version ran enough times to have one).
+func SetupDone() bool {
+	p, err := setupDonePath()
+	if err != nil {
+		return true // can't stat the marker: don't risk a surprise wizard
+	}
+	_, err = os.Stat(p)
+	return err == nil
+}
+
+// MarkSetupDone leaves the wizard-completed marker. Best-effort: a failed
+// write just means the wizard offers again next launch.
+func MarkSetupDone() {
+	p, err := setupDonePath()
+	if err != nil {
+		return
+	}
+	_ = os.WriteFile(p, []byte("ok\n"), 0o600)
+}
+
 // fingerprint summarizes a config for the operation log: enough to spot a
 // clobbering write (providers/models collapsing, fixture values appearing)
 // without logging secrets.

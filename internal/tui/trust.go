@@ -14,7 +14,11 @@ import (
 // on the terminal (plain stdin/stdout — this runs before the TUI starts):
 // Enter or "y" records the path; anything else declines. When stdin isn't
 // a terminal (piped run, tests), we can't ask — decline safely.
-func checkTrust() (bool, error) {
+//
+// r is the caller's shared stdin reader: a bufio.Reader reads ahead, so a
+// fresh one here would swallow the first-run wizard's answers when the user
+// (or a paste) supplies more than one line.
+func checkTrust(r *bufio.Reader) (bool, error) {
 	wd, err := os.Getwd()
 	if err != nil {
 		return false, err
@@ -33,7 +37,6 @@ func checkTrust() (bool, error) {
 	fmt.Fprintln(os.Stderr, "With your permission whip may execute files in this folder. Executing untrusted code is unsafe.")
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprint(os.Stderr, "Proceed? [Y/n] ")
-	r := bufio.NewReader(os.Stdin)
 	ans, err := r.ReadString('\n')
 	if err != nil {
 		return false, err

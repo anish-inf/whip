@@ -1,7 +1,9 @@
 package tui
 
 import (
+	"bufio"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/context-labs/whip/internal/config"
@@ -15,7 +17,7 @@ func TestTrustGate(t *testing.T) {
 	if err := config.Trust(wd); err != nil {
 		t.Fatal(err)
 	}
-	ok, err := checkTrust()
+	ok, err := checkTrust(bufio.NewReader(strings.NewReader("")))
 	if err != nil || !ok {
 		t.Fatalf("trusted cwd should pass: %v %v", ok, err)
 	}
