@@ -3948,6 +3948,9 @@ func (m *model) View() string {
 		gap := strings.Repeat(" ", opencodeRightGap) // breathing room between the panels
 		v = lipgloss.JoinHorizontal(lipgloss.Top, v, gap, m.sidebarView(lipgloss.Height(v)))
 	}
+	if m.uiMode == opencodeMode && m.palette != nil {
+		v = m.ocOverlay(v) // Commands dialog floats over the dimmed session
+	}
 	if m.height > 0 {
 		m.viewH = lipgloss.Height(v)
 		if m.uiMode == opencodeMode {
@@ -3996,7 +3999,9 @@ func (m *model) viewBody() string {
 	if m.uiMode != opencodeMode { // opencode has no top header bar
 		b.WriteString(dimStyle.Render(left+strings.Repeat(" ", pad)) + toolStyle.Render(right) + "\n")
 	}
-	if m.palette != nil {
+	if m.palette != nil && m.uiMode != opencodeMode {
+		// opencode mode renders the session as usual and View() overlays the
+		// Commands dialog on top of the dimmed frame (ocOverlay)
 		b.WriteString(m.paletteView())
 		return b.String()
 	}

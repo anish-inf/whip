@@ -80,41 +80,42 @@ func TestStartupReportUnknownBgNotice(t *testing.T) {
 	}
 }
 
-func TestOpencodePaletteView(t *testing.T) {
-	m := &model{width: 80}
+func TestOcDialogRows(t *testing.T) {
+	m := &model{width: 80, cfg: &config.Config{}} // cfg: the theme sub-panel reads cfg.Theme
 	m.palette = &palette{
 		items: []paletteItem{
 			{title: "Model", category: "Agent", dynHint: func(*model) string { return "/model" }},
 			{title: "Theme", category: "Display"},
 		},
 	}
-	out := m.opencodePaletteView()
+	out := strings.Join(m.ocDialogRows(), "\n")
 	for _, want := range []string{"Commands", "esc", "Search", "Agent", "Display", "Model", "/model", "Theme"} {
 		if !strings.Contains(out, want) {
-			t.Fatalf("palette view missing %q:\n%s", want, out)
+			t.Fatalf("dialog missing %q:\n%s", want, out)
+		}
+	}
+	// every row is exactly the dialog width
+	for i, r := range m.ocDialogRows() {
+		if lipgloss.Width(r) != 64 {
+			t.Fatalf("row %d width = %d, want 64", i, lipgloss.Width(r))
 		}
 	}
 	// filter typed: replaces the Search placeholder
 	m.palette.filter = "the"
-	if out := m.opencodePaletteView(); !strings.Contains(out, "the") || strings.Contains(out, "Search") {
+	if out := strings.Join(m.ocDialogRows(), "\n"); !strings.Contains(out, "the") || strings.Contains(out, "Search") {
 		t.Fatalf("filter should replace Search placeholder:\n%s", out)
 	}
 	// no matches
 	m.palette.items = nil
-	if out := m.opencodePaletteView(); !strings.Contains(out, "No results found") {
+	if out := strings.Join(m.ocDialogRows(), "\n"); !strings.Contains(out, "No results found") {
 		t.Fatal("empty palette should say No results found")
 	}
-	// short terminal: the view must never exceed m.height (a taller view would
-	// scroll the frame and shift the sidebar), and full-height when shorter
-	m.height = 5 // shorter than the dialog: top margin drops, bottom clips
-	if out := m.opencodePaletteView(); len(strings.Split(out, "\n")) != 5 {
-		t.Fatalf("view height = %d lines, want clamped to 5", len(strings.Split(out, "\n")))
+	// sub-panel renders inside the box with a breadcrumb header
+	m.palette.stack = []*ppanel{{kind: panelTheme, title: "Theme", list: []string{"auto", "light", "dark"}}}
+	if out := strings.Join(m.ocDialogRows(), "\n"); !strings.Contains(out, "Commands › Theme") {
+		t.Fatalf("sub-panel missing breadcrumb:\n%s", out)
 	}
-	m.height = 40
-	if out := m.opencodePaletteView(); len(strings.Split(out, "\n")) != 40 {
-		t.Fatalf("view height = %d lines, want padded to 40", len(strings.Split(out, "\n")))
-	}
-	m.height = 0
+	m.palette.stack = nil
 
 	// narrow terminal: the left/right gap clamps to 1 instead of going negative
 	m.width = 20
@@ -123,18 +124,39 @@ func TestOpencodePaletteView(t *testing.T) {
 		{title: "A very long item title here", category: "Agent", dynHint: func(*model) string { return "/hint" }},
 	}
 	m.palette.filter = ""
-	if out := m.opencodePaletteView(); !strings.Contains(out, "Commands") {
-		t.Fatal("narrow palette should still render")
+	if out := strings.Join(m.ocDialogRows(), "\n"); !strings.Contains(out, "Commands") {
+		t.Fatal("narrow dialog should still render")
 	}
 }
 
-func TestPaletteViewRoutesToOpencode(t *testing.T) {
-	old := ocActive
-	t.Cleanup(func() { ocActive = old })
-	ocActive = true
-	m := &model{width: 80, palette: &palette{items: []paletteItem{{title: "Model", category: "Agent"}}}}
-	if out := m.paletteView(); !strings.Contains(out, "Commands") || !strings.Contains(out, "esc") {
-		t.Fatalf("opencode mode should render the Commands dialog:\n%s", out)
+func TestOcOverlay(t *testing.T) {
+	m := &model{width: 80, termWidth: 80, height: 30}
+	m.palette = &palette{items: []paletteItem{{title: "Model", category: "Agent"}}}
+	backdrop := strings.TrimSuffix(strings.Repeat("session line here\n", 30), "\n")
+	out := m.ocOverlay(backdrop)
+	if !strings.Contains(out, "Commands") {
+		t.Fatal("overlay missing dialog")
+	}
+	if !strings.Contains(out, "\x1b[2m") {
+		t.Fatal("backdrop should be dimmed (SGR 2)")
+	}
+	if got := len(strings.Split(out, "\n")); got != 30 {
+		t.Fatalf("overlay changed line count: %d, want 30", got)
+	}
+	// dialog taller than the backdrop: clipped, line count preserved
+	short := "one\ntwo\nthree"
+	if got := len(strings.Split(m.ocOverlay(short), "\n")); got != 3 {
+		t.Fatalf("clipped overlay lines = %d, want 3", got)
+	}
+}
+
+func TestOcDimLine(t *testing.T) {
+	if got := ocDimLine(""); got != "" {
+		t.Fatalf("empty line should stay empty, got %q", got)
+	}
+	got := ocDimLine("a\x1b[0mb")
+	if !strings.HasPrefix(got, "\x1b[2m") || !strings.Contains(got, "\x1b[0m\x1b[2m") {
+		t.Fatalf("dim not re-applied after reset: %q", got)
 	}
 }
 

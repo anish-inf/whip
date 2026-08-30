@@ -8,6 +8,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/context-labs/whip/internal/agent"
 	"github.com/context-labs/whip/internal/lsp"
 )
@@ -377,10 +378,11 @@ func (m *model) opencodeStatus() string {
 }
 
 // opencodePaletteView renders the ctrl+p command list as opencode's Commands
-// dialog: a centered panel on the panel background with a bold "Commands"
-// header + right-aligned esc, a Search line, accent category headers, and
-// name-left / hint-right rows; the selected row is a full-width primary fill.
-func (m *model) opencodePaletteView() string {
+// dialog rows: a panel on the panel background with a bold "Commands" header +
+// right-aligned esc, a Search line, accent category headers, and name-left /
+// hint-right rows; the selected row is a full-width primary fill. Each row is
+// exactly w cells wide — ocOverlay splices them over the dimmed session.
+func (m *model) ocDialogRows() []string {
 	p := m.palette
 	bg := ocPanelBg()
 	w := min(64, max(m.width-2, 20))
@@ -398,6 +400,15 @@ func (m *model) opencodePaletteView() string {
 		return ocPadTo(pnl.Render("  ")+left+pnl.Render(strings.Repeat(" ", gap))+right, w, bg)
 	}
 	blank := ocPadTo("", w, bg)
+
+	// a sub-panel (theme picker, model list, …) renders inside the same box
+	if pp := p.top(); pp != nil {
+		rows := []string{blank, lr(head.Render("Commands › "+pp.title), muted.Render("esc")), blank}
+		for _, ln := range strings.Split(strings.TrimRight(m.panelView(pp), "\n"), "\n") {
+			rows = append(rows, ocPadTo(pnl.Render("  ")+ln, w, bg))
+		}
+		return append(rows, blank)
+	}
 
 	rows := []string{blank, lr(head.Render("Commands"), muted.Render("esc")), blank}
 	if p.filter == "" {
@@ -432,35 +443,42 @@ func (m *model) opencodePaletteView() string {
 	if len(p.items) == 0 {
 		rows = append(rows, lr(muted.Render("No results found"), ""))
 	}
-	rows = append(rows, blank)
+	return append(rows, blank)
+}
 
-	// center the panel; two blank rows of top margin like opencode's modal —
-	// shrunk (then dropped) when the dialog wouldn't fit the screen otherwise
-	margin := strings.Repeat(" ", max((m.width-w)/2, 0))
-	topPad := 2
-	if m.height > 0 && len(rows)+topPad > m.height {
-		topPad = max(m.height-len(rows), 0)
+// ocDimLine renders a backdrop line faint (SGR 2), re-applying the faint after
+// every full reset inside the line so embedded styles can't undo the dim.
+func ocDimLine(s string) string {
+	if s == "" {
+		return s
 	}
-	lines := make([]string, topPad)
-	for _, r := range rows {
-		lines = append(lines, margin+r)
+	return "\x1b[2m" + strings.ReplaceAll(s, "\x1b[0m", "\x1b[0m\x1b[2m") + "\x1b[0m"
+}
+
+// ocOverlay draws the Commands dialog OVER the live session, opencode-style:
+// the whole frame keeps rendering behind the modal, dimmed, with the dialog
+// rows spliced in centered (upper third). The dialog is clipped to the screen
+// height so the frame never scrolls (which would shift the sidebar).
+func (m *model) ocOverlay(v string) string {
+	rows := m.ocDialogRows() // never empty: the dialog chrome rows are unconditional
+	lines := strings.Split(v, "\n")
+	w := lipgloss.Width(rows[0])
+	x := max((max(m.termWidth, w)-w)/2, 0)
+	if len(rows) > len(lines) {
+		rows = rows[:len(lines)] // ponytail: bottom-clip; scroll-follow selection if lists outgrow screens
 	}
-	// Fill the main column completely: pad to the full height and pad every
-	// line to the full width, so the sidebar keeps its exact position and
-	// height while the dialog is open (a narrower/shorter view would pull the
-	// JoinHorizontal-ed sidebar left and truncate its column). A dialog taller
-	// than the screen is clipped at the bottom — the view must never exceed
-	// the screen or the whole frame scrolls and shifts the sidebar.
-	for len(lines) < m.height {
-		lines = append(lines, "")
-	}
-	if m.height > 0 && len(lines) > m.height {
-		lines = lines[:m.height] // ponytail: bottom-clip; scroll-follow selection if lists outgrow screens
-	}
+	y := max((len(lines)-len(rows))/3, 0)
 	for i, l := range lines {
-		if pad := m.width - lipgloss.Width(l); pad > 0 {
-			lines[i] = l + strings.Repeat(" ", pad)
+		l = ocDimLine(l)
+		if i >= y && i < y+len(rows) {
+			left := ansi.Truncate(l, x, "")
+			if pad := x - lipgloss.Width(left); pad > 0 {
+				left += strings.Repeat(" ", pad)
+			}
+			right := ansi.TruncateLeft(l, x+w, "")
+			l = left + "\x1b[0m" + rows[i-y] + "\x1b[0m" + right
 		}
+		lines[i] = l
 	}
 	return strings.Join(lines, "\n")
 }

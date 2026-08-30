@@ -780,9 +780,6 @@ func prevEffort(levels []string, cur string) string {
 // category-grouped rows with dimmed hints. A sub-panel replaces the list.
 func (m *model) paletteView() string {
 	p := m.palette
-	if ocActive && p.top() == nil {
-		return m.opencodePaletteView() // opencode mode: the Commands dialog look
-	}
 	var b strings.Builder
 	title := " Commands"
 	if pp := p.top(); pp != nil {
