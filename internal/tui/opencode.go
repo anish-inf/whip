@@ -70,6 +70,29 @@ func ocPadTo(content string, width int, bg lipgloss.TerminalColor) string {
 	return content
 }
 
+// ocOnBg lays a pre-styled line ONTO the box background: the line's inner
+// styles close with full resets, which drop back to the terminal-default
+// background and punch bright chips through the panel. Re-open the box bg at
+// the start and after every reset.
+func ocOnBg(ln string, bg lipgloss.TerminalColor) string {
+	seq := bgSeqOf(bg)
+	if seq == "" || ln == "" {
+		return ln
+	}
+	return seq + strings.ReplaceAll(ln, "\x1b[0m", "\x1b[0m"+seq) + "\x1b[0m"
+}
+
+// bgSeqOf extracts the raw SGR sequence that opens the given background
+// ("" when the color is a no-op, e.g. NoColor on an unknown theme).
+func bgSeqOf(bg lipgloss.TerminalColor) string {
+	r := lipgloss.NewStyle().Background(bg).Render("x")
+	i := strings.IndexByte(r, 'x')
+	if i <= 0 {
+		return ""
+	}
+	return r[:i]
+}
+
 // ocThemeKnown reports whether whip resolved the terminal background — glyph
 // art that depends on a bg-matched color (the prompt's ▀ shadow) must skip
 // rendering when it's unknown, or it draws in the default fg (a black bar on a
@@ -461,7 +484,7 @@ func (m *model) ocDialogRows() []string {
 	if pp := p.top(); pp != nil {
 		rows := []string{blank, lr(head.Render("Commands › "+pp.title), muted.Render("esc")), blank}
 		for _, ln := range strings.Split(strings.TrimRight(m.panelView(pp), "\n"), "\n") {
-			rows = append(rows, ocPadTo(pnl.Render("  ")+ln, w, bg))
+			rows = append(rows, ocPadTo(pnl.Render("  ")+ocOnBg(ln, bg), w, bg))
 		}
 		return append(rows, blank)
 	}

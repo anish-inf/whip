@@ -14,6 +14,7 @@ import (
 	"github.com/context-labs/whip/internal/llm"
 	"github.com/context-labs/whip/internal/lsp"
 	"github.com/context-labs/whip/internal/session"
+	"github.com/muesli/termenv"
 )
 
 func TestOpencodeLogo(t *testing.T) {
@@ -437,6 +438,91 @@ func TestOcRecalcWidth(t *testing.T) {
 	}
 	m.termWidth = 0
 	m.ocRecalcWidth() // no size yet: no-op
+}
+
+func TestOcOnBg(t *testing.T) {
+	old := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.TrueColor) // tests have no TTY: force colors on so Render emits SGRs
+	t.Cleanup(func() { lipgloss.SetColorProfile(old) })
+	bg := lipgloss.Color("#141414")
+	ln := "a\x1b[0mb"
+	got := ocOnBg(ln, bg)
+	seq := bgSeqOf(bg)
+	if seq == "" {
+		t.Fatal("bgSeqOf must produce a sequence for a concrete color")
+	}
+	if !strings.HasPrefix(got, seq) || !strings.Contains(got, "\x1b[0m"+seq) {
+		t.Fatalf("bg not re-opened after reset: %q", got)
+	}
+	// no-op cases: empty line, colorless bg
+	if ocOnBg("", bg) != "" {
+		t.Fatal("empty line must pass through")
+	}
+	if got := ocOnBg("x", lipgloss.NoColor{}); got != "x" {
+		t.Fatalf("NoColor must pass through, got %q", got)
+	}
+}
+
+func TestThemeSync(t *testing.T) {
+	mdMu.Lock()
+	sl, sk := mdLight, mdKnown
+	mdMu.Unlock()
+	oldCache := bgCache
+	t.Cleanup(func() {
+		mdMu.Lock()
+		mdLight, mdKnown = sl, sk
+		mdMu.Unlock()
+		bgCache = oldCache
+	})
+	mdMu.Lock()
+	mdLight, mdKnown = true, true // currently light
+	mdMu.Unlock()
+
+	m := &model{cfg: &config.Config{}, input: newInput()}
+	m.Update(themeSyncMsg{light: false, ok: true}) // terminal flipped dark
+	mdMu.Lock()
+	nowLight := mdLight
+	mdMu.Unlock()
+	if nowLight || len(m.blocks) == 0 || !strings.Contains(m.blocks[len(m.blocks)-1].text, "auto → dark") {
+		t.Fatalf("flip not applied: light=%v blocks=%d", nowLight, len(m.blocks))
+	}
+	// same theme again: no duplicate note
+	n := len(m.blocks)
+	m.Update(themeSyncMsg{light: false, ok: true})
+	if len(m.blocks) != n {
+		t.Fatal("unchanged theme must be a no-op")
+	}
+	// explicit pick: poll result ignored
+	m.cfg.Theme = "dark"
+	m.Update(themeSyncMsg{light: true, ok: true})
+	mdMu.Lock()
+	stillDark := !mdLight
+	mdMu.Unlock()
+	if !stillDark {
+		t.Fatal("explicit theme must not be overridden by the poll")
+	}
+	// failed poll: ignored
+	m.cfg.Theme = ""
+	m.Update(themeSyncMsg{ok: false})
+
+	// the poll tick handler re-arms (and skips the subprocess on explicit theme)
+	m.cfg.Theme = "dark"
+	if _, cmd := m.Update(themePollMsg{}); cmd == nil {
+		t.Fatal("poll tick must re-arm on explicit theme")
+	}
+	m.cfg.Theme = ""
+	if _, cmd := m.Update(themePollMsg{}); cmd == nil {
+		t.Fatal("poll tick must re-arm on auto theme")
+	}
+	if themePollTick() == nil {
+		t.Fatal("tick must be non-nil")
+	}
+	if _, ok := themePollFire(time.Time{}).(themePollMsg); !ok {
+		t.Fatal("tick must fire a themePollMsg")
+	}
+	if _, ok := pollClientTheme().(themeSyncMsg); !ok { // result depends on the env; only the type is contractual
+		t.Fatal("pollClientTheme must return a themeSyncMsg")
+	}
 }
 
 func TestOcDimLine(t *testing.T) {

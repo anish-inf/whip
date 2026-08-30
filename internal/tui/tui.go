@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -1378,7 +1379,36 @@ func (m *model) viewportView() string {
 }
 
 func (m *model) Init() tea.Cmd {
+	if inTmuxEnv() {
+		// live theme tracking: tmux knows the outer terminal's light/dark
+		// (#{client_theme}, via the 996/2031 protocol) — poll it so an OS
+		// appearance flip mid-session is picked up without a restart
+		return tea.Batch(textarea.Blink, themePollTick())
+	}
 	return textarea.Blink
+}
+
+// themePollMsg fires the periodic client-theme poll; themeSyncMsg carries its
+// result back from the tmux subprocess.
+type (
+	themePollMsg struct{}
+	themeSyncMsg struct {
+		light, ok bool
+	}
+)
+
+// themePollTick schedules the next client-theme poll.
+func themePollTick() tea.Cmd {
+	return tea.Tick(10*time.Second, themePollFire)
+}
+
+func themePollFire(time.Time) tea.Msg { return themePollMsg{} }
+
+// pollClientTheme asks tmux for the outer terminal's current theme.
+func pollClientTheme() tea.Msg {
+	out, err := exec.Command("tmux", "display-message", "-p", "#{client_theme}").Output()
+	s := strings.TrimSpace(string(out))
+	return themeSyncMsg{light: s == "light", ok: err == nil && (s == "light" || s == "dark")}
 }
 
 func onOff(b bool) string {
@@ -1732,6 +1762,37 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if resized {
 			m.refreshVP() // every block re-renders at the new width (floored at minRenderWidth)
 		}
+		return m, nil
+
+	case themePollMsg:
+		if m.cfg.Theme != "" { // explicit pick: nothing to track, keep the tick alive
+			return m, themePollTick()
+		}
+		return m, tea.Batch(pollClientTheme, themePollTick())
+
+	case themeSyncMsg:
+		if !msg.ok || m.cfg.Theme != "" {
+			return m, nil
+		}
+		mdMu.Lock()
+		same := mdKnown && mdLight == msg.light
+		mdMu.Unlock()
+		if same {
+			return m, nil
+		}
+		// the outer terminal flipped (OS appearance change): follow it live
+		SetLightTheme(msg.light)
+		lipgloss.SetHasDarkBackground(!msg.light)
+		bgCache = bgResult{light: msg.light, valid: true} // no RGB from the theme report
+		if m.uiMode == opencodeMode {
+			m.applyUIMode(opencodeMode) // re-bake input styles/spinner for the new scheme
+		}
+		m.refreshVP()
+		word := "dark"
+		if msg.light {
+			word = "light"
+		}
+		m.append(dimStyle.Render("◐ theme: auto → " + word + " (terminal appearance changed)"))
 		return m, nil
 
 	case toastClearMsg:
