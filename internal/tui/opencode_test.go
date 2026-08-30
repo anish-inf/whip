@@ -556,6 +556,31 @@ func TestOpencodeStatus(t *testing.T) {
 	if narrow := m.opencodeStatus(); !strings.Contains(narrow, "ctrl+p commands") {
 		t.Fatalf("narrow status dropped commands: %q", narrow)
 	}
+
+	// busy: the spinner + esc hint replace the cwd (opencode's bottom bar)
+	m.width = 80
+	m.busy = true
+	busy := m.opencodeStatus()
+	if !strings.Contains(busy, "esc") || !strings.Contains(busy, "interrupt") || strings.Contains(busy, "/home") {
+		t.Fatalf("busy status = %q", busy)
+	}
+	m.interrupt1 = true
+	if again := m.opencodeStatus(); !strings.Contains(again, "again to interrupt") {
+		t.Fatalf("interrupt1 status = %q", again)
+	}
+}
+
+func TestApplyUIModeSwapsSpinner(t *testing.T) {
+	m := &model{input: newInput()}
+	t.Cleanup(func() { m.applyUIMode("") })
+	m.applyUIMode(opencodeMode)
+	if m.spin.Spinner.FPS != ocKnightRider.FPS || len(m.spin.Spinner.Frames) != len(ocKnightRider.Frames) {
+		t.Fatal("opencode mode should use the knight-rider spinner")
+	}
+	m.applyUIMode("")
+	if m.spin.Spinner.FPS == ocKnightRider.FPS {
+		t.Fatal("default mode should restore the Dot spinner")
+	}
 }
 
 func TestOCModeLabel(t *testing.T) {

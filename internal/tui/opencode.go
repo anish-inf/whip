@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
@@ -353,9 +354,26 @@ func opencodeUserCard(text string, width int, hover bool) string {
 	return b.String()
 }
 
+// ocKnightRider is opencode's generation spinner: a block bar sweeping back
+// and forth (■ active over ⬝ inactive, 40ms frames).
+var ocKnightRider = spinner.Spinner{
+	Frames: func() []string {
+		const cells, bar = 8, 3
+		var f []string
+		for p := 0; p <= cells-bar; p++ { // forward sweep
+			f = append(f, strings.Repeat("⬝", p)+strings.Repeat("■", bar)+strings.Repeat("⬝", cells-bar-p))
+		}
+		for p := cells - bar - 1; p > 0; p-- { // and back
+			f = append(f, strings.Repeat("⬝", p)+strings.Repeat("■", bar)+strings.Repeat("⬝", cells-bar-p))
+		}
+		return f
+	}(),
+	FPS: 40 * time.Millisecond,
+}
+
 // opencodeStatus renders opencode's session footer: the working directory on
-// the left, and "{tokens} ({pct%})  ctrl+p commands" on the right. Themed with
-// whip's dim style; the +2 main-column margin is applied by View().
+// the left (replaced by the knight-rider spinner + "esc interrupt" while the
+// model responds), and "{tokens} ({pct%})  ctrl+p commands" on the right.
 func (m *model) opencodeStatus() string {
 	muted := lipgloss.NewStyle().Foreground(ocMutedCol())
 	txt := lipgloss.NewStyle().Foreground(ocTextCol())
@@ -370,14 +388,26 @@ func (m *model) opencodeStatus() string {
 	}
 	rightRaw += "ctrl+p commands"
 	right := muted.Render(strings.TrimSuffix(rightRaw, "ctrl+p commands")) + txt.Render("ctrl+p") + muted.Render(" commands")
-	left := cwd()
 	w := max(m.width, 0)
 	rightW := lipgloss.Width(rightRaw)
-	if lipgloss.Width(left)+rightW+2 > w { // no room: truncate the cwd, keep the right side
-		left = truncLine(left, max(w-rightW-2, 0))
+	var leftR string
+	if m.busy {
+		// generating: the spinner sweeps where the cwd usually sits (opencode's
+		// bottom-bar treatment), with the interrupt hint beside it
+		hint := " interrupt"
+		if m.interrupt1 {
+			hint = " again to interrupt"
+		}
+		leftR = " " + m.spin.View() + "  " + txt.Render("esc") + muted.Render(hint)
+	} else {
+		left := cwd()
+		if lipgloss.Width(left)+rightW+2 > w { // no room: truncate the cwd, keep the right side
+			left = truncLine(left, max(w-rightW-2, 0))
+		}
+		leftR = muted.Render(" " + left)
 	}
-	pad := max(w-lipgloss.Width(left)-rightW-1, 1)
-	return muted.Render(" "+left+strings.Repeat(" ", pad)) + right
+	pad := max(w-lipgloss.Width(leftR)-rightW, 1)
+	return leftR + muted.Render(strings.Repeat(" ", pad)) + right
 }
 
 // opencodePaletteView renders the ctrl+p command list as opencode's Commands
@@ -766,6 +796,8 @@ func (m *model) applyUIMode(mode string) {
 	if mode == opencodeMode {
 		m.uiMode = opencodeMode
 		ocActive = true
+		m.spin = spinner.New(spinner.WithSpinner(ocKnightRider))
+		m.spin.Style = lipgloss.NewStyle().Foreground(ocAgentCol())
 		m.input.Prompt = "" // opencodePrompt supplies the ┃ bar per line
 		m.input.Placeholder = "Ask anything…"
 		// Fill the textarea with the element background so the input box reads as
@@ -779,6 +811,7 @@ func (m *model) applyUIMode(mode string) {
 	} else {
 		m.uiMode = ""
 		ocActive = false
+		m.spin = spinner.New(spinner.WithSpinner(spinner.Dot))
 		m.input.Prompt = "┃ "
 		m.input.Placeholder = whipPlaceholder
 		m.input.FocusedStyle.Text = lipgloss.NewStyle()

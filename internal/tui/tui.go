@@ -1614,8 +1614,8 @@ func (m *model) layout() {
 		// and the leading blank line View inserts before it.
 		chrome -= m.input.Height()
 	}
-	if m.busy {
-		chrome += 2 // blank line above the spinner + the spinner line itself
+	if m.busy && m.uiMode != opencodeMode {
+		chrome += 2 // blank line above the spinner + the spinner line itself (opencode mode: status bar spinner instead)
 	}
 	if m.current != "" {
 		chrome += lipgloss.Height(m.currentView()) + 1 // + its blank separator
@@ -4086,7 +4086,7 @@ func (m *model) viewBody() string {
 	if m.permDialog != nil {
 		b.WriteString("\n" + m.permView() + "\n")
 	}
-	if m.busy {
+	if m.busy && m.uiMode != opencodeMode { // opencode mode: the status bar carries the spinner + esc hint
 		hint := " thinking… (enter queues · /theme /mouse /effort run now · esc interrupts · ctrl+c ctrl+c interrupts)"
 		if m.iactive != nil {
 			hint = " bash (interactive) — type to respond · ctrl+c ctrl+c to cancel"
