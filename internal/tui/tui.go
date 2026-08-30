@@ -1188,6 +1188,11 @@ func (b block) render(width int) string {
 			return renderDiffResult(diff, rest, b.expanded, width)
 		}
 		lines := strings.Split(strings.TrimRight(b.text, "\n"), "\n")
+		if ocActive {
+			// opencode tucks results behind the tool row: a muted one-line hint
+			// collapsed, the full body only when expanded
+			return ocToolResult(lines, b.expanded, strings.HasPrefix(b.text, "Error"), width)
+		}
 		lines[0] = "⎿ " + lines[0] // tie the result to its header row above
 		style := dimStyle
 		if strings.HasPrefix(b.text, "Error") {
@@ -1841,6 +1846,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// place — appending per delta would stack one row per fragment.
 		// toolStartMsg swaps it for the live running row (matched by id).
 		row := dimStyle.Render("⋯ " + msg.name + m.batchSuffix(msg.name, msg.id) + " " + queuedSubject(msg.name, msg.args))
+		if ocActive {
+			row = ocToolPending(msg.name, msg.args)
+		}
 		for i := len(m.blocks) - 1; i >= 0; i-- {
 			if m.blocks[i].kind == blockToolQueued && m.blocks[i].toolID == msg.id {
 				m.blocks[i].text, m.blocks[i].stale = row, true
@@ -1855,6 +1863,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		for i := range m.blocks {
 			if b := &m.blocks[i]; b.kind == blockToolQueued && b.toolName == msg.name && b.toolID != msg.id {
 				b.text = dimStyle.Render("⋯ " + b.toolName + m.batchSuffix(b.toolName, b.toolID) + " " + queuedSubject(b.toolName, b.toolArgs))
+				if ocActive {
+					b.text = ocToolPending(b.toolName, b.toolArgs)
+				}
 				b.stale = true
 			}
 		}
@@ -1894,6 +1905,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// command being run is always fully visible). On toolEndMsg the same
 		// block collapses in place to one line.
 		row := toolStyle.Render("⚒ "+toolVerb(msg.name)+suffix+" ") + dimStyle.Render(args)
+		if ocActive {
+			row = ocToolPending(msg.name, msg.args)
+		}
 		m.blocks = append(m.blocks, block{kind: blockToolRun, text: row, toolID: msg.id, toolRunning: true, toolName: msg.name, toolArgs: msg.args})
 		m.refreshVP()
 		return m, nil

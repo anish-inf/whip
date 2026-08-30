@@ -446,6 +446,64 @@ func (m *model) ocDialogRows() []string {
 	return append(rows, blank)
 }
 
+// ocToolIcon maps a tool to opencode's inline-tool icon glyphs.
+func ocToolIcon(name string) string {
+	switch name {
+	case "bash":
+		return "$"
+	case "read", "edit", "write":
+		return "←"
+	case "grep", "glob":
+		return "✱"
+	case "webfetch":
+		return "%"
+	case "websearch", "browser_exec", "computer_exec":
+		return "◈"
+	case "subagent", "subagent_steer", "skill":
+		return "→"
+	default:
+		return "⚙"
+	}
+}
+
+// ocToolRow renders a completed tool call opencode-style: indent 3, an icon,
+// the tool name in text color, and the subject muted. Failed calls go red.
+func ocToolRow(name, args string, failed bool) string {
+	icon, subject := ocToolIcon(name), toolSubject(name, args)
+	if failed {
+		e := lipgloss.NewStyle().Foreground(lipgloss.Color("#e06c75"))
+		return "   " + e.Render(icon+" "+toolHeaderName(name)+" "+subject)
+	}
+	txt := lipgloss.NewStyle().Foreground(ocTextCol())
+	muted := lipgloss.NewStyle().Foreground(ocMutedCol())
+	return "   " + muted.Render(icon) + " " + txt.Render(toolHeaderName(name)) + " " + muted.Render(subject)
+}
+
+// ocToolPending renders a queued/running tool call: opencode's "~ " prefix,
+// all muted.
+func ocToolPending(name, args string) string {
+	muted := lipgloss.NewStyle().Foreground(ocMutedCol())
+	return "   " + muted.Render("~ "+toolHeaderName(name)+" "+toolSubject(name, args))
+}
+
+// ocToolResult renders a tool result block: collapsed to a single muted "↳ N
+// lines" hint (opencode tucks results away behind the tool row), the full body
+// indented when expanded. Errors keep the error color.
+func ocToolResult(lines []string, expanded, isErr bool, width int) string {
+	style := lipgloss.NewStyle().Foreground(ocMutedCol())
+	if isErr {
+		style = lipgloss.NewStyle().Foreground(lipgloss.Color("#e06c75"))
+	}
+	if !expanded {
+		noun := "lines"
+		if len(lines) == 1 {
+			noun = "line"
+		}
+		return "   " + style.Render(fmt.Sprintf("↳ %d %s · ctrl+e or click expands", len(lines), noun))
+	}
+	return wrap(style.Render("   ↳ "+strings.Join(lines, "\n     ")), width)
+}
+
 // ocDimLine renders a backdrop line faint (SGR 2), re-applying the faint after
 // every full reset inside the line so embedded styles can't undo the dim.
 func ocDimLine(s string) string {

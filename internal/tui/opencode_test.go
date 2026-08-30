@@ -150,6 +150,41 @@ func TestOcOverlay(t *testing.T) {
 	}
 }
 
+func TestOcToolRows(t *testing.T) {
+	if ocToolIcon("bash") != "$" || ocToolIcon("read") != "←" || ocToolIcon("subagent") != "→" || ocToolIcon("grep") != "✱" ||
+		ocToolIcon("webfetch") != "%" || ocToolIcon("websearch") != "◈" || ocToolIcon("todowrite") != "⚙" {
+		t.Fatal("icon map wrong")
+	}
+	row := ocToolRow("bash", `{"command":"git status"}`, false)
+	if !strings.HasPrefix(row, "   ") || !strings.Contains(row, "$") || !strings.Contains(row, "Bash") || !strings.Contains(row, "git status") {
+		t.Fatalf("tool row = %q", row)
+	}
+	if failed := ocToolRow("bash", `{}`, true); !strings.Contains(failed, "Bash") {
+		t.Fatalf("failed row = %q", failed)
+	}
+	if p := ocToolPending("subagent", `{"description":"map repo"}`); !strings.Contains(p, "~ Subagent map repo") {
+		t.Fatalf("pending row = %q", p)
+	}
+}
+
+func TestOcToolResult(t *testing.T) {
+	lines := []string{"a", "b", "c"}
+	col := ocToolResult(lines, false, false, 80)
+	if !strings.Contains(col, "↳ 3 lines") {
+		t.Fatalf("collapsed = %q", col)
+	}
+	if one := ocToolResult([]string{"only"}, false, false, 80); !strings.Contains(one, "↳ 1 line ") {
+		t.Fatalf("singular = %q", one)
+	}
+	exp := ocToolResult(lines, true, false, 80)
+	if !strings.Contains(exp, "↳ a") || !strings.Contains(exp, "b") {
+		t.Fatalf("expanded = %q", exp)
+	}
+	if e := ocToolResult(lines, false, true, 80); !strings.Contains(e, "↳ 3 lines") {
+		t.Fatalf("error collapsed = %q", e)
+	}
+}
+
 func TestOcDimLine(t *testing.T) {
 	if got := ocDimLine(""); got != "" {
 		t.Fatalf("empty line should stay empty, got %q", got)
