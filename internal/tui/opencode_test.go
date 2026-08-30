@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/context-labs/whip/internal/agent"
 	"github.com/context-labs/whip/internal/config"
@@ -185,6 +186,114 @@ func TestOcToolResult(t *testing.T) {
 	}
 }
 
+func TestVpTopRowsAndXOff(t *testing.T) {
+	m := &model{}
+	if m.vpTopRows() != 3 || m.vpXOff() != 0 {
+		t.Fatal("default mode chrome offsets wrong")
+	}
+	m.uiMode = opencodeMode
+	if m.vpTopRows() != 0 || m.vpXOff() != opencodeLeftMargin {
+		t.Fatal("opencode mode chrome offsets wrong")
+	}
+}
+
+func TestOcMsgActionRows(t *testing.T) {
+	m := &model{width: 80, msgActions: &msgActions{}}
+	out := strings.Join(m.ocMsgActionRows(), "\n")
+	for _, want := range []string{"Message Actions", "esc", "Search", "Revert", "Copy", "Fork"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("dialog missing %q:\n%s", want, out)
+		}
+	}
+	m.msgActions.filter = "cop"
+	out = strings.Join(m.ocMsgActionRows(), "\n")
+	if !strings.Contains(out, "Copy") || strings.Contains(out, "Revert") || strings.Contains(out, "Search") {
+		t.Fatalf("filtered dialog wrong:\n%s", out)
+	}
+	m.msgActions.filter = "zzz"
+	if out := strings.Join(m.ocMsgActionRows(), "\n"); !strings.Contains(out, "No results found") {
+		t.Fatal("no-match filter should say No results found")
+	}
+}
+
+func TestMsgActionsKey(t *testing.T) {
+	m := &model{width: 80, agent: &agent.Agent{}}
+	m.blocks = []block{{kind: blockUser, text: "hello"}}
+	m.msgActions = &msgActions{block: 0}
+
+	key := func(s string) { m.msgActionsKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)}) }
+	m.msgActionsKey(tea.KeyMsg{Type: tea.KeyDown})
+	if m.msgActions.sel != 1 {
+		t.Fatalf("down: sel = %d", m.msgActions.sel)
+	}
+	m.msgActionsKey(tea.KeyMsg{Type: tea.KeyUp})
+	if m.msgActions.sel != 0 {
+		t.Fatalf("up: sel = %d", m.msgActions.sel)
+	}
+	key("z") // filter that matches no action
+	if m.msgActions.filter != "z" {
+		t.Fatalf("filter = %q", m.msgActions.filter)
+	}
+	m.msgActionsKey(tea.KeyMsg{Type: tea.KeyEnter}) // no matches: no-op, stays open
+	if m.msgActions == nil {
+		t.Fatal("enter with no matches should keep the dialog open")
+	}
+	m.msgActionsKey(tea.KeyMsg{Type: tea.KeyBackspace})
+	if m.msgActions.filter != "" {
+		t.Fatalf("backspace: filter = %q", m.msgActions.filter)
+	}
+	key("copy")
+	m.msgActionsKey(tea.KeyMsg{Type: tea.KeyEnter}) // runs Copy, closes
+	if m.msgActions != nil {
+		t.Fatal("enter should close the dialog")
+	}
+
+	m.msgActions = &msgActions{}
+	m.msgActionsKey(tea.KeyMsg{Type: tea.KeyEsc})
+	if m.msgActions != nil {
+		t.Fatal("esc should close the dialog")
+	}
+
+	// the remaining actions are nil-safe: Revert appends a notice with no
+	// history, Fork reports the missing store
+	msgActionList[0].run(m, 0)
+	msgActionList[2].run(m, 0)
+}
+
+func TestClickOpensMsgActions(t *testing.T) {
+	old := ocActive
+	t.Cleanup(func() { ocActive = old })
+	ocActive = true
+	m := &model{width: 80, uiMode: opencodeMode, viewH: 10}
+	m.blocks = []block{{kind: blockUser, text: "hello", y0: 0, y1: 2}}
+	m.clickAt(5, 1)
+	if m.msgActions == nil || m.msgActions.block != 0 {
+		t.Fatalf("click should open Message Actions on block 0, got %+v", m.msgActions)
+	}
+}
+
+func TestUpdateHover(t *testing.T) {
+	m := &model{width: 80, uiMode: opencodeMode, hoverIdx: -1}
+	m.blocks = []block{
+		{kind: blockUser, text: "hello", y0: 0, y1: 2},
+		{kind: blockAssistant, text: "hi", y0: 4, y1: 5},
+	}
+	// row 0 stays inside the card even after refreshVP recomputes y0/y1 from
+	// the actual (1-line) render
+	m.updateHover(5, 0) // over the user card
+	if m.hoverIdx != 0 || !m.blocks[0].hover {
+		t.Fatalf("hover = %d, want 0", m.hoverIdx)
+	}
+	m.updateHover(5, 0) // unchanged: no flip
+	if m.hoverIdx != 0 {
+		t.Fatal("hover should stay put")
+	}
+	m.updateHover(5, 30) // off any card
+	if m.hoverIdx != -1 || m.blocks[0].hover {
+		t.Fatalf("hover off = %d", m.hoverIdx)
+	}
+}
+
 func TestOcDimLine(t *testing.T) {
 	if got := ocDimLine(""); got != "" {
 		t.Fatalf("empty line should stay empty, got %q", got)
@@ -347,10 +456,13 @@ func TestApplyUIMode(t *testing.T) {
 }
 
 func TestOpencodeUserCard(t *testing.T) {
-	if got := opencodeUserCard("hi", 2); got != "hi" {
+	if got := opencodeUserCard("hi", 2, false); got != "hi" {
 		t.Fatalf("tiny width should pass through, got %q", got)
 	}
-	got := opencodeUserCard("hello", 40)
+	if hov := opencodeUserCard("hello", 40, true); hov == "" {
+		t.Fatal("hover card should render") // hover state uses the element shade
+	}
+	got := opencodeUserCard("hello", 40, false)
 	if !strings.Contains(got, "┃") || !strings.Contains(got, "hello") {
 		t.Fatal("card missing bar/text")
 	}

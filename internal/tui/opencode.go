@@ -326,11 +326,14 @@ func (m *model) opencodePrompt(inner string, width int) string {
 // bar (accent color) with one blank padding row above and below the text.
 // Themed with whip's styles (no forced background), so the bar + padding give
 // the card impression while honoring light/dark/auto.
-func opencodeUserCard(text string, width int) string {
+func opencodeUserCard(text string, width int, hover bool) string {
 	if width < 4 {
 		return text
 	}
 	bg := ocPanelBg()
+	if hover {
+		bg = ocElementBg() // opencode's hover state: the card lifts to the element shade
+	}
 	bar := lipgloss.NewStyle().Foreground(ocAgentCol()).Background(bg).Render("┃")
 	txt := lipgloss.NewStyle().Foreground(ocTextCol()).Background(bg)
 	lines := strings.Split(wrap(text, width-3), "\n")
@@ -378,28 +381,50 @@ func (m *model) opencodeStatus() string {
 }
 
 // opencodePaletteView renders the ctrl+p command list as opencode's Commands
+// ocBoxKit bundles the styles and row builders every floating opencode dialog
+// shares (Commands, Message Actions): a fixed-width panel with lr rows.
+type ocBoxKit struct {
+	w                              int
+	bg                             lipgloss.TerminalColor
+	pnl, text, head, muted, accent lipgloss.Style
+	blank                          string
+}
+
+func (m *model) newOcBox() ocBoxKit {
+	bg := ocPanelBg()
+	w := min(64, max(m.width-2, 20))
+	text := lipgloss.NewStyle().Foreground(ocTextCol()).Background(bg)
+	return ocBoxKit{
+		w: w, bg: bg,
+		pnl:    lipgloss.NewStyle().Background(bg),
+		text:   text,
+		head:   text.Bold(true),
+		muted:  lipgloss.NewStyle().Foreground(ocMutedCol()).Background(bg),
+		accent: lipgloss.NewStyle().Foreground(ocAccentCol()).Background(bg).Bold(true),
+		blank:  ocPadTo("", w, bg),
+	}
+}
+
+// lr assembles left+right onto one padded row: left at col 2, right at the edge.
+func (k ocBoxKit) lr(left, right string) string {
+	gap := k.w - 2 - lipgloss.Width(left) - lipgloss.Width(right) - 2
+	if gap < 1 {
+		gap = 1
+	}
+	return ocPadTo(k.pnl.Render("  ")+left+k.pnl.Render(strings.Repeat(" ", gap))+right, k.w, k.bg)
+}
+
 // dialog rows: a panel on the panel background with a bold "Commands" header +
 // right-aligned esc, a Search line, accent category headers, and name-left /
 // hint-right rows; the selected row is a full-width primary fill. Each row is
 // exactly w cells wide — ocOverlay splices them over the dimmed session.
 func (m *model) ocDialogRows() []string {
 	p := m.palette
-	bg := ocPanelBg()
-	w := min(64, max(m.width-2, 20))
-	pnl := lipgloss.NewStyle().Background(bg)
-	text := lipgloss.NewStyle().Foreground(ocTextCol()).Background(bg)
-	head := text.Bold(true)
-	muted := lipgloss.NewStyle().Foreground(ocMutedCol()).Background(bg)
-	accent := lipgloss.NewStyle().Foreground(ocAccentCol()).Background(bg).Bold(true)
-	// left+right assembled onto one padded row: left at col 2, right at the edge
-	lr := func(left, right string) string {
-		gap := w - 2 - lipgloss.Width(left) - lipgloss.Width(right) - 2
-		if gap < 1 {
-			gap = 1
-		}
-		return ocPadTo(pnl.Render("  ")+left+pnl.Render(strings.Repeat(" ", gap))+right, w, bg)
-	}
-	blank := ocPadTo("", w, bg)
+	k := m.newOcBox()
+	w, bg := k.w, k.bg
+	pnl, text, head, muted, accent := k.pnl, k.text, k.head, k.muted, k.accent
+	lr := k.lr
+	blank := k.blank
 
 	// a sub-panel (theme picker, model list, …) renders inside the same box
 	if pp := p.top(); pp != nil {
@@ -513,12 +538,158 @@ func ocDimLine(s string) string {
 	return "\x1b[2m" + strings.ReplaceAll(s, "\x1b[0m", "\x1b[0m\x1b[2m") + "\x1b[0m"
 }
 
+// msgActions is the state of the opencode-style Message Actions dialog opened
+// by clicking a message: the clicked block, the selected action, and a filter.
+type msgActions struct {
+	block  int // index into m.blocks
+	sel    int
+	filter string
+}
+
+// msgAction is one row of the Message Actions dialog.
+type msgAction struct {
+	name, desc string
+	run        func(*model, int)
+}
+
+var msgActionList = []msgAction{
+	{"Revert", "undo messages and file changes", func(m *model, _ int) { m.openRewind() }},
+	{"Copy", "message text to clipboard", func(m *model, blk int) {
+		if blk >= 0 && blk < len(m.blocks) {
+			copyText(ansi.Strip(m.blocks[blk].text))
+		}
+	}},
+	{"Fork", "create a new session", func(m *model, _ int) { m.forkCommand("") }},
+}
+
+// msgActionItems returns the actions matching the dialog's filter.
+func (a *msgActions) items() []msgAction {
+	if a.filter == "" {
+		return msgActionList
+	}
+	var out []msgAction
+	for _, it := range msgActionList {
+		if strings.Contains(strings.ToLower(it.name+" "+it.desc), strings.ToLower(a.filter)) {
+			out = append(out, it)
+		}
+	}
+	return out
+}
+
+// ocMsgActionRows renders the Message Actions dialog box rows.
+func (m *model) ocMsgActionRows() []string {
+	a := m.msgActions
+	k := m.newOcBox()
+	rows := []string{k.blank, k.lr(k.head.Render("Message Actions"), k.muted.Render("esc")), k.blank}
+	if a.filter == "" {
+		rows = append(rows, k.lr(k.muted.Render("Search"), ""))
+	} else {
+		rows = append(rows, k.lr(k.text.Render(a.filter), ""))
+	}
+	rows = append(rows, k.blank)
+	items := a.items()
+	sel := lipgloss.NewStyle().Foreground(ocSelFg()).Background(ocSelBg())
+	for i, it := range items {
+		if i == a.sel {
+			rows = append(rows, ocPadTo(sel.Render("  "+it.name+" "+it.desc), k.w, ocSelBg()))
+		} else {
+			rows = append(rows, k.lr(k.text.Render(it.name)+k.muted.Render(" "+it.desc), ""))
+		}
+	}
+	if len(items) == 0 {
+		rows = append(rows, k.lr(k.muted.Render("No results found"), ""))
+	}
+	return append(rows, k.blank)
+}
+
+// msgActionsKey handles keys while the Message Actions dialog is open.
+func (m *model) msgActionsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	a := m.msgActions
+	items := a.items()
+	switch msg.String() {
+	case "esc", "ctrl+c":
+		m.msgActions = nil
+	case "enter":
+		if a.sel < len(items) {
+			m.msgActions = nil
+			items[a.sel].run(m, a.block)
+		}
+	case "up":
+		if a.sel > 0 {
+			a.sel--
+		}
+	case "down":
+		if a.sel < len(items)-1 {
+			a.sel++
+		}
+	case "backspace":
+		if a.filter != "" {
+			a.filter = a.filter[:len(a.filter)-1]
+			a.sel = 0
+		}
+	default:
+		if msg.Type == tea.KeyRunes {
+			a.filter += string(msg.Runes)
+			a.sel = 0
+		}
+	}
+	return m, nil
+}
+
+// vpTopRows is the number of chrome rows above the transcript viewport —
+// mouse row math must match viewBody exactly (opencode mode drops the header
+// and tips lines).
+func (m *model) vpTopRows() int {
+	if m.uiMode == opencodeMode {
+		return 0
+	}
+	return 3
+}
+
+// vpXOff is the columns the main body is shifted right (opencode's left margin).
+func (m *model) vpXOff() int {
+	if m.uiMode == opencodeMode {
+		return opencodeLeftMargin
+	}
+	return 0
+}
+
+// updateHover tracks the message block under the pointer (opencode's hover
+// effect on user cards) and re-renders when it changes.
+func (m *model) updateHover(x, y int) {
+	row := y - m.viewTop - m.vpTopRows() - m.contentPad() + m.vp.YOffset + m.vpLead
+	idx := -1
+	if x >= m.vpXOff() && x < m.vpXOff()+m.width {
+		for i := range m.blocks {
+			if m.blocks[i].kind == blockUser && row >= m.blocks[i].y0 && row <= m.blocks[i].y1 {
+				idx = i
+				break
+			}
+		}
+	}
+	if idx == m.hoverIdx {
+		return
+	}
+	if m.hoverIdx >= 0 && m.hoverIdx < len(m.blocks) {
+		m.blocks[m.hoverIdx].hover, m.blocks[m.hoverIdx].stale = false, true
+	}
+	if idx >= 0 {
+		m.blocks[idx].hover, m.blocks[idx].stale = true, true
+	}
+	m.hoverIdx = idx
+	m.refreshVP()
+}
+
 // ocOverlay draws the Commands dialog OVER the live session, opencode-style:
 // the whole frame keeps rendering behind the modal, dimmed, with the dialog
 // rows spliced in centered (upper third). The dialog is clipped to the screen
 // height so the frame never scrolls (which would shift the sidebar).
 func (m *model) ocOverlay(v string) string {
-	rows := m.ocDialogRows() // never empty: the dialog chrome rows are unconditional
+	return m.ocOverlayRows(v, m.ocDialogRows()) // rows never empty: dialog chrome is unconditional
+}
+
+// ocOverlayRows dims the frame and splices the given dialog rows in centered.
+func (m *model) ocOverlayRows(v string, rows []string) string {
 	lines := strings.Split(v, "\n")
 	w := lipgloss.Width(rows[0])
 	x := max((max(m.termWidth, w)-w)/2, 0)

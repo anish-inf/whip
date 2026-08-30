@@ -193,13 +193,15 @@ type model struct {
 	sel          *selection // in-flight/last drag selection over the transcript
 	selDragX     int        // last drag pointer position (edge auto-scroll re-checks it)
 	selDragY     int
-	vpLead       int    // top blank rows viewportView last dropped (selection row mapping)
-	viewTop      int    // screen row of the view's first line (View tracks it; mouse Y is absolute)
-	viewH        int    // height of the last rendered view
-	themeHow     string // how auto theme detection resolved (env var, OSC query, …) — captured at startup/theme change for /report; never re-queried
-	uiMode       string // "" = default whip look; "opencode" = opencode render mode (see opencode.go)
-	sessTitle    string // cached session title for the opencode sidebar (from the store; updated on title/rename)
-	compactModel string // config model name for compaction summaries; "" = the built-in default
+	vpLead       int         // top blank rows viewportView last dropped (selection row mapping)
+	viewTop      int         // screen row of the view's first line (View tracks it; mouse Y is absolute)
+	viewH        int         // height of the last rendered view
+	themeHow     string      // how auto theme detection resolved (env var, OSC query, …) — captured at startup/theme change for /report; never re-queried
+	uiMode       string      // "" = default whip look; "opencode" = opencode render mode (see opencode.go)
+	sessTitle    string      // cached session title for the opencode sidebar (from the store; updated on title/rename)
+	msgActions   *msgActions // opencode mode: the Message Actions dialog opened by clicking a message; nil = closed
+	hoverIdx     int         // opencode mode: block index under the mouse (hover highlight); -1 = none
+	compactModel string      // config model name for compaction summaries; "" = the built-in default
 	compactProv  string
 	// updateLatest is a pending newer release tag ("" when none), picked up
 	// from update.Pending at startup; the notice it renders is durable, so a
@@ -331,7 +333,7 @@ func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string, ca
 	}
 	m := &model{
 		cfg: cfg, agent: ag, modelName: mn, provName: pn, sysPrompt: sysPrompt,
-		input: ti, spin: spinner.New(spinner.WithSpinner(spinner.Dot)), follow: true, saved: 1,
+		input: ti, spin: spinner.New(spinner.WithSpinner(spinner.Dot)), follow: true, saved: 1, hoverIdx: -1,
 		catalogs: config.LoadCatalogs(), mouseOn: mouseOn, now: time.Now, showThinking: showThinking,
 		compactModel: cfg.CompactModel, compactProv: cfg.CompactProvider,
 		skillScan: func() []skills.Skill { return skills.Scan(skills.DefaultDirs()...) },
@@ -451,6 +453,11 @@ func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string, ca
 	fmt.Fprint(os.Stdout, "\x1b[9999;1H")
 	if m.mouseOn {
 		enableClickWheelMouse(os.Stdout)
+		if cfg.UIMode == opencodeMode {
+			// all-motion tracking (?1003, a superset of ?1002) so passive mouse
+			// moves drive opencode's hover highlight on message cards
+			fmt.Fprint(os.Stdout, "\x1b[?1003h")
+		}
 	}
 	if m.cfgExtra == nil {
 		m.cfgExtra = map[string]string{}
@@ -588,7 +595,7 @@ func enableClickWheelMouse(w *os.File) {
 // disableClickWheelMouse releases the mouse reporting enableClickWheelMouse
 // set, plus ?1000 defensively (an older whip or a downgrade may have left it).
 func disableClickWheelMouse(w *os.File) {
-	fmt.Fprint(w, "\x1b[?1002l\x1b[?1000l\x1b[?1006l")
+	fmt.Fprint(w, "\x1b[?1003l\x1b[?1002l\x1b[?1000l\x1b[?1006l")
 }
 
 // (No applyTmuxMouseFix: inside tmux the drag IS forwarded to whip — tmux's
@@ -1135,6 +1142,8 @@ type block struct {
 	// refreshVP); used to map a mouse click to the block under it.
 	y0, y1 int
 	// cache of the last render: valid while !stale and width matches.
+	hover bool // opencode mode: pointer is over this block (user cards highlight)
+
 	rendered string
 	lines    int
 	width    int
@@ -1160,7 +1169,7 @@ func (b block) render(width int) string {
 	switch b.kind {
 	case blockUser:
 		if ocActive {
-			return opencodeUserCard(b.text, width)
+			return opencodeUserCard(b.text, width, b.hover)
 		}
 		return wrap(youStyle.Render(glyphUser)+b.text, width)
 	case blockOCMeta:
@@ -1747,8 +1756,20 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Shift {
 			return m, nil
 		}
+		if m.msgActions != nil {
+			// modal: any click closes the Message Actions dialog
+			if msg.Action == tea.MouseActionPress {
+				m.msgActions = nil
+			}
+			return m, nil
+		}
 		if handled, cmd := m.handleMouseSelect(msg); handled {
 			return m, cmd
+		}
+		// opencode mode: passive motion (no button) drives the hover highlight
+		if ocActive && msg.Action == tea.MouseActionMotion && msg.Button == tea.MouseButtonNone {
+			m.updateHover(msg.X, msg.Y)
+			return m, nil
 		}
 		// clicking the ⚡ control in the header cycles reasoning effort
 		// (mouse Y is an absolute screen row; the header is the view's top row)
@@ -2312,6 +2333,9 @@ func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.permDialog != nil {
 		m.permKey(msg)
 		return m, nil
+	}
+	if m.msgActions != nil {
+		return m.msgActionsKey(msg)
 	}
 	if m.palette != nil {
 		return m.paletteKey(msg)
@@ -3964,6 +3988,8 @@ func (m *model) View() string {
 	}
 	if m.uiMode == opencodeMode && m.palette != nil {
 		v = m.ocOverlay(v) // Commands dialog floats over the dimmed session
+	} else if m.uiMode == opencodeMode && m.msgActions != nil {
+		v = m.ocOverlayRows(v, m.ocMsgActionRows()) // Message Actions dialog
 	}
 	if m.height > 0 {
 		m.viewH = lipgloss.Height(v)

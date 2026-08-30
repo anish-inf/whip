@@ -62,14 +62,14 @@ func (m *model) selPoint(x, y int, clamp bool) (selPos, bool) {
 	if len(m.blocks) == 0 || m.viewH == 0 { // viewH 0: nothing rendered yet
 		return selPos{}, false
 	}
-	row := y - m.viewTop - 3 - m.contentPad() + m.vp.YOffset + m.vpLead
+	row := y - m.viewTop - m.vpTopRows() - m.contentPad() + m.vp.YOffset + m.vpLead
 	first, last := m.blocks[0].y0, m.blocks[len(m.blocks)-1].y1
 	if !clamp && (row < first || row > last) {
 		return selPos{}, false
 	}
 	row = max(min(row, last), first)
 	w := ansi.StringWidth(m.contentLine(row))
-	return selPos{row: row, col: max(min(x, w), 0)}, true
+	return selPos{row: row, col: max(min(x-m.vpXOff(), w), 0)}, true
 }
 
 // contentLine returns the unstyled text on content row r, read from the
@@ -307,7 +307,7 @@ func (m *model) selEdgeScroll() tea.Cmd {
 	if m.sel == nil || m.sel.done {
 		return nil
 	}
-	top := m.viewTop + 3 // header + tips + blank
+	top := m.viewTop + m.vpTopRows() // header + tips + blank (0 in opencode mode)
 	bottom := top + m.vp.Height - 1
 	switch {
 	case m.selDragY < top && m.vp.YOffset > 0:
@@ -330,12 +330,20 @@ func (m *model) selEdgeScroll() tea.Cmd {
 // area reaches here. Row math matches selPoint (y is an absolute screen row).
 func (m *model) clickAt(x, y int) {
 	y -= m.viewTop
-	if y <= 1 || m.palette != nil || m.viewH == 0 {
+	if y <= m.vpTopRows()-2 || m.palette != nil || m.viewH == 0 {
 		return
 	}
-	row := y - 3 - m.contentPad() + m.vp.YOffset + m.vpLead
+	row := y - m.vpTopRows() - m.contentPad() + m.vp.YOffset + m.vpLead
 	for i := range m.blocks {
-		if row >= m.blocks[i].y0 && row <= m.blocks[i].y1 && m.blocks[i].toggle() {
+		if row < m.blocks[i].y0 || row > m.blocks[i].y1 {
+			continue
+		}
+		// opencode mode: clicking a message opens the Message Actions dialog
+		if ocActive && (m.blocks[i].kind == blockUser || m.blocks[i].kind == blockAssistant) {
+			m.msgActions = &msgActions{block: i}
+			return
+		}
+		if m.blocks[i].toggle() {
 			m.refreshVP()
 			return
 		}
