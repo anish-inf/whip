@@ -47,7 +47,8 @@ type paletteItem struct {
 type panelKind int
 
 const (
-	panelModel panelKind = iota
+	panelSubagent panelKind = iota
+	panelModel
 	panelEffort
 	panelGoal
 	panelCompact
@@ -82,9 +83,9 @@ type ppanel struct {
 
 	prepare string // panelGoal: text submitted when the editor closes
 
-	cands []string // panelCompact: model names from config
-	list  []string // panelCompact: "default (…)" + cands; panelTheme: {"auto","light","dark"}
-	midx  int      // panelCompact/panelTheme/panelBrowser/panelMCP: selection
+	cands []string // panelCompact/panelSubagent: model names from config
+	list  []string // panelCompact/panelSubagent: "default (…)" + cands; panelTheme: {"auto","light","dark"}
+	midx  int      // panelCompact/panelSubagent/panelTheme/panelBrowser/panelMCP: selection
 
 	mcps []mcpRow // panelMCP: the two source toggles then one row per server
 
@@ -315,6 +316,39 @@ func (m *model) paletteItems() []paletteItem {
 			dynHint: func(m *model) string { return "/goal " + slashHint(m, "/goal") },
 			panel: func(m *model) *ppanel {
 				pp := &ppanel{kind: panelGoal, title: "Goal", prepare: m.goal}
+				return pp
+			},
+		},
+		// After "Goal": the "goal" filter fuzzy-matches this row's haystack too
+		// ("SubAgent model Session" contains g→o→a→l), and first match wins —
+		// Goal is the exact hit, so it must sit earlier.
+		{
+			title: "Subagent model", category: "Session",
+			dynDesc: func(m *model) string {
+				if m.cfg.TaskModel == "" {
+					return "default (" + config.DefaultTaskModel + ")"
+				}
+				return m.cfg.TaskModel
+			},
+			dynHint: func(m *model) string { return "config taskModel" },
+			panel: func(m *model) *ppanel {
+				names := make([]string, 0, len(m.cfg.Models))
+				for name := range m.cfg.Models {
+					names = append(names, name)
+				}
+				sort.Strings(names)
+				pp := &ppanel{
+					kind:  panelSubagent,
+					title: "Subagent model",
+					cands: names,
+					list:  append([]string{"default (" + config.DefaultTaskModel + ")"}, names...),
+				}
+				for i, name := range pp.list {
+					if name == m.cfg.TaskModel {
+						pp.midx = i
+						break
+					}
+				}
 				return pp
 			},
 		},
@@ -647,6 +681,37 @@ func (m *model) panelKey(msg tea.KeyMsg, pp *ppanel) (tea.Model, tea.Cmd) {
 			}
 		}
 
+	case panelSubagent:
+		switch msg.Type {
+		case tea.KeyEsc, tea.KeyCtrlC:
+			pop()
+		case tea.KeyUp, tea.KeyCtrlP, tea.KeyShiftTab:
+			pp.midx = (pp.midx - 1 + len(pp.list)) % len(pp.list)
+		case tea.KeyDown, tea.KeyCtrlN, tea.KeyTab:
+			pp.midx = (pp.midx + 1) % len(pp.list)
+		case tea.KeyLeft, tea.KeyRight, tea.KeyEnter:
+			// apply immediately so a bad pick reports its error inline while
+			// the panel is still open
+			if pp.midx == 0 {
+				m.subagentModelCommand([]string{"off"})
+				pp.err = ""
+			} else {
+				name := pp.list[pp.midx]
+				args := []string{name}
+				if mdl := m.cfg.Models[name]; len(mdl.Providers) > 0 {
+					args = append(args, mdl.Providers[0])
+				}
+				m.subagentModelCommand(args)
+				pp.err = ""
+				if m.cfg.TaskModel != name {
+					pp.err = "couldn't resolve " + name + " — kept previous"
+				}
+			}
+			if msg.Type == tea.KeyEnter && pp.err == "" {
+				pop()
+			}
+		}
+
 	case panelCompact:
 		switch msg.Type {
 		case tea.KeyEsc, tea.KeyCtrlC:
@@ -945,6 +1010,23 @@ func (m *model) panelView(pp *ppanel) string {
 			} else {
 				b.WriteString("   " + effortLabel(e) + cur + "\n")
 			}
+		}
+		b.WriteString("\n" + dimStyle.Render("  ↑/↓ select · enter/←/→ apply · esc back"))
+
+	case panelSubagent:
+		for i, name := range pp.list {
+			cur := ""
+			if (i == 0 && m.cfg.TaskModel == "") || (i > 0 && name == m.cfg.TaskModel) {
+				cur = dimStyle.Render("  (current)")
+			}
+			if i == pp.midx {
+				b.WriteString(botStyle.Render(" → "+name) + cur + "\n")
+			} else {
+				b.WriteString("   " + name + cur + "\n")
+			}
+		}
+		if pp.err != "" {
+			b.WriteString(errStyle.Render("  "+pp.err) + "\n")
 		}
 		b.WriteString("\n" + dimStyle.Render("  ↑/↓ select · enter/←/→ apply · esc back"))
 
