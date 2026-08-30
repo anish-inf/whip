@@ -1410,7 +1410,13 @@ func cwd() string {
 // so a wrong pick is diagnosable).
 //
 // tuiRunning and bgCache are declared above Run (see the note there).
-type bgResult struct{ light, valid bool }
+// r/g/b hold the OSC 11 reply's actual color when hasRGB — the opencode mode
+// derives its panel shades relative to the REAL background from these.
+type bgResult struct {
+	light, valid bool
+	r, g, b      int
+	hasRGB       bool
+}
 
 // inTmuxEnv reports whether whip runs inside tmux/screen, where the terminal
 // can't be queried directly.
@@ -1465,10 +1471,10 @@ func detectColorScheme() string {
 	inTmux := inTmuxEnv()
 	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
 	if err == nil {
-		if light, ok := queryTerminalBackground(tty, inTmux); ok {
+		if r := queryTerminalBackground(tty, inTmux); r.valid {
 			_ = tty.Close()
-			setScheme(light)
-			bgCache = bgResult{light: light, valid: true}
+			setScheme(r.light)
+			bgCache = r // keeps the reply's RGB: opencode mode derives panel shades from it
 			if inTmux {
 				return "terminal query (inside tmux)"
 			}

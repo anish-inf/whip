@@ -77,11 +77,39 @@ func ocThemeKnown() bool {
 	return mdKnown
 }
 
+// ocBgShift derives a panel shade RELATIVE to the terminal's real background
+// when the OSC 11 query captured its RGB: lightened on a dark background,
+// darkened on a light one — opencode's own bg→panel→element stepping, but
+// anchored to the actual bg so panels read as raised layers on ANY terminal
+// (fixed constants assume opencode's near-black; on a #262a2e terminal they
+// rendered as sunken holes).
+func ocBgShift(delta int) (lipgloss.TerminalColor, bool) {
+	if !bgCache.valid || !bgCache.hasRGB || !ocThemeKnown() {
+		return nil, false
+	}
+	if rgbIsLight(bgCache.r, bgCache.g, bgCache.b) {
+		delta = -2 * delta // darken, doubled: small deltas near white are invisible
+	}
+	c := func(v int) int { return min(max(v+delta, 0), 255) }
+	return lipgloss.Color(fmt.Sprintf("#%02x%02x%02x", c(bgCache.r), c(bgCache.g), c(bgCache.b))), true
+}
+
 // Light fills use deeper steps from opencode's own light ramp (step4/step5)
 // rather than its literal panel values (#fafafa/#f5f5f5): a 2% delta from
 // white is invisible in a terminal, which read as zero panel contrast.
-func ocPanelBg() lipgloss.TerminalColor    { return ocPick("#141414", "#ebebeb", "") }  // cards, sidebar (no fill if unknown)
-func ocElementBg() lipgloss.TerminalColor  { return ocPick("#1e1e1e", "#e1e1e1", "") }  // prompt box
+func ocPanelBg() lipgloss.TerminalColor { // cards, sidebar (no fill if unknown)
+	if c, ok := ocBgShift(10); ok {
+		return c
+	}
+	return ocPick("#141414", "#ebebeb", "")
+}
+
+func ocElementBg() lipgloss.TerminalColor { // prompt box
+	if c, ok := ocBgShift(20); ok {
+		return c
+	}
+	return ocPick("#1e1e1e", "#e1e1e1", "")
+}
 func ocAgentCol() lipgloss.TerminalColor   { return ocPick("#5c9cf5", "#7b5bb6", "4") } // bars, ▣
 func ocTextCol() lipgloss.TerminalColor    { return ocPick("#eeeeee", "#1a1a1a", "") }  // text (default fg if unknown)
 func ocMutedCol() lipgloss.TerminalColor   { return ocPick("#808080", "#8a8a8a", "8") } // muted

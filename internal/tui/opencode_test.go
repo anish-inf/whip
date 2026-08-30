@@ -44,6 +44,7 @@ func TestSetThemeRefreshesOpencodeInputStyles(t *testing.T) {
 	t.Cleanup(func() { mdMu.Lock(); mdLight, mdKnown = sl, sk; mdMu.Unlock() })
 
 	m := &model{cfg: &config.Config{}, input: newInput()}
+	t.Cleanup(func() { m.applyUIMode("") }) // don't leak ocActive into other tests
 	mdMu.Lock()
 	mdKnown = false // start unknown: styles bake NoColor
 	mdMu.Unlock()
@@ -161,6 +162,63 @@ func TestSanitizeViewKeepsPanelFillInOpencodeMode(t *testing.T) {
 	ocActive = false
 	if got := sanitizeView(line); strings.Contains(got, "    ") {
 		t.Fatalf("default mode must strip styled trailing spaces: %q", got)
+	}
+}
+
+func TestOcBgShift(t *testing.T) {
+	oldCache := bgCache
+	mdMu.Lock()
+	sl, sk := mdLight, mdKnown
+	mdMu.Unlock()
+	t.Cleanup(func() {
+		bgCache = oldCache
+		mdMu.Lock()
+		mdLight, mdKnown = sl, sk
+		mdMu.Unlock()
+	})
+	mdMu.Lock()
+	mdKnown, mdLight = true, false
+	mdMu.Unlock()
+
+	// no RGB captured -> fall back
+	bgCache = bgResult{light: false, valid: true}
+	if _, ok := ocBgShift(10); ok {
+		t.Fatal("no RGB should not derive")
+	}
+	// dark bg -> lighten by delta
+	bgCache = bgResult{light: false, valid: true, r: 0x26, g: 0x28, b: 0x2c, hasRGB: true}
+	if c, ok := ocBgShift(10); !ok || c != lipgloss.Color("#303236") {
+		t.Fatalf("dark shift = %v %v, want #303236", c, ok)
+	}
+	// light bg -> darken by 2x delta, clamped at 0..255
+	bgCache = bgResult{light: true, valid: true, r: 0xff, g: 0xff, b: 0xf5, hasRGB: true}
+	if c, ok := ocBgShift(10); !ok || c != lipgloss.Color("#ebebe1") {
+		t.Fatalf("light shift = %v %v, want #ebebe1", c, ok)
+	}
+	// panels/element derive from the cache when present
+	bgCache = bgResult{light: false, valid: true, r: 0x26, g: 0x28, b: 0x2c, hasRGB: true}
+	if got := ocPanelBg(); got != lipgloss.Color("#303236") {
+		t.Fatalf("panel = %v, want derived", got)
+	}
+	if got := ocElementBg(); got != lipgloss.Color("#3a3c40") {
+		t.Fatalf("element = %v, want derived", got)
+	}
+	// unknown theme -> no derivation even with RGB
+	mdMu.Lock()
+	mdKnown = false
+	mdMu.Unlock()
+	if _, ok := ocBgShift(10); ok {
+		t.Fatal("unknown theme should not derive")
+	}
+}
+
+func TestParseOSCBgRGB(t *testing.T) {
+	r, g, b, ok := parseOSCBgRGB("rgb:2626/2828/2c2c")
+	if !ok || r != 0x26 || g != 0x28 || b != 0x2c {
+		t.Fatalf("rgb parse = %d %d %d %v", r, g, b, ok)
+	}
+	if _, _, _, ok := parseOSCBgRGB("garbage"); ok {
+		t.Fatal("garbage should not parse")
 	}
 }
 
@@ -385,7 +443,8 @@ func TestSetUIModeSaveError(t *testing.T) {
 	// file so MkdirAll fails and Save() returns an error.
 	t.Setenv("WHIP_HOME", filepath.Join(f, "cfg"))
 	m := &model{cfg: &config.Config{}, agent: &agent.Agent{}, input: newInput()}
-	m.setUIMode(opencodeMode) // must not panic even though Save fails
+	t.Cleanup(func() { m.applyUIMode("") }) // don't leak ocActive into other tests
+	m.setUIMode(opencodeMode)               // must not panic even though Save fails
 	if m.uiMode != opencodeMode {
 		t.Fatalf("uiMode = %q, want opencode", m.uiMode)
 	}

@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"bufio"
 	"os"
 	"strconv"
 	"strings"
@@ -21,50 +20,50 @@ import (
 // instead of tmux's own (often unrelated) configured background. Requires
 // `set -g allow-passthrough on` in tmux ≥3.3; when that's off the query gets
 // no reply and we report !ok so the caller falls back to its default.
-func queryTerminalBackground(tty *os.File, inTmux bool) (light, ok bool) {
+func queryTerminalBackground(tty *os.File, inTmux bool) bgResult {
 	fd := int(tty.Fd())
 	if !isForegroundFd(fd) {
-		return false, false
+		return bgResult{}
 	}
 	query := bgQuery(inTmux)
 
 	// put the tty in raw-ish mode (no echo, non-canonical) for the query
 	old, err := unix.IoctlGetTermios(fd, ioctlReadTermios)
 	if err != nil {
-		return false, false
+		return bgResult{}
 	}
 	raw := *old
 	raw.Lflag &^= unix.ECHO | unix.ICANON
 	// VMIN=0 + VTIME=1 (100ms): read returns 0 bytes when the terminal never
 	// replies. os.File.SetReadDeadline does NOT work on /dev/tty (not in the
-	// runtime poller on darwin), so without this the ReadByte below blocks
+	// runtime poller on darwin), so without this the reads below block
 	// forever and whip hangs at startup (e.g. tmux with allow-passthrough off).
 	raw.Cc[unix.VMIN] = 0
 	raw.Cc[unix.VTIME] = 1
 	if err := unix.IoctlSetTermios(fd, ioctlWriteTermios, &raw); err != nil {
-		return false, false
+		return bgResult{}
 	}
 	defer unix.IoctlSetTermios(fd, ioctlWriteTermios, old) //nolint:errcheck // best-effort restore of the original termios on exit
 
 	if _, err := tty.WriteString(query); err != nil {
-		return false, false
+		return bgResult{}
 	}
 
-	// read replies with a deadline; the OSC 11 reply looks like
-	// "\x1b]11;rgb:RRRR/GGGG/BBBB\x1b\\" (or BEL-terminated)
-	_ = tty.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
-	defer tty.SetReadDeadline(time.Time{}) //nolint:errcheck // best-effort deadline clear before the fd is handed back
-	r := bufio.NewReader(tty)
-	var buf strings.Builder
-	deadline := time.Now().Add(300 * time.Millisecond)
+	// Poll for the reply until the FULL deadline: over ssh the reply
+	// round-trips to the user's local terminal, which can take several hundred
+	// ms (a relayed tailscale hop easily beats 100ms) — a single quiet VTIME
+	// window is NOT "no reply coming". Each read blocks ≤100ms (VMIN=0/VTIME=1),
+	// so the loop stays bounded without SetReadDeadline.
+	deadline := time.Now().Add(time.Second)
+	var buf []byte
+	chunk := make([]byte, 256)
 	for time.Now().Before(deadline) {
-		b, err := r.ReadByte()
-		if err != nil {
-			break
+		n, _ := tty.Read(chunk) // 0,err on a quiet window; keep polling
+		if n == 0 {
+			continue
 		}
-		buf.WriteByte(b)
-		s := buf.String()
-		if _, after, ok := strings.Cut(s, "\x1b]11;"); ok {
+		buf = append(buf, chunk[:n]...)
+		if _, after, ok := strings.Cut(string(buf), "\x1b]11;"); ok {
 			// have the OSC reply start; find its terminator
 			rest := after
 			end := strings.Index(rest, "\x07")
@@ -74,13 +73,14 @@ func queryTerminalBackground(tty *os.File, inTmux bool) (light, ok bool) {
 			if end < 0 {
 				continue // reply not complete yet
 			}
-			return parseOSCBg(rest[:end]), true
-		}
-		if len(s) > 128 { // no OSC 11 reply coming (e.g. passthrough off)
-			break
+			r, g, b, ok := parseOSCBgRGB(rest[:end])
+			if !ok {
+				return bgResult{}
+			}
+			return bgResult{light: rgbIsLight(r, g, b), valid: true, r: r, g: g, b: b, hasRGB: true}
 		}
 	}
-	return false, false
+	return bgResult{}
 }
 
 // bgQuery builds the background-color query bytes: an OSC 11 query, then a
@@ -102,15 +102,14 @@ func bgQuery(inTmux bool) string {
 	return q + "\x1b[6n"
 }
 
-// parseOSCBg parses an OSC 11 payload ("rgb:rrrr/gggg/bbbb" or "#rrggbb") and
-// reports whether it is a light color, by relative luminance.
-func parseOSCBg(payload string) bool {
+// parseOSCBgRGB parses an OSC 11 payload ("rgb:rrrr/gggg/bbbb" or "#rrggbb")
+// into 8-bit RGB components.
+func parseOSCBgRGB(payload string) (r, g, b int, ok bool) {
 	payload = strings.TrimSpace(payload)
-	var r, g, b int
-	if after, ok := strings.CutPrefix(payload, "rgb:"); ok {
+	if after, found := strings.CutPrefix(payload, "rgb:"); found {
 		parts := strings.Split(after, "/")
 		if len(parts) != 3 {
-			return false
+			return 0, 0, 0, false
 		}
 		// components are 1–4 hex digits; normalize to 8-bit
 		comp := func(s string) int {
@@ -127,18 +126,28 @@ func parseOSCBg(payload string) bool {
 			}
 			return int(v) * 255 / maxVal
 		}
-		r, g, b = comp(parts[0]), comp(parts[1]), comp(parts[2])
-	} else if strings.HasPrefix(payload, "#") && len(payload) >= 7 {
+		return comp(parts[0]), comp(parts[1]), comp(parts[2]), true
+	}
+	if strings.HasPrefix(payload, "#") && len(payload) >= 7 {
 		v, err := strconv.ParseUint(payload[1:7], 16, 32)
 		if err != nil {
-			return false
+			return 0, 0, 0, false
 		}
-		r, g, b = int(v>>16)&0xff, int(v>>8)&0xff, int(v)&0xff
-	} else {
-		return false
+		return int(v>>16) & 0xff, int(v>>8) & 0xff, int(v) & 0xff, true
 	}
-	// ITU-R BT.601 luma; light backgrounds sit well above the midpoint
+	return 0, 0, 0, false
+}
+
+// rgbIsLight reports whether a color reads as a light background
+// (ITU-R BT.601 luma; light backgrounds sit well above the midpoint).
+func rgbIsLight(r, g, b int) bool {
 	return (299*r+587*g+114*b)/1000 > 128
+}
+
+// parseOSCBg parses an OSC 11 payload and reports whether it is a light color.
+func parseOSCBg(payload string) bool {
+	r, g, b, ok := parseOSCBgRGB(payload)
+	return ok && rgbIsLight(r, g, b)
 }
 
 // isForegroundFd reports whether the fd is the controlling terminal in the
