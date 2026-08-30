@@ -129,6 +129,47 @@ func (m *model) taskCommand(rest string) {
 	m.append(dimStyle.Render(fmt.Sprintf("⚙ %s started — %s  (ctrl+t to watch · /subagents %s to open)", t.ID, taskDesc(rest), t.ID)))
 }
 
+// subagentModelCommand picks the model subagents run on. The pick persists to
+// the global config (taskModel/taskProvider); "off" restores the built-in
+// default. Driven from the ctrl+p "Subagent model" picker.
+func (m *model) subagentModelCommand(args []string) {
+	if args[0] == "off" {
+		m.cfg.TaskModel, m.cfg.TaskProvider = "", ""
+		m.applyTaskModel()
+		if err := m.cfg.Save(); err != nil {
+			m.append(errStyle.Render("config save failed: " + err.Error()))
+		}
+		m.append(dimStyle.Render("◎ subagent model: default (" + config.DefaultTaskModel + ")"))
+		return
+	}
+	model, prov := args[0], ""
+	if at, p, ok := strings.Cut(model, "@"); ok {
+		model, prov = at, p
+	}
+	if _, ok := m.cfg.Models[model]; !ok {
+		m.append(errStyle.Render("unknown model " + model))
+		return
+	}
+	if len(args) > 1 {
+		prov = args[1]
+	}
+	if _, err := SubModelFor(m.cfg, model, prov); err != nil {
+		m.append(errStyle.Render("task model: " + err.Error()))
+		return
+	}
+	m.cfg.TaskModel, m.cfg.TaskProvider = model, prov
+	m.applyTaskModel() // the explicit pick resolves (checked above) — can't fail
+	if err := m.cfg.Save(); err != nil {
+		m.append(errStyle.Render("config save failed: " + err.Error()))
+	}
+	if prov == "" {
+		if mdl := m.cfg.Models[model]; len(mdl.Providers) > 0 {
+			prov = mdl.Providers[0]
+		}
+	}
+	m.append(dimStyle.Render("◎ subagent model: " + model + " @ " + prov))
+}
+
 // taskDesc derives a short dock description from a /task prompt.
 func taskDesc(prompt string) string {
 	f := strings.Fields(prompt)
