@@ -168,8 +168,7 @@ func main() {
 	// Load (whip auth/run/mcp/…) from permanently consuming the first run.
 	firstRun := !config.Exists() && !config.SetupDone()
 
-	// `whip up <words...>` — open the TUI with the joined args submitted as
-	// the first turn. flag.Parse stops at "up", so flags go before it
+	// `whip up <words...>`: flag.Parse stops at "up", so flags go before it
 	// (whip -m kimi up …) and the prompt may start with "-" untouched.
 	initialPrompt := ""
 	if flag.NArg() > 0 && flag.Arg(0) == "up" {

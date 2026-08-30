@@ -235,9 +235,8 @@ type model struct {
 	// team → project → create prompts.
 	infAuth *inferenceNetPending
 
-	// initialPrompt, when non-empty (whip up <words>), is submitted as the
-	// session's first turn from Init — early enough that no turn is running,
-	// late enough that m.prog exists for the turn goroutine's p.Send.
+	// initialPrompt (whip up <words>) is submitted as the first turn from
+	// Init — late enough that m.prog exists for the turn goroutine's p.Send.
 	initialPrompt string
 }
 
@@ -297,9 +296,8 @@ var (
 // was active on exit ("" if nothing was said). firstRun reports the config
 // file did not exist at startup (the caller checks config.Exists before
 // config.Load creates it) and triggers the one-time setup wizard.
-// initialPrompt, when non-empty (`whip up <words>`), is submitted as the
-// first turn once the UI is up — after any resume replay, matching
-// `whip run`'s prompt-after-resume order.
+// initialPrompt (`whip up <words>`) is submitted as the first turn once the
+// UI is up — after any resume replay, matching `whip run`'s order.
 func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string, cautious, firstRun bool, initialPrompt string) (string, error) {
 	// One shared stdin reader for the pre-TUI prompts: a bufio.Reader reads
 	// ahead, so separate readers for the trust gate and the setup wizard would
@@ -1320,8 +1318,7 @@ func (m *model) Init() tea.Cmd {
 	if m.initialPrompt == "" {
 		return textarea.Blink
 	}
-	// tea.Batch runs both cmds concurrently; the turn's p.Send calls are
-	// nil-safe anyway (headless tests drive Update without a program).
+	// Batch blink with the kickoff; the turn's p.Send is nil-safe in headless tests.
 	return tea.Batch(textarea.Blink, func() tea.Msg { return initialPromptMsg{} })
 }
 
@@ -1641,10 +1638,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		text := m.initialPrompt
-		m.initialPrompt = "" // one-shot: Init fired it, no re-submit on replays
+		m.initialPrompt = "" // one-shot: no re-submit on replays
 		m.hist = append(m.hist, text)
 		m.histIdx = len(m.hist)
-		return m.submitTurn(text, true)
+		return m.submit(text)
 
 	case cfgSyncTick:
 		return m.cfgSync()
