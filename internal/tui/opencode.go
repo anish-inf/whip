@@ -255,6 +255,10 @@ func (m *model) opencodePrompt(inner string, width int) string {
 	var b strings.Builder
 	b.WriteString(row(bar) + "\n") // paddingTop (bar continues down the whole box)
 	for _, ln := range strings.Split(inner, "\n") {
+		// The textarea pads lines to its width with PLAIN spaces (its internal
+		// viewport) — a default-background tail that would punch a white stripe
+		// through the box. Trim it and let ocPadTo re-pad with the box bg.
+		ln = strings.TrimRight(ln, " ")
 		b.WriteString(row(bar+elem.Render("  "+ln)) + "\n")
 	}
 	b.WriteString(row(bar) + "\n") // padding below the input, above the meta row
@@ -397,6 +401,11 @@ func (m *model) applyUIMode(mode string) {
 		m.input.BlurredStyle.Text = lipgloss.NewStyle()
 		m.input.BlurredStyle.Placeholder = dimStyle
 	}
+	// The textarea reads styles through a pointer snapshotted at Focus() time
+	// (style = &m.FocusedStyle). The struct has been copied since newInput's
+	// Focus(), so the writes above land in a field View() never reads.
+	// Re-focus to re-snapshot the pointer at the CURRENT struct.
+	m.input.Focus()
 }
 
 // setUIMode switches render mode live, persists the choice, and redraws. It

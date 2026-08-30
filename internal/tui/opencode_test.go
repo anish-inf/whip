@@ -326,7 +326,7 @@ func TestSetUIModeSaveError(t *testing.T) {
 	// WHIP_HOME (pinned by TestMain) wins over HOME; point it under a regular
 	// file so MkdirAll fails and Save() returns an error.
 	t.Setenv("WHIP_HOME", filepath.Join(f, "cfg"))
-	m := &model{cfg: &config.Config{}, agent: &agent.Agent{}}
+	m := &model{cfg: &config.Config{}, agent: &agent.Agent{}, input: newInput()}
 	m.setUIMode(opencodeMode) // must not panic even though Save fails
 	if m.uiMode != opencodeMode {
 		t.Fatalf("uiMode = %q, want opencode", m.uiMode)
@@ -365,7 +365,7 @@ func TestSidebarView(t *testing.T) {
 
 func TestSetUIModeRoundTrip(t *testing.T) {
 	t.Setenv("HOME", t.TempDir()) // keep cfg.Save() off the real config
-	m := &model{cfg: &config.Config{}, agent: &agent.Agent{}}
+	m := &model{cfg: &config.Config{}, agent: &agent.Agent{}, input: newInput()}
 
 	m.setUIMode(opencodeMode)
 	if m.uiMode != opencodeMode || m.cfg.UIMode != opencodeMode {
