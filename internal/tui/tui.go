@@ -202,6 +202,10 @@ type model struct {
 	msgActions   *msgActions // opencode mode: the Message Actions dialog opened by clicking a message; nil = closed
 	hoverIdx     int         // opencode mode: block index under the mouse (hover highlight); -1 = none
 	ocThink      string      // opencode mode: reasoning text accumulated for the expandable "+ Thought" block
+	toast        string      // opencode mode: top-right toast text; "" = none
+	toastAt      time.Time   // when the current toast was shown (stale clears are ignored)
+	leaderAt     time.Time   // opencode mode: when ctrl+x armed the leader chord; zero = not pending
+	sidebarHide  bool        // opencode mode: ctrl+x b hides the sidebar
 	compactModel string      // config model name for compaction summaries; "" = the built-in default
 	compactProv  string
 	// updateLatest is a pending newer release tag ("" when none), picked up
@@ -1211,7 +1215,7 @@ func (b block) render(width int) string {
 		if ocActive {
 			// opencode tucks results behind the tool row: a muted one-line hint
 			// collapsed, the full body only when expanded
-			return ocToolResult(lines, b.expanded, strings.HasPrefix(b.text, "Error"), width)
+			return ocToolResult(lines, b.expanded, strings.HasPrefix(b.text, "Error"), b.hover, width)
 		}
 		lines[0] = "⎿ " + lines[0] // tie the result to its header row above
 		style := dimStyle
@@ -1714,7 +1718,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		w := msg.Width
 		if m.uiMode == opencodeMode {
 			w -= opencodeLeftMargin // opencode's main column has a left margin
-			if msg.Width >= sidebarMinWidth {
+			if msg.Width >= sidebarMinWidth && !m.sidebarHide {
 				w -= sidebarWidth + opencodeRightGap // reserve the sidebar and the gap before it
 			}
 		}
@@ -1727,6 +1731,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.input.SetWidth(w - 2)
 		if resized {
 			m.refreshVP() // every block re-renders at the new width (floored at minRenderWidth)
+		}
+		return m, nil
+
+	case toastClearMsg:
+		if msg.at.Equal(m.toastAt) { // a newer toast reset the timer: ignore the stale clear
+			m.toast = ""
 		}
 		return m, nil
 
@@ -2409,6 +2419,25 @@ func (m *model) key(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// an open task detail view owns the keyboard until esc backs out of it
 	if m.taskVP != nil {
 		return m.taskViewKey(msg)
+	}
+	// opencode leader chords: ctrl+x arms a 2s window, the next key dispatches
+	// (ctrl+x m model list, l sessions, n new, b sidebar, t theme, c compact,
+	// g rewind, y copy last assistant message); esc clears the pending chord.
+	// Sits BELOW the task-pane dispatch: ctrl+x there cancels the task.
+	if m.uiMode == opencodeMode {
+		if !m.leaderAt.IsZero() && m.nowFn().Sub(m.leaderAt) < 2*time.Second {
+			m.leaderAt = time.Time{}
+			if msg.String() == "esc" {
+				return m, nil
+			}
+			if mod, cmd, ok := m.ocLeaderChord(msg.String()); ok {
+				return mod, cmd
+			}
+			// unknown chord key: fall through as a normal keypress
+		} else if msg.String() == "ctrl+x" {
+			m.leaderAt = m.nowFn()
+			return m, nil
+		}
 	}
 	// Paste collapse (opt-in via config collapsePaste): a multi-line bracketed
 	// paste lands as a [Pasted ~N lines] placeholder in the input instead of
@@ -4014,10 +4043,20 @@ func (m *model) View() string {
 		gap := strings.Repeat(" ", opencodeRightGap) // breathing room between the panels
 		v = lipgloss.JoinHorizontal(lipgloss.Top, v, gap, m.sidebarView(lipgloss.Height(v)))
 	}
-	if m.uiMode == opencodeMode && m.palette != nil {
-		v = m.ocOverlay(v) // Commands dialog floats over the dimmed session
-	} else if m.uiMode == opencodeMode && m.msgActions != nil {
-		v = m.ocOverlayRows(v, m.ocMsgActionRows()) // Message Actions dialog
+	if m.uiMode == opencodeMode {
+		switch { // floating dialogs over the dimmed session, opencode-style
+		case m.palette != nil:
+			v = m.ocOverlay(v) // Commands
+		case m.msgActions != nil:
+			v = m.ocOverlayRows(v, m.ocMsgActionRows())
+		case m.mpicker != nil:
+			v = m.ocOverlayRows(v, m.ocModelDialogRows())
+		case m.picker != nil:
+			v = m.ocOverlayRows(v, m.ocSessionDialogRows())
+		}
+		if m.toast != "" {
+			v = m.ocSpliceToast(v) // top-right toast, over everything
+		}
 	}
 	if m.height > 0 {
 		m.viewH = lipgloss.Height(v)
@@ -4073,11 +4112,13 @@ func (m *model) viewBody() string {
 		b.WriteString(m.paletteView())
 		return b.String()
 	}
-	if m.picker != nil {
+	if m.picker != nil && m.uiMode != opencodeMode { // opencode mode: floating Sessions dialog via View overlay
 		b.WriteString(m.pickerView())
 		return b.String()
 	}
-	if m.mpicker != nil {
+	if m.mpicker != nil && m.uiMode == opencodeMode {
+		// floating Select-model dialog via View overlay
+	} else if m.mpicker != nil {
 		b.WriteString(m.modelPickerView())
 		return b.String()
 	}

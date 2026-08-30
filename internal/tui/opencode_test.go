@@ -13,6 +13,7 @@ import (
 	"github.com/context-labs/whip/internal/config"
 	"github.com/context-labs/whip/internal/llm"
 	"github.com/context-labs/whip/internal/lsp"
+	"github.com/context-labs/whip/internal/session"
 )
 
 func TestOpencodeLogo(t *testing.T) {
@@ -173,18 +174,18 @@ func TestOcToolRows(t *testing.T) {
 
 func TestOcToolResult(t *testing.T) {
 	lines := []string{"a", "b", "c"}
-	col := ocToolResult(lines, false, false, 80)
+	col := ocToolResult(lines, false, false, false, 80)
 	if !strings.Contains(col, "↳ 3 lines") {
 		t.Fatalf("collapsed = %q", col)
 	}
-	if one := ocToolResult([]string{"only"}, false, false, 80); !strings.Contains(one, "↳ only") {
+	if one := ocToolResult([]string{"only"}, false, false, false, 80); !strings.Contains(one, "↳ only") {
 		t.Fatalf("short results render inline: %q", one)
 	}
-	exp := ocToolResult(lines, true, false, 80)
+	exp := ocToolResult(lines, true, false, false, 80)
 	if !strings.Contains(exp, "↳ a") || !strings.Contains(exp, "b") {
 		t.Fatalf("expanded = %q", exp)
 	}
-	if e := ocToolResult(lines, false, true, 80); !strings.Contains(e, "↳ 3 lines") {
+	if e := ocToolResult(lines, false, true, false, 80); !strings.Contains(e, "↳ 3 lines") {
 		t.Fatalf("error collapsed = %q", e)
 	}
 }
@@ -295,6 +296,147 @@ func TestUpdateHover(t *testing.T) {
 	if m.hoverIdx != -1 || m.blocks[0].hover {
 		t.Fatalf("hover off = %d", m.hoverIdx)
 	}
+}
+
+func TestOcWindow(t *testing.T) {
+	if lo, hi := ocWindow(3, 0, 10); lo != 0 || hi != 3 {
+		t.Fatalf("small list window = %d,%d", lo, hi)
+	}
+	if lo, hi := ocWindow(100, 50, 10); hi-lo != 10 || 50 < lo || 50 >= hi {
+		t.Fatalf("centered window = %d,%d", lo, hi)
+	}
+	if lo, hi := ocWindow(100, 99, 10); lo != 90 || hi != 100 {
+		t.Fatalf("end window = %d,%d", lo, hi)
+	}
+}
+
+func TestOcModelDialogRows(t *testing.T) {
+	m := &model{width: 80, height: 40}
+	m.mpicker = &modelPicker{items: []modelItem{
+		{model: "kimi-k3", provider: "inference-net"},
+		{model: "kimi-k3-fast", provider: "inference-net"},
+		{model: "gpt-x", provider: "openrouter", fromCatalog: true},
+	}}
+	out := strings.Join(m.ocModelDialogRows(), "\n")
+	for _, want := range []string{"Select model", "esc", "Search", "inference-net", "openrouter", "kimi-k3", "(new)", "enter"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("model dialog missing %q:\n%s", want, out)
+		}
+	}
+	m.mpicker.query = "kimi"
+	if out := strings.Join(m.ocModelDialogRows(), "\n"); strings.Contains(out, "Search") || !strings.Contains(out, "kimi") {
+		t.Fatalf("query should replace Search:\n%s", out)
+	}
+	m.mpicker.items = nil
+	m.mpicker.query = ""
+	if out := strings.Join(m.ocModelDialogRows(), "\n"); !strings.Contains(out, "No results found") {
+		t.Fatal("empty model dialog should say No results found")
+	}
+}
+
+func TestOcSessionDialogRows(t *testing.T) {
+	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+	m := &model{width: 80, height: 40, now: func() time.Time { return now }}
+	m.picker = &picker{metas: []session.Meta{
+		{ID: "a", Title: "Greeting", UpdatedAt: now.Add(-time.Hour)},
+		{ID: "b", Title: "", UpdatedAt: now.Add(-48 * time.Hour)},
+	}}
+	out := strings.Join(m.ocSessionDialogRows(), "\n")
+	for _, want := range []string{"Sessions", "esc", "Today", "Greeting", "(untitled)", "enter"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("sessions dialog missing %q:\n%s", want, out)
+		}
+	}
+	m.picker.metas = nil
+	if out := strings.Join(m.ocSessionDialogRows(), "\n"); !strings.Contains(out, "No sessions") {
+		t.Fatal("empty sessions dialog should say No sessions")
+	}
+}
+
+func TestOcLeaderChord(t *testing.T) {
+	t.Setenv("WHIP_HOME", t.TempDir())
+	m := &model{cfg: &config.Config{}, agent: &agent.Agent{}, input: newInput(), termWidth: 200, width: 100, uiMode: opencodeMode}
+	m.now = time.Now
+
+	if _, _, ok := m.ocLeaderChord("z"); ok {
+		t.Fatal("unknown chord should not handle")
+	}
+	if _, _, ok := m.ocLeaderChord("b"); !ok || !m.sidebarHide {
+		t.Fatal("b should hide the sidebar")
+	}
+	if _, _, ok := m.ocLeaderChord("g"); !ok {
+		t.Fatal("g should handle (rewind)")
+	}
+	// y with no assistant message: toast
+	if _, cmd, ok := m.ocLeaderChord("y"); !ok || cmd == nil || !strings.Contains(m.toast, "No assistant") {
+		t.Fatalf("y toast = %q", m.toast)
+	}
+	// y with an assistant message: copies + toast
+	m.blocks = []block{{kind: blockAssistant, text: "answer"}}
+	if _, cmd, ok := m.ocLeaderChord("y"); !ok || cmd == nil || !strings.Contains(m.toast, "copied") {
+		t.Fatalf("y copy toast = %q", m.toast)
+	}
+	// the remaining chords dispatch into existing commands/pickers (all
+	// nil-store safe: they append an error or open their picker)
+	m.cfg = &config.Config{
+		Providers: map[string]config.Provider{"inference-net": {BaseURL: "https://x"}},
+		Models:    map[string]config.Model{"kimi-k3": {Providers: []string{"inference-net"}}},
+	}
+	if _, _, ok := m.ocLeaderChord("m"); !ok || m.mpicker == nil {
+		t.Fatal("m should open the model picker")
+	}
+	m.mpicker = nil
+	m.agent.Messages = []llm.Message{{Role: "system"}} // /clear keeps the system prompt
+	for _, k := range []string{"l", "n", "c", "t"} {
+		if _, _, ok := m.ocLeaderChord(k); !ok {
+			t.Fatalf("chord %q should handle", k)
+		}
+		m.palette = nil // t opens the palette; reset between chords
+	}
+}
+
+func TestToastAndSplice(t *testing.T) {
+	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+	m := &model{termWidth: 80, now: func() time.Time { return now }}
+	if cmd := m.showToast("Copied to clipboard"); cmd == nil || m.toast == "" {
+		t.Fatal("showToast should set the toast and return a timer")
+	}
+	if msg, ok := toastClear(now)(time.Time{}).(toastClearMsg); !ok || !msg.at.Equal(now) {
+		t.Fatal("toastClear should carry the toast timestamp")
+	}
+	backdrop := strings.TrimSuffix(strings.Repeat(strings.Repeat("x", 80)+"\n", 10), "\n")
+	out := m.ocSpliceToast(backdrop)
+	if !strings.Contains(out, "Copied to clipboard") || !strings.Contains(out, "┃") {
+		t.Fatalf("toast not spliced:\n%s", out)
+	}
+	if len(strings.Split(out, "\n")) != 10 {
+		t.Fatal("splice must not change line count")
+	}
+	// short backdrop lines: the left side pads out to the toast column
+	narrow := strings.TrimSuffix(strings.Repeat("y\n", 10), "\n")
+	if out := m.ocSpliceToast(narrow); !strings.Contains(out, "Copied to clipboard") {
+		t.Fatal("toast should splice over short lines")
+	}
+	// tiny backdrop: loop stops at the frame's end without panicking
+	if out := m.ocSpliceToast("a\nb\nc"); len(strings.Split(out, "\n")) != 3 {
+		t.Fatal("tiny backdrop line count changed")
+	}
+}
+
+func TestOcRecalcWidth(t *testing.T) {
+	m := &model{uiMode: opencodeMode, termWidth: 200, width: 154, input: newInput()}
+	m.sidebarHide = true
+	m.ocRecalcWidth() // sidebar hidden: content takes the sidebar's columns
+	if m.width != 200-opencodeLeftMargin {
+		t.Fatalf("hidden width = %d", m.width)
+	}
+	m.sidebarHide = false
+	m.ocRecalcWidth()
+	if m.width != 200-opencodeLeftMargin-sidebarWidth-opencodeRightGap {
+		t.Fatalf("shown width = %d", m.width)
+	}
+	m.termWidth = 0
+	m.ocRecalcWidth() // no size yet: no-op
 }
 
 func TestOcDimLine(t *testing.T) {

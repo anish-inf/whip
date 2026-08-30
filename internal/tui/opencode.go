@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"math/rand/v2"
 	"path/filepath"
 	"strings"
 	"time"
@@ -188,7 +189,7 @@ func opencodeHome(width, height int) string {
 // sidebarVisible reports whether the opencode-mode sidebar should render: the
 // mode is on and the terminal is wide enough to spare sidebarWidth columns.
 func (m *model) sidebarVisible() bool {
-	return m.uiMode == opencodeMode && m.termWidth >= sidebarMinWidth
+	return m.uiMode == opencodeMode && m.termWidth >= sidebarMinWidth && !m.sidebarHide
 }
 
 // sidebarView renders the opencode right sidebar: session title, a Context
@@ -555,9 +556,13 @@ func ocToolPending(name, args string) string {
 
 // ocToolResult renders a tool result block: collapsed to a single muted "↳ N
 // lines" hint (opencode tucks results away behind the tool row), the full body
-// indented when expanded. Errors keep the error color.
-func ocToolResult(lines []string, expanded, isErr bool, width int) string {
+// indented when expanded. Errors keep the error color; hover brightens the
+// hint (opencode's clickable-row hover).
+func ocToolResult(lines []string, expanded, isErr, hover bool, width int) string {
 	style := lipgloss.NewStyle().Foreground(ocMutedCol())
+	if hover {
+		style = lipgloss.NewStyle().Foreground(ocTextCol())
+	}
 	if isErr {
 		style = lipgloss.NewStyle().Foreground(lipgloss.Color("#e06c75"))
 	}
@@ -589,17 +594,19 @@ type msgActions struct {
 // msgAction is one row of the Message Actions dialog.
 type msgAction struct {
 	name, desc string
-	run        func(*model, int)
+	run        func(*model, int) tea.Cmd
 }
 
 var msgActionList = []msgAction{
-	{"Revert", "undo messages and file changes", func(m *model, _ int) { m.openRewind() }},
-	{"Copy", "message text to clipboard", func(m *model, blk int) {
+	{"Revert", "undo messages and file changes", func(m *model, _ int) tea.Cmd { m.openRewind(); return nil }},
+	{"Copy", "message text to clipboard", func(m *model, blk int) tea.Cmd {
 		if blk >= 0 && blk < len(m.blocks) {
 			copyText(ansi.Strip(m.blocks[blk].text))
+			return m.showToast("Message copied to clipboard!")
 		}
+		return nil
 	}},
-	{"Fork", "create a new session", func(m *model, _ int) { m.forkCommand("") }},
+	{"Fork", "create a new session", func(m *model, _ int) tea.Cmd { m.forkCommand(""); return nil }},
 }
 
 // msgActionItems returns the actions matching the dialog's filter.
@@ -642,6 +649,201 @@ func (m *model) ocMsgActionRows() []string {
 	return append(rows, k.blank)
 }
 
+// ocWindow returns the [lo,hi) slice bounds showing up to budget rows
+// centered on idx.
+func ocWindow(n, idx, budget int) (int, int) {
+	if budget >= n {
+		return 0, n
+	}
+	lo := max(idx-budget/2, 0)
+	hi := min(lo+budget, n)
+	return max(hi-budget, 0), hi
+}
+
+// ocModelDialogRows renders the model picker as opencode's "Select model"
+// dialog: Search line, provider names as accent group headers, the selected
+// row a primary fill, catalog-only routes marked (new).
+func (m *model) ocModelDialogRows() []string {
+	p := m.mpicker
+	k := m.newOcBox()
+	rows := []string{k.blank, k.lr(k.head.Render("Select model"), k.muted.Render("esc")), k.blank}
+	if p.query == "" {
+		rows = append(rows, k.lr(k.muted.Render("Search"), ""))
+	} else {
+		rows = append(rows, k.lr(k.text.Render(p.query), ""))
+	}
+	rows = append(rows, k.blank)
+
+	items := p.view()
+	sel := lipgloss.NewStyle().Foreground(ocSelFg()).Background(ocSelBg())
+	lo, hi := ocWindow(len(items), p.idx, max(m.height-14, 4))
+	lastProv := ""
+	for i := lo; i < hi; i++ {
+		it := items[i]
+		if it.provider != lastProv {
+			if lastProv != "" {
+				rows = append(rows, k.blank)
+			}
+			rows = append(rows, k.lr(k.accent.Render(it.provider), ""))
+			lastProv = it.provider
+		}
+		mark := ""
+		if it.fromCatalog {
+			mark = "(new)"
+		}
+		if i == p.idx {
+			rows = append(rows, ocPadTo(sel.Render("  "+it.model), k.w, ocSelBg()))
+		} else {
+			rows = append(rows, k.lr(k.text.Render(it.model), k.muted.Render(mark)))
+		}
+	}
+	if len(items) == 0 {
+		rows = append(rows, k.lr(k.muted.Render("No results found"), ""))
+	}
+	rows = append(rows, k.blank,
+		k.lr(k.text.Render("enter")+k.muted.Render(" select")+k.pnl.Render("  ")+k.text.Render("type")+k.muted.Render(" to filter"), ""))
+	return append(rows, k.blank)
+}
+
+// ocSessionDialogRows renders the resume picker as opencode's "Sessions"
+// dialog: date group headers in accent, title left / age right, selected row
+// a primary fill.
+func (m *model) ocSessionDialogRows() []string {
+	p := m.picker
+	k := m.newOcBox()
+	rows := []string{k.blank, k.lr(k.head.Render("Sessions"), k.muted.Render("esc")), k.blank}
+	sel := lipgloss.NewStyle().Foreground(ocSelFg()).Background(ocSelBg())
+	lo, hi := ocWindow(len(p.metas), p.idx, max(m.height-12, 4))
+	lastDay := ""
+	for i := lo; i < hi; i++ {
+		meta := p.metas[i]
+		day := meta.UpdatedAt.Format("Mon Jan 2 2006")
+		if day == m.nowFn().Format("Mon Jan 2 2006") {
+			day = "Today"
+		}
+		if day != lastDay {
+			if lastDay != "" {
+				rows = append(rows, k.blank)
+			}
+			rows = append(rows, k.lr(k.accent.Render(day), ""))
+			lastDay = day
+		}
+		title := meta.Title
+		if title == "" {
+			title = "(untitled)"
+		}
+		title = truncLine(title, k.w-16)
+		if i == p.idx {
+			rows = append(rows, ocPadTo(sel.Render("  "+title), k.w, ocSelBg()))
+		} else {
+			rows = append(rows, k.lr(k.text.Render(title), k.muted.Render(ago(meta.UpdatedAt))))
+		}
+	}
+	if len(p.metas) == 0 {
+		rows = append(rows, k.lr(k.muted.Render("No sessions"), ""))
+	}
+	rows = append(rows, k.blank,
+		k.lr(k.text.Render("enter")+k.muted.Render(" resume")+k.pnl.Render("  ")+k.text.Render("↑/↓")+k.muted.Render(" select"), ""))
+	return append(rows, k.blank)
+}
+
+// toastClearMsg expires the toast set by showToast.
+type toastClearMsg struct{ at time.Time }
+
+// showToast displays opencode's top-right toast for 5s (a new toast replaces
+// the current one and resets the timer).
+func (m *model) showToast(msg string) tea.Cmd {
+	m.toast = msg
+	at := m.nowFn()
+	m.toastAt = at
+	return tea.Tick(5*time.Second, toastClear(at))
+}
+
+// toastClear builds the tick payload carrying the toast's timestamp, so a
+// stale timer can't clear a newer toast.
+func toastClear(at time.Time) func(time.Time) tea.Msg {
+	return func(time.Time) tea.Msg { return toastClearMsg{at: at} }
+}
+
+// ocSpliceToast paints the toast box into the frame's top-right corner
+// (opencode: top 2, right 2, panel bg, success-colored side bars).
+func (m *model) ocSpliceToast(v string) string {
+	bg := ocPanelBg()
+	pnl := lipgloss.NewStyle().Background(bg)
+	bar := lipgloss.NewStyle().Foreground(ocSuccessCol()).Background(bg).Render("┃")
+	txt := lipgloss.NewStyle().Foreground(ocTextCol()).Background(bg)
+	inner := truncLine(m.toast, max(min(56, m.termWidth-10), 8))
+	w := lipgloss.Width(inner) + 6
+	mid := bar + pnl.Render("  ") + txt.Render(inner) + pnl.Render("  ") + bar
+	pad := ocPadTo(bar, w-1, bg) + bar // side bars on the padding rows too
+	rows := []string{pad, mid, pad}
+	lines := strings.Split(v, "\n")
+	x := max(m.termWidth-w-2, 0)
+	for i := 0; i < len(rows) && i+2 < len(lines); i++ {
+		l := lines[i+2]
+		left := ansi.Truncate(l, x, "")
+		if pad := x - lipgloss.Width(left); pad > 0 {
+			left += strings.Repeat(" ", pad)
+		}
+		right := ansi.TruncateLeft(l, x+w, "")
+		lines[i+2] = left + "\x1b[0m" + rows[i] + "\x1b[0m" + right
+	}
+	return strings.Join(lines, "\n")
+}
+
+// ocLeaderChord dispatches an opencode leader chord (ctrl+x then a key,
+// within 2s). Returns handled=false for unknown keys.
+func (m *model) ocLeaderChord(k string) (tea.Model, tea.Cmd, bool) {
+	switch k {
+	case "m": // model list
+		m.openModelPicker(false)
+	case "l": // session list
+		return mcCmd(m.command("/resume"))
+	case "n": // new session
+		return mcCmd(m.command("/clear"))
+	case "b": // sidebar toggle
+		m.sidebarHide = !m.sidebarHide
+		m.ocRecalcWidth()
+	case "t": // theme list
+		m.openPaletteOn("theme")
+	case "c": // compact
+		return mcCmd(m.command("/compact"))
+	case "g": // jump back through messages (whip's rewind picker)
+		m.openRewind()
+	case "y": // copy last assistant message
+		for i := len(m.blocks) - 1; i >= 0; i-- {
+			if m.blocks[i].kind == blockAssistant {
+				copyText(ansi.Strip(m.blocks[i].text))
+				return m, m.showToast("Message copied to clipboard!"), true
+			}
+		}
+		return m, m.showToast("No assistant messages found"), true
+	default:
+		return m, nil, false
+	}
+	return m, nil, true
+}
+
+// mcCmd adapts a (model, cmd) pair to the chord-dispatch triple.
+func mcCmd(mod tea.Model, cmd tea.Cmd) (tea.Model, tea.Cmd, bool) { return mod, cmd, true }
+
+// ocRecalcWidth recomputes the content width from the terminal width (mirrors
+// the WindowSizeMsg math) — needed when the sidebar is toggled at runtime.
+func (m *model) ocRecalcWidth() {
+	if m.uiMode != opencodeMode || m.termWidth == 0 {
+		return
+	}
+	w := m.termWidth - opencodeLeftMargin
+	if m.termWidth >= sidebarMinWidth && !m.sidebarHide {
+		w -= sidebarWidth + opencodeRightGap
+	}
+	if w != m.width {
+		m.width = w
+		m.input.SetWidth(w - 2)
+		m.refreshVP()
+	}
+}
+
 // msgActionsKey handles keys while the Message Actions dialog is open.
 func (m *model) msgActionsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	a := m.msgActions
@@ -652,7 +854,7 @@ func (m *model) msgActionsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "enter":
 		if a.sel < len(items) {
 			m.msgActions = nil
-			items[a.sel].run(m, a.block)
+			return m, items[a.sel].run(m, a.block)
 		}
 	case "up":
 		if a.sel > 0 {
@@ -701,7 +903,9 @@ func (m *model) updateHover(x, y int) {
 	idx := -1
 	if x >= m.vpXOff() && x < m.vpXOff()+m.width {
 		for i := range m.blocks {
-			if m.blocks[i].kind == blockUser && row >= m.blocks[i].y0 && row <= m.blocks[i].y1 {
+			k := m.blocks[i].kind
+			clickable := k == blockUser || k == blockTool || k == blockThought // rows with a click affordance highlight on hover
+			if clickable && row >= m.blocks[i].y0 && row <= m.blocks[i].y1 {
 				idx = i
 				break
 			}
@@ -792,7 +996,9 @@ func (m *model) applyUIMode(mode string) {
 		m.spin = spinner.New(spinner.WithSpinner(ocKnightRider))
 		m.spin.Style = lipgloss.NewStyle().Foreground(ocAgentCol())
 		m.input.Prompt = "" // opencodePrompt supplies the ┃ bar per line
-		m.input.Placeholder = "Ask anything…"
+		// opencode's placeholder carries a random example (picked once, not cycled)
+		examples := []string{"Fix a TODO in the codebase", "What is the tech stack of this project?", "Fix broken tests"}
+		m.input.Placeholder = fmt.Sprintf("Ask anything… %q", examples[rand.IntN(len(examples))])
 		// Fill the textarea with the element background so the input box reads as
 		// a filled panel (opencode's prompt box).
 		elem := lipgloss.NewStyle().Background(ocElementBg())

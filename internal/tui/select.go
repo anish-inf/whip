@@ -288,6 +288,9 @@ func (m *model) handleMouseSelect(msg tea.MouseMsg) (handled bool, cmd tea.Cmd) 
 		if m.sel.anchor != m.sel.cur { // a real drag: copy, keep the highlight
 			m.sel.done = true
 			copyText(m.selText(*m.sel))
+			if ocActive {
+				return true, m.showToast("Copied to clipboard")
+			}
 			return true, nil
 		}
 		m.sel = nil
