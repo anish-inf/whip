@@ -136,6 +136,17 @@ Token bookkeeping: `llm.Usage` (prompt/completion/cached) is read off the
 terminal stream chunk (`stream_options: include_usage`) and folded into session
 totals via `AddUsage`. Compaction and subagent calls count too.
 
+Every compaction is visible in the transcript as a pair of notes. The moment
+folding begins, `OnCompactStart` renders `◎ compacting N msgs (est. X tok) with
+<model>…` so the UI never looks hung during the summary call. When it
+completes, `OnCompacted` renders `◎ compacted — summarized N msgs, M kept ·
+<model> · $cost (in/out tok) · raw history preserved` — the counts come from
+`OnCompact`, the model and spend from `CompactInfo` (a dedicated compaction
+route is labeled `<id> @ <host>`), and the cost is priced off the provider
+catalog (hidden when the model has no advertised price). The result note
+renders even with no session store; the `raw history preserved` suffix appears
+only once the event is actually recorded.
+
 ### Provider prompt-prefix caching
 
 To cut time-to-first-token on the many sequential turns of an agent loop,
@@ -171,9 +182,16 @@ threshold ←/→.
 Tests: `agent_test.go` — `TestTurnAutoCompactsOnContextLimit`,
 `TestCompactDoesNotLoopOnRepeatedContextLimit`, `TestCompactKeepsToolCallPair`,
 `TestProactiveCompactAtFiftyPercent`, `TestCompactThresholdExplicitOverride`,
-`TestUsageAccumulates`; `compact_cmd_test.go` —
+`TestCompactionEventsCarryModelAndUsage` (start fires before the summary call;
+done carries the model + usage, proven with a tiny context limit),
+`TestCompactionInfoLabelsDedicatedRoute`, `TestUsageAccumulates`;
+`compact_cmd_test.go` —
 `TestCompactModelEmptyResolvesDefault`, `TestCompactModelDefaultFallsBack`,
-`TestCompactThresholdFor`, `TestSetCompactPct`; `palette_test.go` —
+`TestCompactThresholdFor`, `TestSetCompactPct`; `compact_vis_test.go` —
+`TestCompactionVisibleInTranscript` (the start+result notes render through the
+Update loop with a small compaction limit),
+`TestCompactionNotesRenderInOrder`, `TestCompactionResultShowsRealCounts`;
+`palette_test.go` —
 `TestPaletteCompactPanelAppliesInPlace`,
 `TestPaletteCompactPanelDefaultRowRestores`, `TestPaletteCompactionLevelSteps`.
 

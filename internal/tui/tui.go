@@ -77,8 +77,16 @@ type goalFromContextMsg struct {
 type compactMsg struct {
 	took, kept int // messages removed / kept after compaction
 	summary    string
-	cutoff     int // index in the pre-compaction history the summary replaces
+	cutoff     int               // index in the pre-compaction history the summary replaces
+	info       agent.CompactInfo // which model wrote the summary + its spend
 	err        error
+}
+
+// compactStartMsg announces a compaction the moment folding begins: the
+// summary call can take seconds, so the transcript shows "compacting…" while
+// it runs instead of looking hung.
+type compactStartMsg struct {
+	took, est int // pre-compaction message count / estimated tokens
 }
 type turnDoneMsg struct {
 	final string
@@ -1966,6 +1974,13 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case compactStartMsg:
+		m.flushThink()
+		m.flushCurrent()
+		m.append(dimStyle.Render(fmt.Sprintf("◎ compacting %d msgs (est. %s) with %s…",
+			msg.took, fmtTok(msg.est), m.compactModelLabel())))
+		return m, nil
+
 	case compactMsg:
 		// compaction lands between turns: record it as an event and note it
 		// inline. The raw message log stays on disk — Load derives the
@@ -1982,17 +1997,22 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// counts-only path (no summary means no event was produced);
 			// nothing to record
 		default:
+			recorded := false
 			if m.store != nil && m.sessionID != "" {
 				// the agent's cutoff is in compacted coordinates; store the raw
 				// seq so Load never double-folds a summary
 				if err := m.store.RecordCompaction(m.sessionID, m.rawCutoff(msg.cutoff), msg.summary); err != nil {
 					config.LogEvent("session.compact", "record failed: "+err.Error())
+				} else {
+					recorded = true
 				}
 			}
-			m.append(dimStyle.Render(fmt.Sprintf("◎ compacted — summarized %d msgs, %d kept · raw history preserved", msg.took, msg.kept)))
-			m.future = nil   // compaction rewrote history; stale redo entries would resurrect it
-			m.msgBlock = nil // indices no longer match; rebuilt as blocks stream in
-			m.persist()      // append the new (compacted) rows; raw rows stay
+			m.append(m.compactResultLine(msg))
+			if recorded {
+				m.future = nil   // compaction rewrote history; stale redo entries would resurrect it
+				m.msgBlock = nil // indices no longer match; rebuilt as blocks stream in
+				m.persist()      // append the new (compacted) rows; raw rows stay
+			}
 		}
 		return m, nil
 
@@ -3429,6 +3449,7 @@ func (m *model) submitTurn(text string, authored bool) (tea.Model, tea.Cmd) {
 	}
 
 	go func() {
+		var compactTook, compactKept int // last OnCompact counts; read by OnCompacted
 		events := agent.Events{
 			OnText:  onText,
 			OnThink: onThink,
@@ -3449,8 +3470,15 @@ func (m *model) submitTurn(text string, authored bool) (tea.Model, tea.Cmd) {
 				flush()
 				send(steeredMsg(s))
 			},
-			OnCompacted: func(sum string, cutoff int) { send(compactMsg{summary: sum, cutoff: cutoff}) },
-			OnUsage:     func(u llm.Usage) { send(usageMsg(u)) },
+			OnCompactStart: func(took, est int) { send(compactStartMsg{took, est}) },
+			// OnCompact fires immediately before OnCompacted on the same turn
+			// goroutine; stash its counts so the result note (one compactMsg)
+			// carries them alongside the summary and the model/usage.
+			OnCompact: func(took, kept int) { compactTook, compactKept = took, kept },
+			OnCompacted: func(sum string, cutoff int, info agent.CompactInfo) {
+				send(compactMsg{took: compactTook, kept: compactKept, summary: sum, cutoff: cutoff, info: info})
+			},
+			OnUsage: func(u llm.Usage) { send(usageMsg(u)) },
 			// The decay pass rewrote n prefix messages in agent.Messages; drop
 			// the saved watermark so the next persist re-saves everything
 			// (from 1 — seq 0 is the system prompt, never a stored row; the
@@ -3561,20 +3589,22 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.busy = true
-		m.append(dimStyle.Render("◎ compacting…"))
+		took := len(m.agent.Messages)
+		m.append(dimStyle.Render(fmt.Sprintf("◎ compacting %d msgs (est. %s) with %s…",
+			took, fmtTok(agent.EstimateTokens(m.agent.Messages)), m.compactModelLabel())))
 		p := m.prog
 		ag := m.agent // capture the current conversation for the summary call
 		ctx, cancel := context.WithCancel(context.Background())
 		m.cancel = cancel
 		go func() {
-			took := len(ag.Messages)
 			var summary string
 			var cutoff int
+			var info agent.CompactInfo
 			err := ag.ManualCompact(ctx, agent.Events{
-				OnCompacted: func(s string, c int) { summary, cutoff = s, c },
+				OnCompacted: func(s string, c int, ci agent.CompactInfo) { summary, cutoff, info = s, c, ci },
 			})
 			if p != nil { // nil in headless tests; compaction still ran
-				p.Send(compactMsg{took: took - len(ag.Messages), kept: len(ag.Messages), summary: summary, cutoff: cutoff, err: err})
+				p.Send(compactMsg{took: took - len(ag.Messages), kept: len(ag.Messages), summary: summary, cutoff: cutoff, info: info, err: err})
 				p.Send(turnDoneMsg{}) // clear busy state
 			}
 		}()

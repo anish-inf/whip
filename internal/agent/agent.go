@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -28,15 +29,33 @@ type Events struct {
 	// OnToolOutput streams partial output for a running tool call (bash only —
 	// throttled snapshots, ~100ms apart). Fires from tool worker goroutines.
 	OnToolOutput func(id, outputSoFar string)
-	OnSteer      func(text string)                // a steered message was injected
-	OnCompact    func(took, kept int)             // context was auto-compacted (messages removed/kept)
-	OnCompacted  func(summary string, cutoff int) // a compaction ran; record it (raw log survives)
-	OnUsage      func(u llm.Usage)                // a request reported its token usage
-	OnRetry      func(ev llm.RetryEvent)          // a transient request failure is being retried
+	OnSteer      func(text string)    // a steered message was injected
+	OnCompact    func(took, kept int) // context was auto-compacted (messages removed/kept)
+	// OnCompacted fires when a compaction ran: record the summary+cutoff as
+	// an event (the raw log survives) and show info — which model wrote the
+	// summary and its spend — in the transcript.
+	OnCompacted func(summary string, cutoff int, info CompactInfo)
+	// OnCompactStart fires the moment a compaction begins folding history —
+	// the summary call can take seconds, so the UI shows "compacting…" while
+	// it runs. took is the pre-compaction message count, estTokens the size
+	// estimate that triggered it.
+	OnCompactStart func(took, estTokens int)
+	OnUsage        func(u llm.Usage)       // a request reported its token usage
+	OnRetry        func(ev llm.RetryEvent) // a transient request failure is being retried
 	// OnDecay fires when the per-turn decay pass rewrote n history messages
 	// (superseded reads / aged tool outputs). The caller must re-persist the
 	// affected prefix — the store's Save(from=1) INSERT OR REPLACEs it.
 	OnDecay func(n int)
+}
+
+// CompactInfo reports how one compaction ran: which model wrote the summary
+// and what that call spent. Model is the bare model id when the compaction
+// ran on the conversation's own client, or "<id> @ <host>" when a dedicated
+// compaction client (a different provider route) wrote it. Usage is the
+// summary call's tokens (zero when the provider didn't report any).
+type CompactInfo struct {
+	Model string
+	Usage llm.Usage
 }
 
 // OnTodos is the agent-level hook fired by setTodos (the todowrite tool)
@@ -432,7 +451,10 @@ func (a *Agent) turn(ctx context.Context, input string, parts []llm.ContentPart,
 			if !a.compacted && llm.IsContextLimit(err) && ctx.Err() == nil {
 				a.compacted = true
 				took := len(a.Messages)
-				sum, cutoff, cerr := a.compact(ctx)
+				if ev.OnCompactStart != nil {
+					ev.OnCompactStart(took, EstimateTokens(a.Messages))
+				}
+				sum, cutoff, info, cerr := a.compact(ctx)
 				if cerr != nil {
 					// restore the guard on hard errors so a manual /compact
 					// can still attempt a compaction for the next turn
@@ -443,7 +465,7 @@ func (a *Agent) turn(ctx context.Context, input string, parts []llm.ContentPart,
 					ev.OnCompact(took-len(a.Messages), len(a.Messages))
 				}
 				if ev.OnCompacted != nil {
-					ev.OnCompacted(sum, cutoff)
+					ev.OnCompacted(sum, cutoff, info)
 				}
 				continue // retry the (now-smaller) request
 			}
@@ -638,7 +660,10 @@ func (a *Agent) maybeCompact(ctx context.Context, ev Events) error {
 		return nil
 	}
 	took := len(a.Messages)
-	sum, cutoff, err := a.compact(ctx)
+	if ev.OnCompactStart != nil {
+		ev.OnCompactStart(took, EstimateTokens(a.Messages))
+	}
+	sum, cutoff, info, err := a.compact(ctx)
 	if err != nil {
 		if err.Error() == "not enough history to compact" {
 			return nil // too little history to fold; rely on the reactive retry
@@ -649,7 +674,7 @@ func (a *Agent) maybeCompact(ctx context.Context, ev Events) error {
 		ev.OnCompact(took-len(a.Messages), len(a.Messages))
 	}
 	if ev.OnCompacted != nil {
-		ev.OnCompacted(sum, cutoff)
+		ev.OnCompacted(sum, cutoff, info)
 	}
 	return nil
 }
@@ -679,12 +704,14 @@ func EstimateTokens(msgs []llm.Message) int {
 // system-role message (it must carry no tool_call IDs that the kept tail
 // would orphan).
 //
-// It returns the summary text and the cutoff (the index in the pre-compaction
-// Messages the summary replaces, i.e. where the kept tail began). The caller
-// records those as a compaction event so the raw log survives on disk.
-func (a *Agent) compact(ctx context.Context) (summary string, cutoff int, err error) {
+// It returns the summary text, the cutoff (the index in the pre-compaction
+// Messages the summary replaces, i.e. where the kept tail began), and a
+// CompactInfo (which model wrote the summary and its spend) so callers can
+// surface the compaction in the transcript. The caller records the summary
+// and cutoff as a compaction event so the raw log survives on disk.
+func (a *Agent) compact(ctx context.Context) (summary string, cutoff int, info CompactInfo, err error) {
 	if len(a.Messages) <= compactKeepBack+2 { // system + ≥1 user + tail: nothing to fold
-		return "", 0, errors.New("not enough history to compact")
+		return "", 0, CompactInfo{}, errors.New("not enough history to compact")
 	}
 	const sysIdx = 0
 	sysPrompt := a.Messages[sysIdx]
@@ -703,11 +730,20 @@ func (a *Agent) compact(ctx context.Context) (summary string, cutoff int, err er
 	history := a.Messages[sysIdx+1 : tailStart]
 	summaryPrompt := buildSummaryPrompt(history)
 	cli, mdl := a.CompactClient, a.CompactModel
+	dedicated := cli != nil
 	if cli == nil {
 		cli = a.Client
 	}
 	if mdl == "" {
 		mdl = a.Model
+	}
+	label := mdl
+	if dedicated {
+		// a dedicated compaction route: name the host so the transcript can
+		// tell a cheap summarizer apart from the conversation's own model
+		if u, perr := url.Parse(cli.BaseURL); perr == nil && u.Host != "" {
+			label = mdl + " @ " + u.Host
+		}
 	}
 	sum, usage, cerr := cli.Complete(ctx, llm.Request{
 		Model:     mdl,
@@ -719,7 +755,7 @@ func (a *Agent) compact(ctx context.Context) (summary string, cutoff int, err er
 	})
 	a.AddUsage(usage) // the summary call is session spend too
 	if cerr != nil {
-		return "", 0, fmt.Errorf("compaction summary failed: %w", cerr)
+		return "", 0, CompactInfo{}, fmt.Errorf("compaction summary failed: %w", cerr)
 	}
 	summary = strings.TrimSpace(sum)
 	kept := append([]llm.Message(nil), tail...)
@@ -728,7 +764,7 @@ func (a *Agent) compact(ctx context.Context) (summary string, cutoff int, err er
 		llm.Message{Role: "system", Content: "Summary of the conversation so far:\n\n" + summary},
 	), kept...)
 	a.msgsMu.Unlock()
-	return summary, tailStart, nil
+	return summary, tailStart, CompactInfo{Model: label, Usage: usage}, nil
 }
 
 // buildSummaryPrompt renders the unsummarized turns as a transcript the model
@@ -821,7 +857,10 @@ func truncateField(s string, n int) string {
 // OnCompact and reports whether compaction ran (false when there's too
 // little history). It is safe to call while a turn is not in flight.
 func (a *Agent) ManualCompact(ctx context.Context, ev Events) error {
-	sum, cutoff, err := a.compact(ctx)
+	if ev.OnCompactStart != nil {
+		ev.OnCompactStart(len(a.Messages), EstimateTokens(a.Messages))
+	}
+	sum, cutoff, info, err := a.compact(ctx)
 	if err != nil {
 		return err
 	}
@@ -829,7 +868,7 @@ func (a *Agent) ManualCompact(ctx context.Context, ev Events) error {
 		ev.OnCompact(0, len(a.Messages))
 	}
 	if ev.OnCompacted != nil {
-		ev.OnCompacted(sum, cutoff)
+		ev.OnCompacted(sum, cutoff, info)
 	}
 	return nil
 }
