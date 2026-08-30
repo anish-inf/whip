@@ -368,7 +368,7 @@ var ocKnightRider = spinner.Spinner{
 		}
 		return f
 	}(),
-	FPS: 40 * time.Millisecond,
+	FPS: 80 * time.Millisecond, // half opencode's 40ms — full speed read as frantic
 }
 
 // opencodeStatus renders opencode's session footer: the working directory on
