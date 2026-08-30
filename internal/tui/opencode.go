@@ -714,10 +714,14 @@ func (m *model) ocModelDialogRows() []string {
 		if it.fromCatalog {
 			mark = "(new)"
 		}
+		cur := "  "
+		if it.model == m.modelName && it.provider == m.provName {
+			cur = "● " // opencode's current-model gutter
+		}
 		if i == p.idx {
-			rows = append(rows, ocPadTo(sel.Render("  "+it.model), k.w, ocSelBg()))
+			rows = append(rows, ocPadTo(sel.Render("  "+cur+it.model), k.w, ocSelBg()))
 		} else {
-			rows = append(rows, k.lr(k.text.Render(it.model), k.muted.Render(mark)))
+			rows = append(rows, k.lr(k.text.Render(cur+it.model), k.muted.Render(mark)))
 		}
 	}
 	if len(items) == 0 {

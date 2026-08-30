@@ -312,14 +312,14 @@ func TestOcWindow(t *testing.T) {
 }
 
 func TestOcModelDialogRows(t *testing.T) {
-	m := &model{width: 80, height: 40}
+	m := &model{width: 80, height: 40, modelName: "kimi-k3", provName: "inference-net"}
 	m.mpicker = &modelPicker{items: []modelItem{
 		{model: "kimi-k3", provider: "inference-net"},
 		{model: "kimi-k3-fast", provider: "inference-net"},
 		{model: "gpt-x", provider: "openrouter", fromCatalog: true},
 	}}
 	out := strings.Join(m.ocModelDialogRows(), "\n")
-	for _, want := range []string{"Select model", "esc", "Search", "inference-net", "openrouter", "kimi-k3", "(new)", "enter"} {
+	for _, want := range []string{"Select model", "esc", "Search", "inference-net", "openrouter", "kimi-k3", "(new)", "enter", "● kimi-k3"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("model dialog missing %q:\n%s", want, out)
 		}
