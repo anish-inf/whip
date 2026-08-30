@@ -103,6 +103,18 @@ func TestOpencodePaletteView(t *testing.T) {
 	if out := m.opencodePaletteView(); !strings.Contains(out, "No results found") {
 		t.Fatal("empty palette should say No results found")
 	}
+	// short terminal: the view must never exceed m.height (a taller view would
+	// scroll the frame and shift the sidebar), and full-height when shorter
+	m.height = 5 // shorter than the dialog: top margin drops, bottom clips
+	if out := m.opencodePaletteView(); len(strings.Split(out, "\n")) != 5 {
+		t.Fatalf("view height = %d lines, want clamped to 5", len(strings.Split(out, "\n")))
+	}
+	m.height = 40
+	if out := m.opencodePaletteView(); len(strings.Split(out, "\n")) != 40 {
+		t.Fatalf("view height = %d lines, want padded to 40", len(strings.Split(out, "\n")))
+	}
+	m.height = 0
+
 	// narrow terminal: the left/right gap clamps to 1 instead of going negative
 	m.width = 20
 	m.palette.items = []paletteItem{

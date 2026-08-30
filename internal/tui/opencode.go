@@ -400,17 +400,35 @@ func (m *model) opencodePaletteView() string {
 	}
 	rows = append(rows, blank)
 
-	// center the panel; two blank rows of top margin like opencode's modal
+	// center the panel; two blank rows of top margin like opencode's modal —
+	// shrunk (then dropped) when the dialog wouldn't fit the screen otherwise
 	margin := strings.Repeat(" ", max((m.width-w)/2, 0))
-	var b strings.Builder
-	b.WriteString("\n\n")
-	for i, r := range rows {
-		if i > 0 {
-			b.WriteByte('\n')
-		}
-		b.WriteString(margin + r)
+	topPad := 2
+	if m.height > 0 && len(rows)+topPad > m.height {
+		topPad = max(m.height-len(rows), 0)
 	}
-	return b.String()
+	lines := make([]string, topPad)
+	for _, r := range rows {
+		lines = append(lines, margin+r)
+	}
+	// Fill the main column completely: pad to the full height and pad every
+	// line to the full width, so the sidebar keeps its exact position and
+	// height while the dialog is open (a narrower/shorter view would pull the
+	// JoinHorizontal-ed sidebar left and truncate its column). A dialog taller
+	// than the screen is clipped at the bottom — the view must never exceed
+	// the screen or the whole frame scrolls and shifts the sidebar.
+	for len(lines) < m.height {
+		lines = append(lines, "")
+	}
+	if m.height > 0 && len(lines) > m.height {
+		lines = lines[:m.height] // ponytail: bottom-clip; scroll-follow selection if lists outgrow screens
+	}
+	for i, l := range lines {
+		if pad := m.width - lipgloss.Width(l); pad > 0 {
+			lines[i] = l + strings.Repeat(" ", pad)
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 // opencodeThought renders opencode's collapsed reasoning line, "+ Thought:
