@@ -1675,7 +1675,9 @@ func (m *model) layout() {
 		chrome += lipgloss.Height(m.interactiveView()) + 1
 	}
 	if m.menu != nil {
-		chrome += min(len(m.menu.cands), menuRows) + 1
+		// measure the actual render: opencode mode word-wraps descriptions, so
+		// the menu can be taller than one row per candidate
+		chrome += lipgloss.Height(m.menuView()) + 1
 	}
 	if len(m.queue) > 0 {
 		chrome += len(m.queue) + 1
@@ -4429,20 +4431,34 @@ func (m *model) menuView() string {
 	}
 	if m.uiMode == opencodeMode {
 		// opencode's autocomplete popup: a panel with the selected row in the
-		// primary fill, every row clamped to the content width
+		// primary fill. Long descriptions word-wrap onto a second line (capped
+		// at two — the menu stays scannable) instead of being chopped.
 		bg := ocPanelBg()
 		text := lipgloss.NewStyle().Foreground(ocTextCol()).Background(bg)
 		muted := lipgloss.NewStyle().Foreground(ocMutedCol()).Background(bg)
 		sel := lipgloss.NewStyle().Foreground(ocSelFg()).Background(ocSelBg())
+		descW := max(m.width-nameW-6, 8)
+		indent := strings.Repeat(" ", nameW+4)
 		var rows []string
 		for i := start; i < end; i++ {
 			c := m.menu.cands[i]
 			name := fmt.Sprintf("%-*s", nameW, c.Text)
-			desc := truncLine(c.Desc, max(m.width-nameW-6, 8))
-			if i == m.menu.idx {
-				rows = append(rows, ocPadTo(sel.Render("  "+name+"  "+desc), m.width, ocSelBg()))
-			} else {
-				rows = append(rows, ocPadTo(text.Render("  "+name)+muted.Render("  "+desc), m.width, bg))
+			descLines := strings.Split(wrap(c.Desc, descW), "\n")
+			if len(descLines) > 2 {
+				descLines = descLines[:2]
+				descLines[1] = truncLine(descLines[1], descW-2) + " …"
+			}
+			for j, d := range descLines {
+				switch {
+				case i == m.menu.idx && j == 0:
+					rows = append(rows, ocPadTo(sel.Render("  "+name+"  "+d), m.width, ocSelBg()))
+				case i == m.menu.idx:
+					rows = append(rows, ocPadTo(sel.Render("  "+indent+d), m.width, ocSelBg()))
+				case j == 0:
+					rows = append(rows, ocPadTo(text.Render("  "+name)+muted.Render("  "+d), m.width, bg))
+				default:
+					rows = append(rows, ocPadTo(muted.Render("  "+indent+d), m.width, bg))
+				}
 			}
 		}
 		rows = append(rows, ocPadTo(muted.Render(fmt.Sprintf("  %d/%d", m.menu.idx+1, len(m.menu.cands))), m.width, bg))

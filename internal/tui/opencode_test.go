@@ -538,6 +538,13 @@ func TestMenuViewClampedInOpencodeMode(t *testing.T) {
 	if !strings.Contains(out, "/auth") || !strings.Contains(out, "1/2") {
 		t.Fatalf("oc menu missing content:\n%s", out)
 	}
+	// the long description word-wraps to a second line, capped with an ellipsis
+	if got := len(strings.Split(out, "\n")); got != 4 { // /auth (2 wrapped) + /cd + counter
+		t.Fatalf("oc menu rows = %d, want 4 (wrapped desc):\n%s", got, out)
+	}
+	if !strings.Contains(out, "…") {
+		t.Fatal("over-long description should end with an ellipsis")
+	}
 	// default mode: rows clamp too (an untruncated desc widened the frame)
 	m.uiMode = ""
 	for i, l := range strings.Split(m.menuView(), "\n") {
