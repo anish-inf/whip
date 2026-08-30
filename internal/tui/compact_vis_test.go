@@ -85,8 +85,8 @@ func TestCompactionVisibleInTranscript(t *testing.T) {
 	// tea.Msgs instead of dropping them (headless: prog is nil), then feed
 	// them through Update in order — the same rendering path a live run hits.
 	var mu sync.Mutex
-	var msgs []interface{}
-	capture := func(x interface{}) { mu.Lock(); msgs = append(msgs, x); mu.Unlock() }
+	var msgs []any
+	capture := func(x any) { mu.Lock(); msgs = append(msgs, x); mu.Unlock() }
 	_, err := m.agent.Turn(context.Background(), "wrap it up", agent.Events{
 		OnCompactStart: func(took, est int) { capture(compactStartMsg{took, est}) },
 		OnCompacted: func(sum string, cutoff int, info agent.CompactInfo) {
