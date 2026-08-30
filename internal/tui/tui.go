@@ -508,7 +508,7 @@ func (m *model) startupReport() {
 		// screen. But an unknown background means the panels render with no fill —
 		// zero contrast — so say why and how to fix it instead of failing silently.
 		if !ocThemeKnown() {
-			m.append(dimStyle.Render("◐ terminal background unknown — panels have no contrast; run /theme light (or dark) to fix"))
+			m.append(dimStyle.Render("◐ terminal background unknown — panels have no contrast; run /theme light (or dark) once to fix (mosh blocks background detection)"))
 		}
 		return
 	}
