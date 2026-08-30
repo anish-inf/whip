@@ -101,6 +101,9 @@ const (
 	// opencodeLeftMargin is the left padding on opencode's main column
 	// (routes/session paddingLeft=2), applied to the whole main body.
 	opencodeLeftMargin = 2
+	// opencodeRightGap separates the main column from the sidebar (opencode's
+	// main-column paddingRight=2) so the panels don't touch.
+	opencodeRightGap = 2
 )
 
 // The "whip" block-glyph wordmark, drawn in the same ▀▄█ pixel font as

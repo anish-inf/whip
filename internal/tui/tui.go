@@ -1681,7 +1681,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.uiMode == opencodeMode {
 			w -= opencodeLeftMargin // opencode's main column has a left margin
 			if msg.Width >= sidebarMinWidth {
-				w -= sidebarWidth // reserve columns for the right sidebar
+				w -= sidebarWidth + opencodeRightGap // reserve the sidebar and the gap before it
 			}
 		}
 		resized := w != m.width // width change → re-wrap the whole transcript
@@ -3939,7 +3939,8 @@ func (m *model) View() string {
 		v = lipgloss.NewStyle().PaddingLeft(opencodeLeftMargin).Render(v)
 	}
 	if m.sidebarVisible() {
-		v = lipgloss.JoinHorizontal(lipgloss.Top, v, m.sidebarView(lipgloss.Height(v)))
+		gap := strings.Repeat(" ", opencodeRightGap) // breathing room between the panels
+		v = lipgloss.JoinHorizontal(lipgloss.Top, v, gap, m.sidebarView(lipgloss.Height(v)))
 	}
 	if m.height > 0 {
 		m.viewH = lipgloss.Height(v)
