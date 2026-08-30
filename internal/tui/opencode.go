@@ -491,24 +491,36 @@ func ocToolIcon(name string) string {
 	}
 }
 
+// ocToolLabel is the display name + separator for a tool row: subagents read
+// as opencode tasks ("Task — {description}"), everything else keeps the tool
+// name and a plain space ("Bash git status").
+func ocToolLabel(name string) (label, sep string) {
+	if name == "subagent" {
+		return "Task", " — "
+	}
+	return toolHeaderName(name), " "
+}
+
 // ocToolRow renders a completed tool call opencode-style: indent 3, an icon,
 // the tool name in text color, and the subject muted. Failed calls go red.
 func ocToolRow(name, args string, failed bool) string {
 	icon, subject := ocToolIcon(name), toolSubject(name, args)
+	label, sep := ocToolLabel(name)
 	if failed {
 		e := lipgloss.NewStyle().Foreground(lipgloss.Color("#e06c75"))
-		return "   " + e.Render(icon+" "+toolHeaderName(name)+" "+subject)
+		return "   " + e.Render(icon+" "+label+sep+subject)
 	}
 	txt := lipgloss.NewStyle().Foreground(ocTextCol())
 	muted := lipgloss.NewStyle().Foreground(ocMutedCol())
-	return "   " + muted.Render(icon) + " " + txt.Render(toolHeaderName(name)) + " " + muted.Render(subject)
+	return "   " + muted.Render(icon) + " " + txt.Render(label) + muted.Render(sep+subject)
 }
 
 // ocToolPending renders a queued/running tool call: opencode's "~ " prefix,
 // all muted.
 func ocToolPending(name, args string) string {
 	muted := lipgloss.NewStyle().Foreground(ocMutedCol())
-	return "   " + muted.Render("~ "+toolHeaderName(name)+" "+toolSubject(name, args))
+	label, sep := ocToolLabel(name)
+	return "   " + muted.Render("~ "+label+sep+toolSubject(name, args))
 }
 
 // ocToolResult renders a tool result block: collapsed to a single muted "↳ N
@@ -519,12 +531,10 @@ func ocToolResult(lines []string, expanded, isErr bool, width int) string {
 	if isErr {
 		style = lipgloss.NewStyle().Foreground(lipgloss.Color("#e06c75"))
 	}
-	if !expanded {
-		noun := "lines"
-		if len(lines) == 1 {
-			noun = "line"
-		}
-		return "   " + style.Render(fmt.Sprintf("↳ %d %s · ctrl+e or click expands", len(lines), noun))
+	// short results (a launch confirmation, a one-line answer) read inline —
+	// a "↳ 1 line · expand" hint for one line is pure friction
+	if !expanded && len(lines) > 2 {
+		return "   " + style.Render(fmt.Sprintf("↳ %d lines · ctrl+e or click expands", len(lines)))
 	}
 	return wrap(style.Render("   ↳ "+strings.Join(lines, "\n     ")), width)
 }

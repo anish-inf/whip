@@ -1951,11 +1951,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case toolEndMsg:
-		// store the raw result; render collapses to a preview (ctrl+e /
-		// click expands) and re-wraps on resize
-		m.appendRaw(blockTool, msg.result)
 		// collapse the matching running row in place: full args+result when
 		// expanded, one dim line (red on failure) otherwise
+		hdr := -1
 		for i := len(m.blocks) - 1; i >= 0; i-- {
 			b := &m.blocks[i]
 			if b.kind == blockToolRun && b.toolRunning && b.toolID == msg.id {
@@ -1966,9 +1964,21 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// "Bash(cmd)") — the result renders in the blockTool below it
 				b.text = toolHeaderRow(msg.name, b.toolArgs, b.toolFailed)
 				b.stale = true
+				hdr = i
 				break
 			}
 		}
+		// store the raw result DIRECTLY UNDER its call row (render collapses it
+		// to a preview; ctrl+e / click expands). Appending at the end instead
+		// orphaned results from their headers whenever a parallel batch was in
+		// flight (three Subagent rows, then three detached result hints).
+		result := block{kind: blockTool, text: msg.result}
+		if hdr >= 0 && hdr+1 < len(m.blocks) {
+			m.blocks = append(m.blocks[:hdr+1], append([]block{result}, m.blocks[hdr+1:]...)...)
+		} else {
+			m.blocks = append(m.blocks, result)
+		}
+		m.follow = true
 		m.refreshVP()
 		return m, nil
 

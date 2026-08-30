@@ -163,8 +163,11 @@ func TestOcToolRows(t *testing.T) {
 	if failed := ocToolRow("bash", `{}`, true); !strings.Contains(failed, "Bash") {
 		t.Fatalf("failed row = %q", failed)
 	}
-	if p := ocToolPending("subagent", `{"description":"map repo"}`); !strings.Contains(p, "~ Subagent map repo") {
+	if p := ocToolPending("subagent", `{"description":"map repo"}`); !strings.Contains(p, "~ Task — map repo") {
 		t.Fatalf("pending row = %q", p)
+	}
+	if r := ocToolRow("subagent", `{"description":"map repo"}`, false); !strings.Contains(r, "Task") || !strings.Contains(r, "— map repo") {
+		t.Fatalf("subagent row = %q", r)
 	}
 }
 
@@ -174,8 +177,8 @@ func TestOcToolResult(t *testing.T) {
 	if !strings.Contains(col, "↳ 3 lines") {
 		t.Fatalf("collapsed = %q", col)
 	}
-	if one := ocToolResult([]string{"only"}, false, false, 80); !strings.Contains(one, "↳ 1 line ") {
-		t.Fatalf("singular = %q", one)
+	if one := ocToolResult([]string{"only"}, false, false, 80); !strings.Contains(one, "↳ only") {
+		t.Fatalf("short results render inline: %q", one)
 	}
 	exp := ocToolResult(lines, true, false, 80)
 	if !strings.Contains(exp, "↳ a") || !strings.Contains(exp, "b") {
