@@ -87,6 +87,9 @@ func ocTextCol() lipgloss.TerminalColor    { return ocPick("#eeeeee", "#1a1a1a",
 func ocMutedCol() lipgloss.TerminalColor   { return ocPick("#808080", "#8a8a8a", "8") } // muted
 func ocWarnCol() lipgloss.TerminalColor    { return ocPick("#f5a742", "#d68c27", "3") } // "+ Thought"
 func ocSuccessCol() lipgloss.TerminalColor { return ocPick("#7fd88f", "#3d9a57", "2") } // footer bullet
+func ocAccentCol() lipgloss.TerminalColor  { return ocPick("#9d7cd8", "#d68c27", "5") } // palette category headers
+func ocSelBg() lipgloss.TerminalColor      { return ocPick("#fab283", "#3b7dd8", "7") } // selected row fill (primary)
+func ocSelFg() lipgloss.TerminalColor      { return ocPick("#0a0a0a", "#ffffff", "0") } // selected row text
 
 // sidebarWidth is the fixed width of the opencode-mode right sidebar, matching
 // opencode (routes/session/sidebar.tsx). The sidebar shows only when the
@@ -100,37 +103,37 @@ const (
 	opencodeLeftMargin = 2
 )
 
-// The "opencode" block-glyph wordmark (src/logo.ts), decoded to plain runes.
-// "open" renders dim, "code" renders in the foreground/bold — both through
-// whip's theme styles so it adapts to light/dark like the rest of the UI.
+// The "whip" block-glyph wordmark, drawn in the same ▀▄█ pixel font as
+// opencode's logo: "wh" muted, "ip" bold foreground (mirroring opencode's
+// two-tone open|code mark), themed via whip's light/dark handling.
 var (
-	ocLogoOpen = []string{
-		"                  ",
-		"█▀▀█ █▀▀█ █▀▀█ █▀▀▄",
-		"█  █ █  █ █▀▀▀ █  █",
-		"▀▀▀▀ █▀▀▀ ▀▀▀▀ ▀  ▀",
+	ocLogoWh = []string{
+		"      ▄   ",
+		"█ ▄ █ █▀▀█",
+		"█ █ █ █  █",
+		"▀▀▀▀▀ ▀  ▀",
 	}
-	ocLogoCode = []string{
-		"             ▄     ",
-		"█▀▀▀ █▀▀█ █▀▀█ █▀▀█",
-		"█    █  █ █  █ █▀▀▀",
-		"▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀",
+	ocLogoIp = []string{
+		"▄     ",
+		"█ █▀▀█",
+		"█ █  █",
+		"▀ █▀▀▀",
 	}
 )
 
-// opencodeLogo renders the wordmark: dim "open", bold "code", joined with a
-// single-column gap per line. Colored via whip's theme (dimStyle / bold text).
+// opencodeLogo renders the wordmark: muted "wh", bold "ip", joined with a
+// single-column gap per line (opencode's two-tone logo treatment).
 func opencodeLogo() string {
 	left := lipgloss.NewStyle().Foreground(ocMutedCol())
 	right := lipgloss.NewStyle().Foreground(ocTextCol()).Bold(true)
 	var b strings.Builder
-	for i := range ocLogoOpen {
+	for i := range ocLogoWh {
 		if i > 0 {
 			b.WriteByte('\n')
 		}
-		b.WriteString(left.Render(ocLogoOpen[i]))
+		b.WriteString(left.Render(ocLogoWh[i]))
 		b.WriteByte(' ')
-		b.WriteString(right.Render(ocLogoCode[i]))
+		b.WriteString(right.Render(ocLogoIp[i]))
 	}
 	return b.String()
 }
@@ -334,6 +337,77 @@ func (m *model) opencodeStatus() string {
 	}
 	pad := max(w-lipgloss.Width(left)-rightW-1, 1)
 	return muted.Render(" "+left+strings.Repeat(" ", pad)) + right
+}
+
+// opencodePaletteView renders the ctrl+p command list as opencode's Commands
+// dialog: a centered panel on the panel background with a bold "Commands"
+// header + right-aligned esc, a Search line, accent category headers, and
+// name-left / hint-right rows; the selected row is a full-width primary fill.
+func (m *model) opencodePaletteView() string {
+	p := m.palette
+	bg := ocPanelBg()
+	w := min(64, max(m.width-2, 20))
+	pnl := lipgloss.NewStyle().Background(bg)
+	text := lipgloss.NewStyle().Foreground(ocTextCol()).Background(bg)
+	head := text.Bold(true)
+	muted := lipgloss.NewStyle().Foreground(ocMutedCol()).Background(bg)
+	accent := lipgloss.NewStyle().Foreground(ocAccentCol()).Background(bg).Bold(true)
+	// left+right assembled onto one padded row: left at col 2, right at the edge
+	lr := func(left, right string) string {
+		gap := w - 2 - lipgloss.Width(left) - lipgloss.Width(right) - 2
+		if gap < 1 {
+			gap = 1
+		}
+		return ocPadTo(pnl.Render("  ")+left+pnl.Render(strings.Repeat(" ", gap))+right, w, bg)
+	}
+	blank := ocPadTo("", w, bg)
+
+	rows := []string{blank, lr(head.Render("Commands"), muted.Render("esc")), blank}
+	if p.filter == "" {
+		rows = append(rows, lr(muted.Render("Search"), ""))
+	} else {
+		rows = append(rows, lr(text.Render(p.filter), ""))
+	}
+	rows = append(rows, blank)
+
+	sel := lipgloss.NewStyle().Foreground(ocSelFg()).Background(ocSelBg())
+	lastCat := ""
+	for i, it := range p.items {
+		if it.category != lastCat {
+			if lastCat != "" {
+				rows = append(rows, blank)
+			}
+			rows = append(rows, lr(accent.Render(it.category), ""))
+			lastCat = it.category
+		}
+		hint := ""
+		if it.dynHint != nil {
+			hint = truncLine(it.dynHint(m), max(w-4-len(it.title)-2, 0))
+		}
+		if i == p.idx {
+			// full-width primary fill, opencode's selected-row treatment
+			row := sel.Render("  "+it.title) + sel.Render(strings.Repeat(" ", max(w-2-len(it.title)-lipgloss.Width(hint)-2, 1))) + sel.Render(hint+"  ")
+			rows = append(rows, ocPadTo(row, w, ocSelBg()))
+		} else {
+			rows = append(rows, lr(text.Render(it.title), muted.Render(hint)))
+		}
+	}
+	if len(p.items) == 0 {
+		rows = append(rows, lr(muted.Render("No results found"), ""))
+	}
+	rows = append(rows, blank)
+
+	// center the panel; two blank rows of top margin like opencode's modal
+	margin := strings.Repeat(" ", max((m.width-w)/2, 0))
+	var b strings.Builder
+	b.WriteString("\n\n")
+	for i, r := range rows {
+		if i > 0 {
+			b.WriteByte('\n')
+		}
+		b.WriteString(margin + r)
+	}
+	return b.String()
 }
 
 // opencodeThought renders opencode's collapsed reasoning line, "+ Thought:

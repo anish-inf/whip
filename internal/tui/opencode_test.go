@@ -79,6 +79,52 @@ func TestStartupReportUnknownBgNotice(t *testing.T) {
 	}
 }
 
+func TestOpencodePaletteView(t *testing.T) {
+	m := &model{width: 80}
+	m.palette = &palette{
+		items: []paletteItem{
+			{title: "Model", category: "Agent", dynHint: func(*model) string { return "/model" }},
+			{title: "Theme", category: "Display"},
+		},
+	}
+	out := m.opencodePaletteView()
+	for _, want := range []string{"Commands", "esc", "Search", "Agent", "Display", "Model", "/model", "Theme"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("palette view missing %q:\n%s", want, out)
+		}
+	}
+	// filter typed: replaces the Search placeholder
+	m.palette.filter = "the"
+	if out := m.opencodePaletteView(); !strings.Contains(out, "the") || strings.Contains(out, "Search") {
+		t.Fatalf("filter should replace Search placeholder:\n%s", out)
+	}
+	// no matches
+	m.palette.items = nil
+	if out := m.opencodePaletteView(); !strings.Contains(out, "No results found") {
+		t.Fatal("empty palette should say No results found")
+	}
+	// narrow terminal: the left/right gap clamps to 1 instead of going negative
+	m.width = 20
+	m.palette.items = []paletteItem{
+		{title: "First", category: "Agent"},
+		{title: "A very long item title here", category: "Agent", dynHint: func(*model) string { return "/hint" }},
+	}
+	m.palette.filter = ""
+	if out := m.opencodePaletteView(); !strings.Contains(out, "Commands") {
+		t.Fatal("narrow palette should still render")
+	}
+}
+
+func TestPaletteViewRoutesToOpencode(t *testing.T) {
+	old := ocActive
+	t.Cleanup(func() { ocActive = old })
+	ocActive = true
+	m := &model{width: 80, palette: &palette{items: []paletteItem{{title: "Model", category: "Agent"}}}}
+	if out := m.paletteView(); !strings.Contains(out, "Commands") || !strings.Contains(out, "esc") {
+		t.Fatalf("opencode mode should render the Commands dialog:\n%s", out)
+	}
+}
+
 func TestOcPadTo(t *testing.T) {
 	got := ocPadTo("ab", 6, lipgloss.Color("#ebebeb"))
 	if lipgloss.Width(got) != 6 {
