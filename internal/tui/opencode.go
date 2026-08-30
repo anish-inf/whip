@@ -752,13 +752,6 @@ func (m *model) ocOverlayRows(v string, rows []string) string {
 	return strings.Join(lines, "\n")
 }
 
-// opencodeThought renders opencode's collapsed reasoning line, "+ Thought:
-// {duration}", indented 3 to sit under the assistant column.
-func (m *model) opencodeThought(d time.Duration) string {
-	warn := lipgloss.NewStyle().Foreground(ocWarnCol())
-	return "   " + warn.Render("+ Thought: "+fmtShortDur(d)) // 3-space indent to sit under the assistant column
-}
-
 // opencodeAttribution renders opencode's per-response attribution line:
 // "▣  {mode} · {model} · {duration}", indented 3 to sit under the assistant body.
 func (m *model) opencodeAttribution(d time.Duration) string {

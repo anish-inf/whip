@@ -517,13 +517,23 @@ func TestFmtShortDur(t *testing.T) {
 
 func TestOpencodeThoughtAndAttribution(t *testing.T) {
 	m := &model{agent: &agent.Agent{}, modelName: "kimi-k3"}
-	th := m.opencodeThought(159 * time.Millisecond)
-	if !strings.HasPrefix(th, "   ") || !strings.Contains(th, "+ Thought: 159ms") {
-		t.Fatalf("thought = %q", th)
-	}
 	at := m.opencodeAttribution(1600 * time.Millisecond)
 	if !strings.HasPrefix(at, "   ") || !strings.Contains(at, "▣") || !strings.Contains(at, "kimi-k3") || !strings.Contains(at, "1.6s") {
 		t.Fatalf("attribution = %q", at)
+	}
+
+	// the Thought block: collapsed header line, expandable to the reasoning text
+	b := block{kind: blockThought, text: "step one\nstep two", live: "159ms"}
+	col := b.render(80)
+	if !strings.Contains(col, "+ Thought: 159ms") || strings.Contains(col, "step one") {
+		t.Fatalf("collapsed thought = %q", col)
+	}
+	if !b.toggle() {
+		t.Fatal("thought blocks must toggle")
+	}
+	exp := b.render(80)
+	if !strings.Contains(exp, "step one") || !strings.Contains(exp, "step two") {
+		t.Fatalf("expanded thought = %q", exp)
 	}
 }
 

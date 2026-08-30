@@ -201,6 +201,7 @@ type model struct {
 	sessTitle    string      // cached session title for the opencode sidebar (from the store; updated on title/rename)
 	msgActions   *msgActions // opencode mode: the Message Actions dialog opened by clicking a message; nil = closed
 	hoverIdx     int         // opencode mode: block index under the mouse (hover highlight); -1 = none
+	ocThink      string      // opencode mode: reasoning text accumulated for the expandable "+ Thought" block
 	compactModel string      // config model name for compaction summaries; "" = the built-in default
 	compactProv  string
 	// updateLatest is a pending newer release tag ("" when none), picked up
@@ -1105,7 +1106,8 @@ const (
 	blockToolRun                     // a running tool call: verb line, collapses on completion
 	blockToolQueued                  // a tool call still streaming from the model; replaced by blockToolRun on start
 	blockUser                        // a user turn: opencode mode renders a bordered card, else the "❯ " prefix
-	blockOCMeta                      // opencode meta line (+ Thought / ▣ attribution): pre-indented, rendered verbatim (no wrap, which would trim the indent)
+	blockOCMeta                      // opencode meta line (▣ attribution): pre-indented, rendered verbatim (no wrap, which would trim the indent)
+	blockThought                     // opencode collapsed reasoning: "+ Thought: dur" header (in live), the reasoning text behind expand (in text)
 )
 
 // toolPreviewLines is how many lines of a tool result show when collapsed.
@@ -1174,6 +1176,15 @@ func (b block) render(width int) string {
 		return wrap(youStyle.Render(glyphUser)+b.text, width)
 	case blockOCMeta:
 		return b.text // pre-indented; verbatim so wrap() can't trim the indent
+	case blockThought:
+		// collapsed: opencode's "+ Thought: {dur}" line; expanded (click/ctrl+e):
+		// the reasoning text underneath, muted italic like whip's thinking style
+		head := "   " + lipgloss.NewStyle().Foreground(ocWarnCol()).Render("+ Thought: "+b.live)
+		if !b.expanded {
+			return head
+		}
+		body := lipgloss.NewStyle().Foreground(ocMutedCol()).Italic(true).Render(strings.TrimSpace(b.text))
+		return head + "\n" + wrap(body, width)
 	case blockAssistant:
 		if ocActive {
 			// opencode assistant messages carry no bullet: the body is indented 3.
@@ -1232,7 +1243,7 @@ func (b block) render(width int) string {
 
 // expand toggles a tool block and returns whether it changed.
 func (b *block) toggle() bool {
-	if b.kind != blockTool && b.kind != blockToolRun {
+	if b.kind != blockTool && b.kind != blockToolRun && b.kind != blockThought {
 		return false
 	}
 	b.expanded = !b.expanded
@@ -1623,6 +1634,9 @@ func (m *model) layout() {
 	if m.curThink != "" {
 		chrome += lipgloss.Height(m.thinkView()) + 1
 	}
+	if m.uiMode == opencodeMode && m.busy && !m.thinkStart.IsZero() {
+		chrome += 2 // the live "+ Thinking…" line + its blank separator (must match viewBody)
+	}
 	if m.iactive != nil {
 		chrome += lipgloss.Height(m.interactiveView()) + 1
 	}
@@ -1848,7 +1862,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.thinkStart.IsZero() { // collapse reasoning to "+ Thought: {dur}" at flush
 					m.thinkStart = m.nowFn()
 				}
-				return m, nil // suppress the live reasoning text
+				m.ocThink += string(msg) // keep the text: the collapsed block expands to it
+				return m, nil            // suppress the live reasoning render
 			}
 			m.flushCurrent() // thinking renders above the answer
 			m.curThink += string(msg)
@@ -3364,9 +3379,12 @@ func (m *model) setThinking(on bool) {
 
 func (m *model) flushThink() {
 	if m.uiMode == opencodeMode {
-		if !m.thinkStart.IsZero() { // collapse the reasoning segment to one line
-			m.appendRaw(blockOCMeta, m.opencodeThought(m.nowFn().Sub(m.thinkStart)))
+		if !m.thinkStart.IsZero() { // collapse the reasoning segment to one line (expandable to the text)
+			m.blocks = append(m.blocks, block{kind: blockThought, text: m.ocThink, live: fmtShortDur(m.nowFn().Sub(m.thinkStart))})
+			m.follow = true
+			m.refreshVP()
 			m.thinkStart = time.Time{}
+			m.ocThink = ""
 		}
 		m.curThink = ""
 		m.inThink = false
@@ -4076,6 +4094,11 @@ func (m *model) viewBody() string {
 	b.WriteString(m.viewportView() + "\n") // selection highlight paints inside
 	if m.curThink != "" {
 		b.WriteString("\n" + m.thinkView() + "\n")
+	}
+	if m.uiMode == opencodeMode && m.busy && !m.thinkStart.IsZero() {
+		// reasoning is streaming: opencode shows a transient "Thinking" line
+		// where the collapsed "+ Thought: {dur}" will land on flush
+		b.WriteString("\n   " + lipgloss.NewStyle().Foreground(ocWarnCol()).Render("+ Thinking…") + "\n")
 	}
 	if m.current != "" {
 		b.WriteString("\n" + m.currentView() + "\n")
