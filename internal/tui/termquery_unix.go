@@ -1,12 +1,15 @@
 package tui
 
 import (
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
 	"time"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/context-labs/whip/internal/config"
 )
 
 // queryTerminalBackground returns whether the terminal's background is light,
@@ -21,8 +24,10 @@ import (
 // `set -g allow-passthrough on` in tmux ≥3.3; when that's off the query gets
 // no reply and we report !ok so the caller falls back to its default.
 func queryTerminalBackground(tty *os.File, inTmux bool) bgResult {
+	start := time.Now()
 	fd := int(tty.Fd())
 	if !isForegroundFd(fd) {
+		config.LogEvent("theme.query", "skipped: not the foreground process group on the tty")
 		return bgResult{}
 	}
 	query := bgQuery(inTmux)
@@ -75,11 +80,15 @@ func queryTerminalBackground(tty *os.File, inTmux bool) bgResult {
 			}
 			r, g, b, ok := parseOSCBgRGB(rest[:end])
 			if !ok {
+				config.LogEvent("theme.query", fmt.Sprintf("reply unparseable after %s: %q", time.Since(start).Round(time.Millisecond), rest[:min(end, 60)]))
 				return bgResult{}
 			}
+			config.LogEvent("theme.query", fmt.Sprintf("ok in %s: #%02x%02x%02x (inTmux=%v)", time.Since(start).Round(time.Millisecond), r, g, b, inTmux))
 			return bgResult{light: rgbIsLight(r, g, b), valid: true, r: r, g: g, b: b, hasRGB: true}
 		}
 	}
+	config.LogEvent("theme.query", fmt.Sprintf("no OSC 11 reply in %s (inTmux=%v); received %d bytes: %q",
+		time.Since(start).Round(time.Millisecond), inTmux, len(buf), truncLine(fmt.Sprintf("%q", buf), 120)))
 	return bgResult{}
 }
 
