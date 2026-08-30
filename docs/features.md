@@ -978,6 +978,31 @@ environment quirk, not a rod/whip bug; verified on real Chrome.
 The browser-use CLI-over-MCP escape hatch remains available via config for
 anyone wanting the Python ecosystem (§4 option B).
 
+## `whip up <prompt>` — start the TUI with a first-turn prompt from argv
+
+`whip up <words...>` (`cmd/whip/main.go`) joins every argv token after `up`
+with spaces and opens the interactive TUI with that text submitted as the
+first user turn — the exact typed-submission path (`submitTurn`,
+`Authored: true`), so it lands in up-arrow input history and the transcript.
+Flags still work because Go's `flag` package stops parsing at `up`
+(`whip -m kimi up do the thing`), and the prompt itself may start with `-`
+untouched — the `up` handler never re-parses its args.
+
+The prompt rides the `model.initialPrompt` field into the session; `Init()`
+emits a one-shot `initialPromptMsg` (batched with the textarea blink) and
+`Update` submits it. Kicking off from `Init` — not from `Run` before
+`tea.NewProgram` — is the load-bearing choice: the turn goroutine's event
+callbacks `p.Send` through `m.prog`, which only exists once the program is
+constructed. Combined with `--resume` the replayed history renders first and
+the prompt fires as the next turn, matching `whip run`'s
+prompt-after-resume order.
+
+Tests: `internal/tui/up_test.go` — `TestInitialPromptSubmitsFirstTurn` (Init
+kickoff → busy turn, authored user message, history entry, one-shot
+consumption), `TestNoInitialPromptNoKickoff` (bare blink Init, empty msg is
+a no-op), `TestInitialPromptMsgIgnoredWhileBusy` (a replayed msg can't
+double-submit mid-turn).
+
 ## ACP agent mode
 
 `whip acp` (`cmd/whip/acp.go`, `internal/acp/`) serves whip as an **Agent

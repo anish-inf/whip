@@ -234,7 +234,15 @@ type model struct {
 	// infAuth holds the in-flight inference-net device login across the
 	// team → project → create prompts.
 	infAuth *inferenceNetPending
+
+	// initialPrompt, when non-empty (whip up <words>), is submitted as the
+	// session's first turn from Init — early enough that no turn is running,
+	// late enough that m.prog exists for the turn goroutine's p.Send.
+	initialPrompt string
 }
+
+// initialPromptMsg is Init's one-shot kickoff of a `whip up` first turn.
+type initialPromptMsg struct{}
 
 // picker is the /resume session browser. metas is newest-first; the list is
 // rendered oldest-at-top so newest sits at the bottom.
@@ -289,7 +297,10 @@ var (
 // was active on exit ("" if nothing was said). firstRun reports the config
 // file did not exist at startup (the caller checks config.Exists before
 // config.Load creates it) and triggers the one-time setup wizard.
-func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string, cautious, firstRun bool) (string, error) {
+// initialPrompt, when non-empty (`whip up <words>`), is submitted as the
+// first turn once the UI is up — after any resume replay, matching
+// `whip run`'s prompt-after-resume order.
+func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string, cautious, firstRun bool, initialPrompt string) (string, error) {
 	// One shared stdin reader for the pre-TUI prompts: a bufio.Reader reads
 	// ahead, so separate readers for the trust gate and the setup wizard would
 	// lose buffered answers (a pasted "y\n2\n…\n" answers both).
@@ -347,7 +358,8 @@ func Run(cfg *config.Config, modelName, provName, sysPrompt, resumeID string, ca
 		input: ti, spin: spinner.New(spinner.WithSpinner(spinner.Dot)), follow: true, saved: 1,
 		catalogs: config.LoadCatalogs(), mouseOn: mouseOn, now: time.Now, showThinking: showThinking,
 		compactModel: cfg.CompactModel, compactProv: cfg.CompactProvider,
-		skillScan: func() []skills.Skill { return skills.Scan(skills.DefaultDirs()...) },
+		skillScan:     func() []skills.Skill { return skills.Scan(skills.DefaultDirs()...) },
+		initialPrompt: initialPrompt,
 	}
 	m.applyCompactModel()
 	m.applyTaskModel()
@@ -1305,7 +1317,12 @@ func (m *model) viewportView() string {
 }
 
 func (m *model) Init() tea.Cmd {
-	return textarea.Blink
+	if m.initialPrompt == "" {
+		return textarea.Blink
+	}
+	// tea.Batch runs both cmds concurrently; the turn's p.Send calls are
+	// nil-safe anyway (headless tests drive Update without a program).
+	return tea.Batch(textarea.Blink, func() tea.Msg { return initialPromptMsg{} })
 }
 
 func onOff(b bool) string {
@@ -1619,6 +1636,16 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	switch msg := msg.(type) {
+	case initialPromptMsg:
+		if m.initialPrompt == "" || m.busy {
+			return m, nil
+		}
+		text := m.initialPrompt
+		m.initialPrompt = "" // one-shot: Init fired it, no re-submit on replays
+		m.hist = append(m.hist, text)
+		m.histIdx = len(m.hist)
+		return m.submitTurn(text, true)
+
 	case cfgSyncTick:
 		return m.cfgSync()
 
