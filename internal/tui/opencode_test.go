@@ -525,6 +525,28 @@ func TestThemeSync(t *testing.T) {
 	}
 }
 
+func TestMenuViewClampedInOpencodeMode(t *testing.T) {
+	long := strings.Repeat("very long description ", 20)
+	m := &model{width: 60, uiMode: opencodeMode}
+	m.menu = &menu{cands: []cand{{Text: "/auth", Desc: long}, {Text: "/cd", Desc: "change dir"}}}
+	out := m.menuView()
+	for i, l := range strings.Split(out, "\n") {
+		if lipgloss.Width(l) > 60 {
+			t.Fatalf("oc menu row %d wider than content width: %d", i, lipgloss.Width(l))
+		}
+	}
+	if !strings.Contains(out, "/auth") || !strings.Contains(out, "1/2") {
+		t.Fatalf("oc menu missing content:\n%s", out)
+	}
+	// default mode: rows clamp too (an untruncated desc widened the frame)
+	m.uiMode = ""
+	for i, l := range strings.Split(m.menuView(), "\n") {
+		if lipgloss.Width(l) > 60 {
+			t.Fatalf("default menu row %d wider than width: %d", i, lipgloss.Width(l))
+		}
+	}
+}
+
 func TestOcDimLine(t *testing.T) {
 	if got := ocDimLine(""); got != "" {
 		t.Fatalf("empty line should stay empty, got %q", got)

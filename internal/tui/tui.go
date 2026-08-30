@@ -4427,15 +4427,40 @@ func (m *model) menuView() string {
 	for _, c := range m.menu.cands[start:end] {
 		nameW = max(nameW, len(c.Text))
 	}
+	if m.uiMode == opencodeMode {
+		// opencode's autocomplete popup: a panel with the selected row in the
+		// primary fill, every row clamped to the content width
+		bg := ocPanelBg()
+		text := lipgloss.NewStyle().Foreground(ocTextCol()).Background(bg)
+		muted := lipgloss.NewStyle().Foreground(ocMutedCol()).Background(bg)
+		sel := lipgloss.NewStyle().Foreground(ocSelFg()).Background(ocSelBg())
+		var rows []string
+		for i := start; i < end; i++ {
+			c := m.menu.cands[i]
+			name := fmt.Sprintf("%-*s", nameW, c.Text)
+			desc := truncLine(c.Desc, max(m.width-nameW-6, 8))
+			if i == m.menu.idx {
+				rows = append(rows, ocPadTo(sel.Render("  "+name+"  "+desc), m.width, ocSelBg()))
+			} else {
+				rows = append(rows, ocPadTo(text.Render("  "+name)+muted.Render("  "+desc), m.width, bg))
+			}
+		}
+		rows = append(rows, ocPadTo(muted.Render(fmt.Sprintf("  %d/%d", m.menu.idx+1, len(m.menu.cands))), m.width, bg))
+		return strings.Join(rows, "\n")
+	}
 	var b strings.Builder
 	for i := start; i < end; i++ {
 		c := m.menu.cands[i]
 		line := fmt.Sprintf("%-*s  ", nameW, c.Text)
+		var row string
 		if i == m.menu.idx {
-			b.WriteString(botStyle.Render("→ "+line) + dimStyle.Render(c.Desc))
+			row = botStyle.Render("→ "+line) + dimStyle.Render(c.Desc)
 		} else {
-			b.WriteString("  " + line + dimStyle.Render(c.Desc))
+			row = "  " + line + dimStyle.Render(c.Desc)
 		}
+		// clamp to the content width: an untruncated description widens the
+		// whole frame (in opencode mode it shoved the sidebar off-screen)
+		b.WriteString(ansi.Truncate(row, max(m.width, 8), "…"))
 		b.WriteByte('\n')
 	}
 	b.WriteString(dimStyle.Render(fmt.Sprintf("  (%d/%d)", m.menu.idx+1, len(m.menu.cands))))
