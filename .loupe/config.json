@@ -1,0 +1,16 @@
+{
+  "reviewers": [
+    {
+      "name": "go-review",
+      "promptFile": "reviewers/go-review.md",
+      "reasoning": "medium",
+      "profile": "chill",
+      "exclude": [
+        ".agents/skills/**",
+        "driver/**",
+        "docs/**",
+        "**/*.md"
+      ]
+    }
+  ]
+}
